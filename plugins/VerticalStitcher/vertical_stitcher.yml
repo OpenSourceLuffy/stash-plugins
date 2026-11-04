@@ -1,0 +1,29 @@
+name: Vertical Cover Stitcher
+description: Stitches several frames from vertical (portrait) videos side by side into a 16:9 horizontal scene cover.
+version: "1.3"
+exec:
+  - python
+  - "{pluginDir}/vertical_stitcher.py"
+interface: raw
+
+hooks:
+  - name: Stitch cover on new scene
+    description: Builds a stitched horizontal cover when a new vertical scene is created by a scan.
+    triggeredBy:
+      - Scene.Create.Post
+
+tasks:
+  - name: Stitch all vertical scenes
+    description: Regenerates stitched covers for every vertical scene in the library.
+    defaultArgs:
+      mode: all
+  - name: Stitch unorganized vertical scenes
+    description: Regenerates stitched covers only for vertical scenes not marked as organized.
+    defaultArgs:
+      mode: unorganized
+
+settings:
+  frameCount:
+    displayName: Frames per cover
+    description: How many frames to stitch side by side (2, 3 or 4). Default 3.
+    type: NUMBER

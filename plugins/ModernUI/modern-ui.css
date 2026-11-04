@@ -1,0 +1,2942 @@
+/* ===================================================================
+   Modern UI
+   Card types covered: scenes, performers, images, galleries, studios,
+   groups, tags. All share Stash's .grid-card base.
+   =================================================================== */
+
+:root {
+  --mui-radius: 12px;
+  --mui-card-bg: rgba(255, 255, 255, 0.04);
+  --mui-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  --mui-shadow-hover: 0 8px 20px rgba(0, 0, 0, 0.5);
+}
+
+/* ===== Shared card look ===== */
+
+body.mui :is(.scene-card, .performer-card, .image-card, .gallery-card,
+             .studio-card, .group-card, .movie-card, .tag-card).grid-card {
+  border: none;
+  border-radius: var(--mui-radius);
+  overflow: hidden;
+  background: var(--mui-card-bg);
+  box-shadow: var(--mui-shadow);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+@media (hover: hover) {
+  body.mui :is(.scene-card, .performer-card, .image-card, .gallery-card,
+               .studio-card, .group-card, .movie-card, .tag-card).grid-card:hover {
+    transform: translateY(-3px);
+    box-shadow: var(--mui-shadow-hover);
+  }
+}
+
+body.mui .grid-card .thumbnail-section {
+  border-radius: var(--mui-radius) var(--mui-radius) 0 0;
+  overflow: hidden;
+}
+
+/* Compact single-line title */
+body.mui .grid-card .card-section {
+  padding: 0.5rem 0.75rem 0.6rem;
+}
+
+body.mui .grid-card .card-section-title,
+body.mui .grid-card .card-section-title h5 {
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  -webkit-line-clamp: 1;
+}
+
+/* ===== Details (date, description, path, age, country...) ===== */
+
+body.mui:not(.mui-show-details) :is(
+  .scene-card__details, .scene-card__date, .scene-card__description, .scene-card__path,
+  .performer-card__age, .performer-card__country, .performer-card .card-section .text-muted,
+  .gallery-card__details, .gallery-card__date, .gallery-card__description,
+  .image-card__details,
+  .studio-card__details, .studio-parent-studios,
+  .group-card__details, .group-card__date,
+  .tag-card__details, .tag-description
+) {
+  display: none !important;
+}
+
+/* ===== Count buttons row (tags, performers, scenes, O-count...) ===== */
+
+body.mui:not(.mui-show-popovers) .grid-card hr,
+body.mui:not(.mui-show-popovers) .grid-card .card-popovers {
+  display: none !important;
+}
+
+/* ===== Overlays (rating ribbon) =====
+   The studio name/logo overlay stays on desktop and is hidden on phones
+   (see the Phones section). */
+
+body.mui:not(.mui-show-overlays) .grid-card .rating-banner {
+  display: none !important;
+}
+
+/* Performer flag/heart: keep, but make them subtle */
+body.mui .performer-card .flag-icon {
+  border-radius: 3px;
+  opacity: 0.85;
+}
+
+/* ===== Image cards: picture-first ===== */
+
+/* Image titles are usually filenames, so hide them unless details are on */
+body.mui:not(.mui-show-details) .image-card .card-section {
+  display: none !important;
+}
+body.mui:not(.mui-show-details) .image-card .thumbnail-section {
+  border-radius: var(--mui-radius);
+}
+
+body.mui .image-card .image-card-preview,
+body.mui .gallery-card .thumbnail-section img,
+body.mui .performer-card .thumbnail-section img {
+  transition: transform 0.3s ease;
+}
+
+@media (hover: hover) {
+  body.mui .image-card:hover .image-card-preview,
+  body.mui .gallery-card:hover .thumbnail-section img,
+  body.mui .performer-card:hover .thumbnail-section img {
+    transform: scale(1.04);
+  }
+}
+
+/* ===== Studio cards: logo sits directly on the card ===== */
+
+body.mui .studio-card .thumbnail-section {
+  background: transparent !important;
+  box-shadow: none !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.75rem;
+}
+
+body.mui .studio-card .thumbnail-section img {
+  object-fit: contain;
+  max-height: 100%;
+}
+
+/* ===== Thumbnail-only mode (applies to all card types) ===== */
+
+body.mui.mui-hide-title .grid-card .card-section {
+  display: none !important;
+}
+body.mui.mui-hide-title .grid-card .thumbnail-section {
+  border-radius: var(--mui-radius);
+}
+
+/* ===== Scene thumbnail badges ===== */
+
+body.mui .scene-card .scene-specs-overlay span {
+  background: rgba(0, 0, 0, 0.6);
+  border-radius: 6px;
+  padding: 1px 6px;
+  font-size: 0.75rem;
+}
+
+/* ===================================================================
+   Phones
+   =================================================================== */
+
+@media (max-width: 576px) {
+  body.mui.mui-mobile {
+    overflow-x: hidden;
+  }
+
+  /* Even grid instead of fixed-width cards */
+  body.mui.mui-mobile .row.justify-content-center:has(> .grid-card) {
+    display: grid;
+    grid-template-columns: repeat(var(--mui-mobile-cols, 2), minmax(0, 1fr));
+    gap: 10px;
+    margin: 0;
+    padding: 0 10px;
+  }
+
+  /* Images are small and picture-only: fit one more per row */
+  body.mui.mui-mobile .row.justify-content-center:has(> .image-card) {
+    grid-template-columns: repeat(var(--mui-mobile-image-cols, 3), minmax(0, 1fr));
+    gap: 6px;
+    padding: 0 6px;
+  }
+
+  body.mui.mui-mobile .row.justify-content-center > .grid-card {
+    width: auto !important;
+    min-width: 0;
+    margin: 0 !important;
+  }
+
+  /* Studio name/logo on top of the thumbnail: desktop only */
+  body.mui.mui-mobile .grid-card :is(.studio-overlay, .scene-studio-overlay) {
+    display: none !important;
+  }
+
+
+  body.mui.mui-mobile .grid-card .card-section-title,
+  body.mui.mui-mobile .grid-card .card-section-title h5 {
+    font-size: 0.8rem;
+  }
+
+  body.mui.mui-mobile .image-card.grid-card {
+    border-radius: 8px;
+  }
+
+  /* Toolbar: wrap neatly with bigger tap targets */
+  body.mui.mui-mobile .filtered-list-toolbar {
+    flex-wrap: wrap;
+    gap: 6px;
+    justify-content: center;
+  }
+
+  body.mui.mui-mobile .filtered-list-toolbar .btn,
+  body.mui.mui-mobile .pagination .btn,
+  body.mui.mui-mobile .top-nav .btn {
+    min-height: 40px;
+    min-width: 40px;
+  }
+
+  body.mui.mui-mobile .filtered-list-toolbar .form-control,
+  body.mui.mui-mobile .filtered-list-toolbar input {
+    font-size: 16px; /* stops iOS zooming in on focus */
+  }
+
+  /* Respect the iPhone notch / home bar */
+  body.mui.mui-mobile .top-nav {
+    padding-left: max(0.5rem, env(safe-area-inset-left));
+    padding-right: max(0.5rem, env(safe-area-inset-right));
+  }
+
+  body.mui.mui-mobile:not(.mui-has-bottom-nav) .main {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  /* Scene page: full-width player */
+  body.mui.mui-mobile .scene-player-container {
+    margin-left: -15px;
+    margin-right: -15px;
+  }
+}
+
+
+/* ===================================================================
+   Navigation bar
+   =================================================================== */
+
+:root {
+  --mui-accent: var(--primary, #3d8bfd);
+  --mui-nav-bg: rgba(16, 18, 22, 0.78);
+  --mui-bottom-nav-h: 62px;
+}
+
+/* Frosted-glass top bar */
+body.mui .top-nav.navbar {
+  background-color: var(--mui-nav-bg) !important;
+  -webkit-backdrop-filter: saturate(160%) blur(14px);
+  backdrop-filter: saturate(160%) blur(14px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+}
+
+/* Pill-shaped nav buttons */
+body.mui .top-nav .btn.minimal,
+body.mui .top-nav .nav-link > .btn,
+body.mui .top-nav .nav-link > a {
+  border-radius: 10px;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+@media (hover: hover) {
+  body.mui .top-nav .btn.minimal:hover,
+  body.mui .top-nav .nav-link > .btn:hover,
+  body.mui .top-nav .nav-link > a:hover {
+    background-color: rgba(255, 255, 255, 0.08);
+  }
+}
+
+/* Current page */
+body.mui .top-nav .btn.active,
+body.mui .top-nav .nav-link > a.active,
+body.mui .top-nav .nav-link.active > .btn {
+  background-color: rgba(255, 255, 255, 0.12) !important;
+  color: #fff !important;
+  box-shadow: inset 0 -2px 0 var(--mui-accent);
+}
+
+/* Bottom tab bar and More panel are phone-only */
+.mui-bottom-nav,
+.mui-sheet,
+.mui-sheet-backdrop {
+  display: none;
+}
+
+/* ----- Phones ----- */
+@media (max-width: 576px) {
+  body.mui.mui-mobile .top-nav.navbar {
+    padding-top: max(0.35rem, env(safe-area-inset-top));
+    padding-bottom: 0.35rem;
+    min-height: 52px;
+  }
+
+  body.mui.mui-mobile .top-nav .navbar-brand {
+    font-size: 1.05rem;
+    margin-right: 0.5rem;
+  }
+
+  body.mui.mui-mobile .top-nav .navbar-toggler {
+    border: none;
+    border-radius: 10px;
+    padding: 0.45rem 0.6rem;
+  }
+
+  body.mui.mui-mobile .top-nav .navbar-toggler:focus {
+    box-shadow: 0 0 0 2px var(--mui-accent);
+    outline: none;
+  }
+
+  /* App-style bottom tab bar */
+  body.mui.mui-mobile.mui-has-bottom-nav .mui-bottom-nav {
+    display: flex;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 1030;
+    height: calc(var(--mui-bottom-nav-h) + env(safe-area-inset-bottom));
+    padding: 0 max(4px, env(safe-area-inset-left)) env(safe-area-inset-bottom) max(4px, env(safe-area-inset-right));
+    background-color: var(--mui-nav-bg);
+    -webkit-backdrop-filter: saturate(160%) blur(14px);
+    backdrop-filter: saturate(160%) blur(14px);
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .mui-bottom-nav > a,
+  .mui-bottom-nav > button {
+    flex: 1 1 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    min-width: 0;
+    border: none;
+    background: none;
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 0.68rem;
+    font-weight: 500;
+    text-decoration: none;
+    -webkit-tap-highlight-color: transparent;
+    transition: color 0.15s ease, transform 0.1s ease;
+  }
+
+  .mui-bottom-nav > a:active,
+  .mui-bottom-nav > button:active {
+    transform: scale(0.92);
+  }
+
+  .mui-bottom-nav svg {
+    width: 24px;
+    height: 24px;
+  }
+
+  .mui-bottom-nav span {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+  }
+
+  .mui-bottom-nav > .active {
+    color: var(--mui-accent);
+  }
+
+  /* Leave room for the tab bar at the bottom of every page */
+  body.mui.mui-mobile.mui-has-bottom-nav {
+    padding-bottom: calc(var(--mui-bottom-nav-h) + env(safe-area-inset-bottom) + 8px);
+  }
+
+  /* "More" bottom sheet */
+  body.mui.mui-mobile.mui-has-bottom-nav .mui-sheet-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 1031;
+    background: rgba(0, 0, 0, 0.5);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease;
+  }
+
+  body.mui.mui-mobile.mui-has-bottom-nav .mui-sheet {
+    display: block;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 1032;
+    max-height: 75vh;
+    overflow-y: auto;
+    padding: 8px 12px calc(var(--mui-bottom-nav-h) + env(safe-area-inset-bottom) + 12px);
+    background-color: rgba(22, 24, 29, 0.97);
+    -webkit-backdrop-filter: saturate(160%) blur(16px);
+    backdrop-filter: saturate(160%) blur(16px);
+    border-radius: 18px 18px 0 0;
+    box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.5);
+    transform: translateY(100%);
+    transition: transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+
+  body.mui-sheet-open .mui-sheet-backdrop {
+    opacity: 1 !important;
+    pointer-events: auto !important;
+  }
+
+  body.mui-sheet-open .mui-sheet {
+    transform: translateY(0) !important;
+  }
+
+  /* Keep the tab bar above the sheet so "More" can close it */
+  body.mui-sheet-open .mui-bottom-nav {
+    z-index: 1033 !important;
+  }
+
+  .mui-sheet-handle {
+    width: 40px;
+    height: 5px;
+    margin: 2px auto 14px;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.25);
+  }
+
+  .mui-sheet-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .mui-sheet-grid > a {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 16px 4px;
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.06);
+    color: rgba(255, 255, 255, 0.85);
+    font-size: 0.78rem;
+    font-weight: 500;
+    text-decoration: none;
+    -webkit-tap-highlight-color: transparent;
+    transition: transform 0.1s ease, background-color 0.15s ease;
+  }
+
+  .mui-sheet-grid > a:active {
+    transform: scale(0.95);
+    background: rgba(255, 255, 255, 0.12);
+  }
+
+  .mui-sheet-grid > a.active {
+    color: var(--mui-accent);
+    box-shadow: inset 0 0 0 1px var(--mui-accent);
+  }
+
+  .mui-sheet-grid svg {
+    width: 26px;
+    height: 26px;
+  }
+}
+
+/* ===================================================================
+   Home page rows (carousels) -> scrollable strips, Wall-style pictures
+   Stash's carousel forces every card to one width. We turn each row into
+   a plain horizontal strip so cards can size themselves. Scrolling is
+   handled by the browser (trackpad), Modern UI's momentum code (touch)
+   and the row's arrow buttons (mouse).
+   =================================================================== */
+
+:root {
+  --mui-wall-h: 260px;
+}
+
+body.mui .slick-slider .slick-list {
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  padding: 4px 10px 8px !important;
+  touch-action: pan-x pan-y; /* the browser handles swiping + momentum */
+  -webkit-overflow-scrolling: touch;
+}
+
+body.mui .slick-slider .slick-list::-webkit-scrollbar {
+  display: none;
+}
+
+body.mui .slick-slider .slick-track {
+  display: flex !important;
+  align-items: flex-start;
+  gap: 10px;
+  width: max-content !important;
+  transform: none !important;
+  transition: none !important;
+  margin: 0 !important;
+}
+
+body.mui .slick-slider .slick-track::before,
+body.mui .slick-slider .slick-track::after {
+  display: none;
+}
+
+body.mui .slick-slider .slick-slide {
+  width: auto !important;
+  float: none !important;
+  height: auto;
+}
+
+body.mui .slick-slider .slick-slide > div {
+  padding: 0 !important;
+}
+
+body.mui .slick-slider .slick-slide .grid-card {
+  margin: 0 !important;
+}
+
+/* Copies the carousel makes for endless looping, and its page dots */
+body.mui .slick-slider .slick-cloned,
+body.mui .slick-slider .slick-dots {
+  display: none !important;
+}
+
+/* Arrows always usable; Modern UI scrolls the strip with them */
+body.mui .slick-slider .slick-arrow.slick-disabled {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+body.mui .slick-slider.mui-at-start .slick-prev,
+body.mui .slick-slider.mui-at-end .slick-next {
+  opacity: 0.25;
+  pointer-events: none;
+}
+
+/* ----- Wall-style image and gallery cards in rows ----- */
+
+body.mui .slick-slide :is(.image-card, .gallery-card).grid-card {
+  width: auto !important;
+  max-width: none !important;
+  background: transparent;
+  box-shadow: none;
+  border-radius: 0;
+  overflow: visible;
+}
+
+@media (hover: hover) {
+  body.mui .slick-slide :is(.image-card, .gallery-card).grid-card:hover {
+    transform: none;
+    box-shadow: none;
+  }
+  body.mui .slick-slide :is(.image-card, .gallery-card).grid-card:hover .thumbnail-section {
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.5);
+    filter: brightness(1.08);
+  }
+}
+
+body.mui .slick-slide :is(.image-card, .gallery-card) .thumbnail-section {
+  aspect-ratio: auto !important;
+  height: var(--mui-wall-h) !important;
+  width: auto !important;
+  border-radius: 10px !important;
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  transition: box-shadow 0.15s ease, filter 0.15s ease;
+}
+
+body.mui .slick-slide :is(.image-card, .gallery-card) .thumbnail-section > a,
+body.mui .slick-slide :is(.image-card, .gallery-card) .image-card-preview,
+body.mui .slick-slide :is(.image-card, .gallery-card) .gallery-card-cover {
+  display: block;
+  width: auto !important;
+  height: 100% !important;
+}
+
+body.mui .slick-slide :is(.image-card, .gallery-card) .thumbnail-section img,
+body.mui .slick-slide :is(.image-card, .gallery-card) .thumbnail-section video {
+  height: 100% !important;
+  width: auto !important;
+  max-width: 640px !important; /* very wide panoramas get trimmed */
+  object-fit: cover !important;
+  transform: none !important;
+}
+
+/* Gallery title under the picture without widening the card */
+body.mui .slick-slide .gallery-card .card-section {
+  width: 0;
+  min-width: 100%;
+  padding: 6px 2px 0;
+  background: transparent;
+}
+
+@media (max-width: 576px) {
+  :root {
+    --mui-wall-h: 200px;
+  }
+
+  /* Other card types: size with the screen */
+  body.mui.mui-mobile .slick-slider .slick-slide .scene-card.grid-card {
+    width: 72vw !important;
+    max-width: 320px;
+  }
+
+  body.mui.mui-mobile .slick-slider .slick-slide .performer-card.grid-card {
+    width: 38vw !important;
+    max-width: 180px;
+  }
+
+  body.mui.mui-mobile .slick-slider .slick-slide :is(.studio-card, .group-card, .movie-card, .tag-card).grid-card {
+    width: 46vw !important;
+    max-width: 220px;
+  }
+
+  body.mui.mui-mobile .slick-slider .slick-arrow {
+    display: none !important;
+  }
+}
+
+/* ===================================================================
+   Filter / search toolbar (Scenes, Images, Galleries, ...)
+   =================================================================== */
+
+body.mui .filtered-list-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  margin-top: 12px; /* Stash pulls it up against the nav bar */
+  margin-bottom: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 14px;
+}
+
+/* Buttons: soft, rounded, borderless */
+body.mui .filtered-list-toolbar .btn,
+body.mui .pagination .btn {
+  border: none;
+  border-radius: 10px;
+  background-color: rgba(255, 255, 255, 0.07);
+  color: rgba(255, 255, 255, 0.85);
+  box-shadow: none;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+@media (hover: hover) {
+  body.mui .filtered-list-toolbar .btn:hover,
+  body.mui .pagination .btn:hover {
+    background-color: rgba(255, 255, 255, 0.14);
+    color: #fff;
+  }
+}
+
+/* Button groups become segmented controls */
+body.mui .filtered-list-toolbar .btn-group,
+body.mui .pagination.btn-group,
+body.mui .pagination .btn-group {
+  border-radius: 10px;
+  background-color: rgba(255, 255, 255, 0.07);
+  gap: 2px;
+  padding: 2px;
+}
+
+body.mui .filtered-list-toolbar .btn-group > .btn,
+body.mui .pagination .btn-group > .btn,
+body.mui .pagination.btn-group > .btn {
+  border-radius: 8px !important;
+  background-color: transparent;
+}
+
+/* Selected display mode, current page, active filter */
+body.mui .filtered-list-toolbar .btn.active,
+body.mui .filtered-list-toolbar .btn:active,
+body.mui .pagination .btn.active,
+body.mui .pagination .btn.btn-primary {
+  background-color: var(--mui-accent) !important;
+  color: #fff !important;
+}
+
+/* "Filters" button replacing Stash's floating sidebar tab */
+body.mui .sidebar-pane-content:has(> .filtered-list-toolbar > .mui-sidebar-btn) > .sidebar-toggle-button-container {
+  display: none;
+}
+
+body.mui .filtered-list-toolbar .mui-sidebar-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+body.mui .filtered-list-toolbar .mui-sidebar-btn svg {
+  flex: none;
+}
+
+/* Search box and selects */
+body.mui .filtered-list-toolbar .form-control,
+body.mui .filtered-list-toolbar input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+body.mui .filtered-list-toolbar select {
+  border: 1px solid transparent;
+  border-radius: 10px !important;
+  background-color: rgba(255, 255, 255, 0.07);
+  color: #fff;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
+}
+
+body.mui .filtered-list-toolbar .form-control::placeholder,
+body.mui .filtered-list-toolbar input::placeholder {
+  color: rgba(255, 255, 255, 0.45);
+}
+
+body.mui .filtered-list-toolbar .form-control:focus,
+body.mui .filtered-list-toolbar input:focus,
+body.mui .filtered-list-toolbar select:focus {
+  background-color: rgba(255, 255, 255, 0.1);
+  border-color: var(--mui-accent);
+  box-shadow: 0 0 0 3px rgba(61, 139, 253, 0.25);
+  outline: none;
+}
+
+/* Search box: magnifier icon */
+body.mui .filtered-list-toolbar input[type="search"],
+body.mui .filtered-list-toolbar .search-term-input input,
+body.mui .filtered-list-toolbar input.search-term-input,
+body.mui .filtered-list-toolbar input[placeholder^="Search"] {
+  padding-left: 2.1rem;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-opacity='0.5' stroke-width='2.2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: 0.65rem center;
+  background-size: 1rem;
+}
+
+/* Dropdown menus (sort, saved filters, ...) */
+body.mui .filtered-list-toolbar .dropdown-menu,
+body.mui .pagination .dropdown-menu {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 6px;
+  background-color: rgba(28, 31, 37, 0.96);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+}
+
+body.mui .filtered-list-toolbar .dropdown-item,
+body.mui .pagination .dropdown-item {
+  border-radius: 8px;
+  padding: 0.45rem 0.75rem;
+}
+
+/* Zoom slider */
+body.mui .filtered-list-toolbar input[type="range"] {
+  background: transparent;
+  border: none;
+  accent-color: var(--mui-accent);
+}
+
+/* "1-25 of 28" */
+body.mui .paginationIndex,
+body.mui .pagination-index {
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 0.8rem;
+}
+
+/* Filter chips under the toolbar */
+body.mui .filter-tags .badge,
+body.mui .filter-tags .tag-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 999px;
+  padding: 0.3rem 0.35rem 0.3rem 0.75rem;
+  background-color: rgba(19, 124, 189, 0.22);
+  border: 1px solid rgba(19, 124, 189, 0.5);
+  color: #fff;
+  font-size: 0.82rem;
+  font-weight: 500;
+  line-height: 1.2;
+}
+
+/* The little x inside each chip */
+body.mui .filter-tags .tag-item .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background-color: rgba(255, 255, 255, 0.15);
+  color: #fff;
+  font-size: 0.7rem;
+  line-height: 1;
+}
+
+body.mui .filter-tags .tag-item .btn:hover {
+  background-color: rgba(255, 255, 255, 0.3);
+}
+
+/* "Clear all" and "+N more" chips stay neutral */
+body.mui .filter-tags .tag-item.more-tags,
+body.mui .filter-tags .clear-all-button {
+  background-color: rgba(255, 255, 255, 0.1);
+  border-color: transparent;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+@media (max-width: 576px) {
+  body.mui.mui-mobile .filtered-list-toolbar {
+    margin-left: 10px;
+    margin-right: 10px;
+    padding: 8px;
+  }
+
+  /* Search fills its own row on phones */
+  body.mui.mui-mobile .filtered-list-toolbar > :first-child:has(input),
+  body.mui.mui-mobile .filtered-list-toolbar > :has(> input[placeholder^="Search"]),
+  body.mui.mui-mobile .filtered-list-toolbar > :has(> .search-term-input) {
+    flex: 1 1 100%;
+  }
+
+  body.mui.mui-mobile .filtered-list-toolbar .btn {
+    min-height: 40px;
+  }
+
+  /* Filters button shares the first row with the search box, icon only */
+  body.mui.mui-mobile .filtered-list-toolbar > .mui-sidebar-btn {
+    min-width: 40px;
+    justify-content: center;
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+
+  body.mui.mui-mobile .filtered-list-toolbar .mui-sidebar-btn-label {
+    display: none;
+  }
+
+  body.mui.mui-mobile .filtered-list-toolbar > .mui-sidebar-btn + :has(input) {
+    flex: 1 1 calc(100% - 56px);
+    min-width: 0;
+  }
+
+  body.mui.mui-mobile .filtered-list-toolbar > .mui-sidebar-btn + :has(input) input {
+    width: 100%;
+    max-width: none;
+  }
+}
+
+/* ===================================================================
+   Image grids on desktop/tablet: fill the row with tight, even gaps
+   (phones are handled in the Phones section above)
+   =================================================================== */
+
+@media (min-width: 577px) {
+  body.mui .row.justify-content-center:has(> .image-card) {
+    --mui-img-min: 220px;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(var(--mui-img-min), 1fr));
+    gap: 8px;
+    margin: 0;
+    padding: 0 8px;
+  }
+
+  /* Follow the zoom slider */
+  body.mui .row.justify-content-center:has(> .image-card.zoom-0) { --mui-img-min: 160px; }
+  body.mui .row.justify-content-center:has(> .image-card.zoom-1) { --mui-img-min: 220px; }
+  body.mui .row.justify-content-center:has(> .image-card.zoom-2) { --mui-img-min: 300px; }
+  body.mui .row.justify-content-center:has(> .image-card.zoom-3) { --mui-img-min: 420px; }
+
+  body.mui .row.justify-content-center > .image-card.grid-card {
+    width: auto !important;
+    min-width: 0;
+    margin: 0 !important;
+    border-radius: 10px;
+  }
+
+  body.mui .row.justify-content-center > .image-card .thumbnail-section {
+    border-radius: 10px;
+  }
+}
+
+/* ===================================================================
+   Navigation bar: one cohesive surface
+   =================================================================== */
+
+/* Everything inside the bar shares the bar's background */
+body.mui .top-nav :is(.navbar-collapse, .navbar-nav, .navbar-buttons, .nav-link, .nav-item, .container, .container-fluid) {
+  background: transparent !important;
+  background-color: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+@media (min-width: 1200px) {
+  /* Stash lays the page out for a 48.75px bar; keep to that so nothing
+     slides underneath it */
+  body.mui .top-nav.navbar {
+    min-height: 48.75px;
+    padding: 0 14px;
+  }
+
+  /* Brand */
+  body.mui .top-nav .navbar-brand {
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    padding: 0 16px 0 4px;
+    margin-right: 10px;
+    border-right: 1px solid rgba(255, 255, 255, 0.1);
+    line-height: 28px;
+  }
+
+  body.mui .top-nav .navbar-nav {
+    align-items: center;
+    gap: 2px;
+  }
+
+  body.mui .top-nav .nav-link {
+    padding: 0 !important;
+  }
+
+  /* All buttons: same height, same pill, same colours */
+  body.mui .top-nav .navbar-collapse .btn,
+  body.mui .top-nav .navbar-buttons .btn,
+  body.mui .top-nav .navbar-nav > a,
+  body.mui .top-nav .navbar-nav .nav-link > a {
+    display: inline-flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 8px;
+    height: 38px !important;
+    padding: 0 12px !important;
+    margin: 0 !important;
+    border: none !important;
+    border-radius: 10px !important;
+    background-color: transparent !important;
+    color: rgba(255, 255, 255, 0.7) !important;
+    font-size: 0.9rem;
+    font-weight: 500;
+    line-height: 1;
+    text-decoration: none;
+    box-shadow: none !important;
+    transition: background-color 0.15s ease, color 0.15s ease;
+  }
+
+  body.mui .top-nav .btn svg {
+    width: 1em;
+    height: 1em;
+    margin: 0 !important;
+  }
+
+  body.mui .top-nav .btn span {
+    margin: 0 !important;
+  }
+
+  @media (hover: hover) {
+    body.mui .top-nav .navbar-collapse .btn:hover,
+    body.mui .top-nav .navbar-buttons .btn:hover,
+    body.mui .top-nav .navbar-nav .nav-link > a:hover {
+      background-color: rgba(255, 255, 255, 0.08) !important;
+      color: #fff !important;
+    }
+  }
+
+  /* Current page */
+  body.mui .top-nav .navbar-collapse .btn.active,
+  body.mui .top-nav .navbar-nav .nav-link > a.active {
+    background-color: rgba(255, 255, 255, 0.1) !important;
+    color: #fff !important;
+    box-shadow: inset 0 -2px 0 var(--mui-accent) !important;
+  }
+
+  /* Right-hand icon buttons: square pills */
+  body.mui .top-nav .navbar-buttons .btn:not(:has(span)) {
+    width: 38px;
+    padding: 0 !important;
+  }
+
+  /* Divider between page links and utility buttons */
+  body.mui .top-nav .navbar-buttons {
+    gap: 2px;
+    padding-left: 10px;
+    margin-left: 10px;
+    border-left: 1px solid rgba(255, 255, 255, 0.1) !important;
+  }
+
+  /* Right-hand buttons: Stash wraps some of them (stats, settings, New,
+     Donate) in an extra link/div. Make the wrappers invisible so every
+     button gets the same spacing. */
+  body.mui .top-nav .navbar-buttons {
+    align-items: center;
+    gap: 4px !important;
+  }
+
+  body.mui .top-nav .navbar-buttons > :is(a, div, .nav-link):not(.btn) {
+    display: flex !important;
+    align-items: center;
+    height: auto !important;
+    width: auto !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+  }
+
+  body.mui .top-nav .navbar-buttons .btn.h-100 {
+    height: 38px !important;
+  }
+
+  /* Donate: keep the heart, drop the loud styling */
+  body.mui .top-nav .navbar-buttons .btn svg[data-icon="heart"],
+  body.mui .top-nav .navbar-buttons .btn .fa-heart {
+    color: #ff6b81;
+  }
+}
+
+/* ===================================================================
+   Pictures fill their card (no empty bars beside portrait images)
+   =================================================================== */
+
+/* Every picture card gets the same shape so rows line up */
+:root {
+  --mui-picture-ratio: 3 / 4;
+}
+
+body.mui :is(.image-card, .gallery-card) .thumbnail-section {
+  aspect-ratio: var(--mui-picture-ratio);
+  height: auto !important;
+  max-height: none !important;
+  overflow: hidden;
+}
+
+body.mui :is(.image-card, .gallery-card) .thumbnail-section > a,
+body.mui :is(.image-card, .gallery-card) .image-card-preview,
+body.mui :is(.image-card, .gallery-card) .gallery-card-cover {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+body.mui :is(.image-card, .gallery-card) .thumbnail-section img,
+body.mui :is(.image-card, .gallery-card) .thumbnail-section video {
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none !important;
+  max-height: none !important;
+  object-fit: cover !important;
+  object-position: center 25%; /* favour the top, where faces usually are */
+}
+
+/* "Show whole pictures" setting: letterbox instead of cropping */
+body.mui.mui-fit-contain :is(.image-card, .gallery-card) .thumbnail-section img,
+body.mui.mui-fit-contain :is(.image-card, .gallery-card) .thumbnail-section video {
+  object-fit: contain !important;
+}
+
+/* ===================================================================
+   Phones: scene cards - picture first, a little bigger
+   =================================================================== */
+
+@media (max-width: 576px) {
+  /* Hide duration + resolution badges */
+  body.mui.mui-mobile .scene-card .scene-specs-overlay {
+    display: none !important;
+  }
+
+  /* Bigger cards: use the page's side padding and tighten the gaps */
+  body.mui.mui-mobile .row.justify-content-center:has(> .scene-card) {
+    gap: 6px;
+    padding: 0;
+    margin-left: -8px;
+    margin-right: -8px;
+  }
+
+  body.mui.mui-mobile .row.justify-content-center > .scene-card.grid-card {
+    border-radius: 10px;
+  }
+
+  body.mui.mui-mobile .scene-card .thumbnail-section {
+    border-radius: 10px 10px 0 0;
+  }
+
+  body.mui.mui-mobile .scene-card .card-section {
+    padding: 0.4rem 0.5rem 0.5rem;
+  }
+}
+
+/* ===================================================================
+   Phones: smooth home-row scrolling
+   Fixed card sizes (no layout jumps as pictures load) and less to
+   redraw on every frame.
+   =================================================================== */
+
+@media (max-width: 576px) {
+  /* Image + gallery cards: fixed size instead of Wall-style auto width */
+  body.mui.mui-mobile .slick-slide .image-card.grid-card {
+    width: 38vw !important;
+    max-width: 180px !important;
+  }
+
+  body.mui.mui-mobile .slick-slide .gallery-card.grid-card {
+    width: 46vw !important;
+    max-width: 220px !important;
+  }
+
+  body.mui.mui-mobile .slick-slide :is(.image-card, .gallery-card) .thumbnail-section {
+    width: 100% !important;
+    height: auto !important;
+    aspect-ratio: var(--mui-picture-ratio) !important;
+  }
+
+  body.mui.mui-mobile .slick-slide :is(.image-card, .gallery-card) .thumbnail-section > a,
+  body.mui.mui-mobile .slick-slide :is(.image-card, .gallery-card) .image-card-preview,
+  body.mui.mui-mobile .slick-slide :is(.image-card, .gallery-card) .gallery-card-cover {
+    width: 100% !important;
+    height: 100% !important;
+  }
+
+  body.mui.mui-mobile .slick-slide :is(.image-card, .gallery-card) .thumbnail-section img,
+  body.mui.mui-mobile .slick-slide :is(.image-card, .gallery-card) .thumbnail-section video {
+    width: 100% !important;
+    height: 100% !important;
+    max-width: none !important;
+  }
+
+  /* Studio logos: reserve their box so loading doesn't shift the row */
+  body.mui.mui-mobile .slick-slide .studio-card .thumbnail-section {
+    height: 120px;
+  }
+
+  /* Nothing expensive to redraw while the row moves */
+  body.mui.mui-mobile .slick-slider .slick-slide .grid-card,
+  body.mui.mui-mobile .slick-slider .slick-slide .thumbnail-section {
+    box-shadow: none !important;
+    filter: none !important;
+    transition: none !important;
+  }
+
+  body.mui.mui-mobile .slick-slider .slick-slide {
+    contain: layout paint;
+  }
+
+  body.mui.mui-mobile .slick-slider .slick-list {
+    will-change: scroll-position;
+  }
+
+  /* Solid tab bar: a blurred bar has to re-blur everything moving under it */
+  body.mui.mui-mobile.mui-has-bottom-nav .mui-bottom-nav {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background-color: rgba(16, 18, 22, 0.97);
+  }
+}
+
+/* ===================================================================
+   Page switcher at the bottom of lists: sits at the end of the list
+   (not floating) and looks the same as the one at the top
+   =================================================================== */
+
+body.mui .pagination-footer-container {
+  position: static;
+  margin-top: 8px;
+}
+
+body.mui .pagination-footer .pagination.btn-group {
+  box-shadow: none;
+}
+
+body.mui .pagination-footer .pagination .btn:disabled {
+  color: rgba(255, 255, 255, 0.85);
+  opacity: 0.65;
+}
+
+/* ===================================================================
+   Gallery cards: no picture flipping when hovering the bottom edge
+   =================================================================== */
+
+body.mui .gallery-card .preview-scrubber {
+  display: none !important;
+}
+
+/* ===================================================================
+   Light theme  (setting: Colour theme = light / auto)
+   Stash only ships a dark theme with its colours baked in, so this
+   repaints its surfaces, text, inputs and menus. Pictures, the video
+   player and the full-screen viewer stay dark.
+   =================================================================== */
+
+body.mui.mui-light {
+  --mui-l-bg: #f4f6f8;
+  --mui-l-surface: #ffffff;
+  --mui-l-surface-2: #e9edf1;
+  --mui-l-hover: rgba(16, 22, 26, 0.06);
+  --mui-l-active: rgba(16, 22, 26, 0.1);
+  --mui-l-border: rgba(16, 22, 26, 0.12);
+  --mui-l-text: #1c2127;
+  --mui-l-muted: #5f6b7c;
+  --mui-l-link: #0f6cbd;
+
+  --mui-card-bg: var(--mui-l-surface);
+  --mui-shadow: 0 1px 3px rgba(16, 22, 26, 0.1), 0 2px 8px rgba(16, 22, 26, 0.06);
+  --mui-shadow-hover: 0 8px 22px rgba(16, 22, 26, 0.16);
+  --mui-nav-bg: rgba(255, 255, 255, 0.85);
+
+  background-color: var(--mui-l-bg) !important;
+  color: var(--mui-l-text);
+}
+
+/* ----- Text and links ----- */
+
+/* Low priority on purpose: only replaces Stash's default link colour */
+:where(body.mui-light) a,
+:where(body.mui-light) a:hover {
+  color: var(--mui-l-link);
+}
+
+body.mui.mui-light :where(h1, h2, h3, h4, h5, h6, label, legend, .form-label, .nav-link,
+  .table, .modal, .popover-body, .ErrorMessage, .manual, .changelog-version-header,
+  .double-range-input-labels, .duration-label-input, .age-label-input,
+  .tag-list-anchor, .scene-link, .studio-logo .studio-name, .table-list a,
+  .save-filter-button, .wall-item-missing, .display-mode-menu .dropdown-item) {
+  color: var(--mui-l-text);
+}
+
+/* Stash styles these with very specific selectors */
+body.mui.mui-light :is(.detail-header a.performer-name, .detail-header a.studio-name,
+  .detail-header a.tag-name, .detail-header a.group-name, #queue-viewer a,
+  .saved-filter-list .dropdown-item) {
+  color: var(--mui-l-text) !important;
+}
+
+body.mui.mui-light :is(.text-muted, .alias-head, .performer-disambiguation, .object-count,
+  .setting-group-collapse-button, .empty-queue-message, .advanced-switch .form-label,
+  .package-id, .package-date, .package-latest-date, .package-manager-no-results,
+  .scrape-dialog .column-label, .performer-card__age, .query-text-field-clear,
+  [class$="-subheader"] .date, [class*="-select-date"], [class*="-select-studio"],
+  [class*="-select-code"], .performer-select-birthdate, .performer-select-disambiguation) {
+  color: var(--mui-l-muted) !important;
+}
+
+body.mui.mui-light .detail-header .detail-item-value.age {
+  border-bottom-color: var(--mui-l-muted);
+}
+
+/* Card titles */
+body.mui.mui-light .grid-card a,
+body.mui.mui-light .grid-card .card-section-title,
+body.mui.mui-light .grid-card .card-section-title h5 {
+  color: var(--mui-l-text);
+}
+
+/* ----- Surfaces ----- */
+
+body.mui.mui-light :where(.card, .modal-header, .modal-body, .modal-footer, .manual-header,
+  .manual-body, .job-table.card, .package-manager table thead) {
+  background-color: var(--mui-l-surface);
+  color: var(--mui-l-text);
+  border-color: var(--mui-l-border);
+}
+
+body.mui.mui-light .modal-content {
+  border: none;
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: 0 20px 50px rgba(16, 22, 26, 0.25);
+}
+
+body.mui.mui-light .modal .close,
+body.mui.mui-light .manual .close {
+  color: var(--mui-l-text);
+  text-shadow: none;
+}
+
+body.mui.mui-light :is(.sidebar-pane .sidebar, .sidebar-toolbar, .sidebar .sidebar-footer,
+  #queue-viewer .queue-controls, #scene-edit-details .edit-buttons-container,
+  #tasks-panel .tasks-panel-queue, .table-list table thead) {
+  background-color: var(--mui-l-bg) !important;
+  border-color: var(--mui-l-border) !important;
+}
+
+body.mui.mui-light .sidebar-pane .sidebar {
+  border-right: 1px solid var(--mui-l-border) !important;
+}
+
+body.mui.mui-light :is(.recommendations-container-edit > .recommendation-row, #queue-viewer .current, .search-item,
+  .PerformerTagger-performer, .StudioTagger-studio, .TagTagger-tag, .skeleton-card,
+  .scraper-source-list .list-group-item, .migration-notes > div) {
+  background-color: var(--mui-l-surface-2) !important;
+  color: var(--mui-l-text);
+}
+
+body.mui.mui-light .list-group-item {
+  background-color: var(--mui-l-surface);
+  border-color: var(--mui-l-border);
+  color: var(--mui-l-text);
+}
+
+/* Scene / performer / studio / tag page header */
+body.mui.mui-light .detail-header:not(.edit) {
+  background-color: #e6eaee;
+}
+
+body.mui.mui-light .detail-header .background-image-container {
+  opacity: 0.3;
+}
+
+body.mui.mui-light .detail-body nav {
+  border-bottom-color: var(--mui-l-border);
+}
+
+/* Tabs */
+body.mui.mui-light .nav-tabs .nav-link:hover {
+  border-bottom-color: var(--mui-l-text);
+}
+
+body.mui.mui-light .nav-tabs .nav-link.active {
+  color: var(--mui-l-link);
+  background: transparent;
+}
+
+/* Tables */
+body.mui.mui-light .table thead th,
+body.mui.mui-light .table td {
+  border-color: var(--mui-l-border);
+}
+
+body.mui.mui-light .table-striped tr:nth-child(odd) td {
+  background: rgba(16, 22, 26, 0.035);
+}
+
+body.mui.mui-light :is(.border-row, hr) {
+  background-color: var(--mui-l-border);
+  border-color: var(--mui-l-border);
+}
+
+/* ----- Buttons ----- */
+
+body.mui.mui-light :is(.btn-secondary, .btn-dark) {
+  background-color: var(--mui-l-surface-2);
+  border-color: var(--mui-l-surface-2);
+  color: var(--mui-l-text);
+}
+
+body.mui.mui-light :is(.btn-secondary, .btn-dark):not(:disabled):not(.disabled):is(:hover, :focus, :active, .active) {
+  background-color: #dbe1e7;
+  border-color: #dbe1e7;
+  color: var(--mui-l-text);
+}
+
+body.mui.mui-light :is(a.minimal, button.minimal) {
+  color: var(--mui-l-text);
+}
+
+body.mui.mui-light :is(a.minimal, button.minimal):hover:not(:disabled),
+body.mui.mui-light .btn.active.minimal:not(.disabled),
+body.mui.mui-light .btn.active:not(.disabled):not(.btn-primary) {
+  background-color: var(--mui-l-active);
+  color: var(--mui-l-text);
+}
+
+body.mui.mui-light .btn-link,
+body.mui.mui-light .btn.link {
+  color: var(--mui-l-link);
+}
+
+body.mui.mui-light .count-button :is(.btn, button) {
+  color: var(--mui-l-text) !important;
+}
+
+body.mui.mui-light .folder-list-item .btn {
+  color: var(--mui-l-text);
+}
+
+/* Card count buttons (tags, performers, O-count...) */
+body.mui.mui-light .card-popovers .btn {
+  color: var(--mui-l-muted);
+}
+
+/* ----- Inputs ----- */
+
+body.mui.mui-light :is(.text-input, .input-control, .form-control, .custom-select,
+  .clearable-text-field, .scraper-filter-container .clearable-text-field) {
+  background-color: var(--mui-l-surface) !important;
+  color: var(--mui-l-text) !important;
+  box-shadow: inset 0 0 0 1px var(--mui-l-border);
+  border-color: var(--mui-l-border);
+}
+
+body.mui.mui-light :is(.text-input, .input-control, .form-control, .custom-select):focus {
+  box-shadow: 0 0 0 1px #137cbd, 0 0 0 3px rgba(19, 124, 189, 0.25);
+}
+
+body.mui.mui-light :is(.text-input, .input-control, .form-control)::placeholder {
+  color: #8a96a3;
+}
+
+body.mui.mui-light .form-control-plaintext {
+  color: var(--mui-l-text);
+}
+
+body.mui.mui-light :is(.text-input + .input-group-append .btn.minimal, .clearable-text-field-clear,
+  .query-text-field-clear, .stash-id-pill a) {
+  background-color: var(--mui-l-surface-2) !important;
+  color: var(--mui-l-text);
+}
+
+body.mui.mui-light .input-group-text {
+  background-color: var(--mui-l-surface-2);
+  border-color: var(--mui-l-border);
+  color: var(--mui-l-text);
+}
+
+/* Searchable pickers (tags, performers, studios...) */
+body.mui.mui-light div.react-select__control {
+  background-color: var(--mui-l-surface);
+  border-color: var(--mui-l-border);
+  color: var(--mui-l-text);
+}
+
+body.mui.mui-light div.react-select__control :is(.react-select__single-value, .react-select__input-container, .react-select__input) {
+  color: var(--mui-l-text);
+}
+
+body.mui.mui-light div.react-select__control .react-select__multi-value {
+  background-color: var(--mui-l-surface-2);
+  color: var(--mui-l-text);
+}
+
+body.mui.mui-light div.react-select__control .react-select__multi-value__label {
+  color: var(--mui-l-text);
+}
+
+body.mui.mui-light :is(.react-select__indicator-separator) {
+  background-color: var(--mui-l-border);
+}
+
+/* Range sliders */
+body.mui.mui-light input[type="range"]::-webkit-slider-thumb { background: #ffffff; box-shadow: 0 0 0 1px var(--mui-l-border), 0 1px 3px rgba(0, 0, 0, 0.2); }
+body.mui.mui-light input[type="range"]::-moz-range-thumb { background: #ffffff; }
+body.mui.mui-light .zoom-slider::-webkit-slider-runnable-track,
+body.mui.mui-light input[type="range"]::-webkit-slider-runnable-track { background-color: #d5dbe1; }
+body.mui.mui-light .zoom-slider::-moz-range-track,
+body.mui.mui-light input[type="range"]::-moz-range-track { background-color: #d5dbe1; }
+
+/* ----- Menus, popovers, date picker ----- */
+
+body.mui.mui-light :is(div.react-select__menu, div.dropdown-menu, .filtered-list-toolbar .dropdown-menu, .pagination .dropdown-menu) {
+  background-color: var(--mui-l-surface) !important;
+  border: 1px solid var(--mui-l-border) !important;
+  color: var(--mui-l-text);
+  box-shadow: 0 10px 30px rgba(16, 22, 26, 0.15) !important;
+}
+
+body.mui.mui-light :is(div.react-select__menu, div.dropdown-menu) :is(.react-select__option, .dropdown-item) {
+  color: var(--mui-l-text);
+}
+
+body.mui.mui-light :is(div.react-select__menu, div.dropdown-menu) :is(.react-select__option--is-focused, .dropdown-item:hover, .dropdown-item:focus) {
+  background-color: var(--mui-l-hover);
+}
+
+body.mui.mui-light .dropdown-divider {
+  border-color: var(--mui-l-border);
+}
+
+body.mui.mui-light .popover {
+  background-color: var(--mui-l-surface);
+  border: 1px solid var(--mui-l-border);
+  box-shadow: 0 10px 30px rgba(16, 22, 26, 0.15);
+}
+
+body.mui.mui-light .popover .popover-body,
+body.mui.mui-light .popover .popover-body .btn {
+  color: var(--mui-l-text);
+}
+
+body.mui.mui-light .popover .popover-header {
+  background-color: var(--mui-l-surface-2);
+  color: var(--mui-l-text);
+  border-color: var(--mui-l-border);
+}
+
+body.mui.mui-light .bs-popover-bottom > .arrow::after,
+body.mui.mui-light .bs-popover-auto[x-placement^="bottom"] > .arrow::after { border-bottom-color: var(--mui-l-surface); }
+body.mui.mui-light .bs-popover-top > .arrow::after,
+body.mui.mui-light .bs-popover-auto[x-placement^="top"] > .arrow::after { border-top-color: var(--mui-l-surface); }
+body.mui.mui-light .bs-popover-left > .arrow::after,
+body.mui.mui-light .bs-popover-auto[x-placement^="left"] > .arrow::after { border-left-color: var(--mui-l-surface); }
+body.mui.mui-light .bs-popover-right > .arrow::after,
+body.mui.mui-light .bs-popover-auto[x-placement^="right"] > .arrow::after { border-right-color: var(--mui-l-surface); }
+
+body.mui.mui-light div.react-datepicker,
+body.mui.mui-light div.react-datepicker :is(.react-datepicker__time, .react-datepicker__year-dropdown, .react-datepicker__month-dropdown) {
+  background-color: var(--mui-l-surface);
+  color: var(--mui-l-text);
+  border-color: var(--mui-l-border);
+}
+
+body.mui.mui-light div.react-datepicker :is(.react-datepicker__header, .react-datepicker-time__header) {
+  background-color: var(--mui-l-surface-2);
+  color: var(--mui-l-text);
+}
+
+body.mui.mui-light div.react-datepicker :is(.react-datepicker__day, .react-datepicker__day-name, .react-datepicker__current-month) {
+  color: var(--mui-l-text);
+}
+
+body.mui.mui-light .toast-container .toast-header,
+body.mui.mui-light .toast-container .toast-header .close {
+  color: var(--mui-l-text);
+}
+
+/* Tag chips: a little softer than Stash's grey */
+body.mui.mui-light .tag-item {
+  background-color: #dfe5eb;
+  color: var(--mui-l-text);
+}
+
+body.mui.mui-light .badge-secondary {
+  background-color: #dfe5eb;
+  color: var(--mui-l-text);
+}
+
+/* Help / markdown */
+body.mui.mui-light .markdown :is(code, blockquote, pre) {
+  background-color: var(--mui-l-surface-2);
+  color: var(--mui-l-text);
+}
+
+body.mui.mui-light .markdown table tr:nth-child(2n) {
+  background-color: var(--mui-l-surface-2);
+}
+
+/* ----- Modern UI's own pieces ----- */
+
+body.mui.mui-light .top-nav.navbar {
+  border-bottom: 1px solid var(--mui-l-border);
+  box-shadow: 0 2px 12px rgba(16, 22, 26, 0.06);
+}
+
+body.mui.mui-light .top-nav,
+body.mui.mui-light .top-nav .navbar-brand,
+body.mui.mui-light .top-nav :is(.btn, .nav-link, .nav-link > a, .navbar-nav > a) {
+  color: rgba(28, 33, 39, 0.75) !important;
+}
+
+body.mui.mui-light .top-nav :is(.btn.active, .nav-link > a.active, .nav-link.active > .btn) {
+  background-color: var(--mui-l-active) !important;
+  color: var(--mui-l-text) !important;
+}
+
+@media (hover: hover) {
+  body.mui.mui-light .top-nav :is(.btn, .nav-link > a):hover {
+    background-color: var(--mui-l-hover) !important;
+    color: var(--mui-l-text) !important;
+  }
+}
+
+body.mui.mui-light .top-nav .navbar-toggler-icon {
+  filter: invert(1) brightness(0.3);
+}
+
+body.mui.mui-light .top-nav .navbar-collapse.show,
+body.mui.mui-light .top-nav .navbar-collapse.collapsing {
+  background-color: transparent !important;
+}
+
+@media (min-width: 1200px) {
+  body.mui.mui-light .top-nav .navbar-brand,
+  body.mui.mui-light .top-nav .navbar-buttons {
+    border-color: var(--mui-l-border) !important;
+  }
+}
+
+/* Toolbar, page switcher, filter chips */
+body.mui.mui-light .filtered-list-toolbar {
+  background: var(--mui-l-surface);
+  border-color: var(--mui-l-border);
+  box-shadow: 0 1px 3px rgba(16, 22, 26, 0.05);
+}
+
+body.mui.mui-light :is(.filtered-list-toolbar, .pagination) .btn:not(.active):not(.btn-primary) {
+  background-color: var(--mui-l-surface-2);
+  color: var(--mui-l-text);
+}
+
+body.mui.mui-light :is(.filtered-list-toolbar .btn-group, .pagination.btn-group, .pagination .btn-group) {
+  background-color: var(--mui-l-surface-2);
+}
+
+body.mui.mui-light :is(.filtered-list-toolbar .btn-group, .pagination.btn-group, .pagination .btn-group) > .btn:not(.active):not(.btn-primary) {
+  background-color: transparent;
+}
+
+@media (hover: hover) {
+  body.mui.mui-light :is(.filtered-list-toolbar, .pagination) .btn:not(.active):not(.btn-primary):hover {
+    background-color: #dbe1e7;
+    color: var(--mui-l-text);
+  }
+}
+
+body.mui.mui-light .pagination-footer .pagination .btn:disabled {
+  color: var(--mui-l-text);
+}
+
+body.mui.mui-light .filtered-list-toolbar :is(.form-control, input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), select) {
+  background-color: var(--mui-l-surface-2) !important;
+  box-shadow: none;
+  color: var(--mui-l-text) !important;
+}
+
+body.mui.mui-light .filtered-list-toolbar :is(.form-control, input, select):focus {
+  background-color: var(--mui-l-surface) !important;
+  box-shadow: 0 0 0 3px rgba(19, 124, 189, 0.2);
+}
+
+body.mui.mui-light .filtered-list-toolbar :is(.form-control, input)::placeholder {
+  color: #8a96a3;
+}
+
+body.mui.mui-light .filtered-list-toolbar :is(input[type="search"], .search-term-input input, input.search-term-input, input[placeholder^="Search"]) {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%231c2127' stroke-opacity='0.5' stroke-width='2.2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
+}
+
+body.mui.mui-light :is(.paginationIndex, .pagination-index) {
+  color: var(--mui-l-muted);
+}
+
+body.mui.mui-light .filter-tags :is(.badge, .tag-item) {
+  background-color: rgba(19, 124, 189, 0.12);
+  border-color: rgba(19, 124, 189, 0.35);
+  color: #0b4f7c;
+}
+
+body.mui.mui-light .filter-tags .tag-item .btn {
+  background-color: rgba(19, 124, 189, 0.15);
+  color: #0b4f7c;
+}
+
+body.mui.mui-light .filter-tags :is(.tag-item.more-tags, .clear-all-button) {
+  background-color: var(--mui-l-surface-2);
+  border-color: transparent;
+  color: var(--mui-l-text);
+}
+
+/* Home page rows */
+body.mui.mui-light .slick-prev::before,
+body.mui.mui-light .slick-next::before {
+  color: var(--mui-l-text);
+}
+
+@media (hover: hover) {
+  body.mui.mui-light .slick-slide :is(.image-card, .gallery-card).grid-card:hover .thumbnail-section {
+    box-shadow: 0 8px 20px rgba(16, 22, 26, 0.2);
+  }
+}
+
+body.mui.mui-light .slick-slide :is(.image-card, .gallery-card) .thumbnail-section {
+  box-shadow: 0 2px 8px rgba(16, 22, 26, 0.12);
+}
+
+/* Picture cards sit on a soft grey while loading / letterboxed */
+body.mui.mui-light :is(.image-card, .gallery-card) .thumbnail-section {
+  background-color: var(--mui-l-surface-2);
+}
+
+/* Phone tab bar and More sheet */
+@media (max-width: 576px) {
+  body.mui.mui-light.mui-mobile.mui-has-bottom-nav .mui-bottom-nav {
+    background-color: rgba(255, 255, 255, 0.97);
+    border-top-color: var(--mui-l-border);
+  }
+
+  body.mui.mui-light .mui-bottom-nav > a,
+  body.mui.mui-light .mui-bottom-nav > button {
+    color: rgba(28, 33, 39, 0.55);
+  }
+
+  body.mui.mui-light .mui-bottom-nav > .active {
+    color: var(--mui-accent);
+  }
+
+  body.mui.mui-light.mui-mobile.mui-has-bottom-nav .mui-sheet {
+    background-color: rgba(255, 255, 255, 0.98);
+    box-shadow: 0 -8px 30px rgba(16, 22, 26, 0.18);
+  }
+
+  body.mui.mui-light.mui-mobile.mui-has-bottom-nav .mui-sheet-backdrop {
+    background: rgba(16, 22, 26, 0.3);
+  }
+
+  body.mui.mui-light .mui-sheet-handle {
+    background: rgba(16, 22, 26, 0.2);
+  }
+
+  body.mui.mui-light .mui-sheet-grid > a {
+    background: var(--mui-l-surface-2);
+    color: var(--mui-l-text);
+  }
+
+  body.mui.mui-light .mui-sheet-grid > a:active {
+    background: #dbe1e7;
+  }
+
+  body.mui.mui-light .mui-sheet-grid > a.active {
+    color: var(--mui-accent);
+  }
+}
+
+/* Studio logos are made for a dark background (often white lettering),
+   so the logo area keeps a dark plate; the name strip below stays light. */
+/* Neutral gray gradient: darker at the bottom, fading to light at
+   the top */
+body.mui.mui-light :is(.studio-card, .tag-card).grid-card {
+  background: linear-gradient(0deg, #aab1b8 0%, #c9ced3 50%, #eceef0 100%) !important;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35), 0 2px 10px rgba(16, 22, 26, 0.12) !important;
+}
+
+@media (hover: hover) {
+  body.mui.mui-light :is(.studio-card, .tag-card).grid-card:hover {
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35), 0 8px 22px rgba(16, 22, 26, 0.2) !important;
+  }
+}
+
+body.mui.mui-light :is(.studio-card, .tag-card) .card-section-title,
+body.mui.mui-light :is(.studio-card, .tag-card) .card-section-title h5 {
+  color: var(--mui-l-text) !important;
+}
+
+body.mui.mui-light :is(.studio-card, .tag-card) .thumbnail-section {
+  background: transparent !important;
+}
+
+/* Selected / main-action buttons: a lighter blue than Stash's */
+body.mui.mui-light {
+  --mui-accent: #4a9be0;
+}
+
+body.mui.mui-light .btn-primary:not(.minimal),
+body.mui.mui-light .btn-primary:not(.minimal):not(:disabled):not(.disabled):is(:hover, :focus, :active),
+body.mui.mui-light .btn-primary:not(:disabled):not(.disabled).active,
+body.mui.mui-light .show > .btn-primary.dropdown-toggle,
+body.mui.mui-light .btn-group > .btn.active:not(.disabled),
+body.mui.mui-light .btn-group > .btn:not(:disabled):not(.disabled):active {
+  background-color: #4a9be0 !important;
+  border-color: #4a9be0 !important;
+  color: #fff !important;
+}
+
+/* "Stash" logo button: same look as the other nav buttons, blue only on
+   the home page (like the current page's button) */
+body.mui .top-nav .navbar-brand .btn {
+  background-color: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  font-weight: 700;
+}
+
+body.mui:not(.mui-light) .top-nav .navbar-brand .btn {
+  color: #f5f8fa !important;
+}
+
+body.mui.mui-light .top-nav .navbar-brand .btn {
+  color: var(--mui-l-text) !important;
+}
+
+body.mui.mui-on-home .top-nav .navbar-brand .btn {
+  background-color: var(--mui-accent) !important;
+  color: #fff !important;
+}
+
+body.mui.mui-light .btn-primary:not(.minimal):focus,
+body.mui.mui-light .btn-group > .btn.active:focus {
+  box-shadow: 0 0 0 3px rgba(74, 155, 224, 0.3) !important;
+}
+
+body.mui.mui-light .detail-header .detail-header-image img.logo {
+  background: #8a95a0;
+  border-radius: 12px;
+  padding: 10px;
+}
+
+/* Favourite hearts: Stash's colours, not the dark button text,
+   and no button background behind them */
+body.mui.mui-light .btn.favorite-button {
+  background: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+
+body.mui.mui-light .btn.favorite-button.favorite,
+body.mui.mui-light .btn.favorite-button.favorite:hover {
+  color: #ff7373 !important;
+}
+
+body.mui.mui-light .btn.favorite-button.not-favorite,
+body.mui.mui-light .btn.favorite-button.not-favorite:hover {
+  color: #fff !important;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6));
+}
+
+/* ----- Keep dark: things that sit on pictures or video ----- */
+
+body.mui.mui-light :is(.Lightbox, [class*="Lightbox"], .scene-player-container, .video-js, .vjs-control-bar) {
+  color: #f5f8fa !important;
+}
+
+body.mui.mui-light :is(.Lightbox, [class*="Lightbox"]) :is(a, .btn, button, h1, h2, h3, h4, h5, h6, label) {
+  color: #f5f8fa !important;
+}
+
+body.mui.mui-light .grid-card :is(.studio-overlay, .scene-studio-overlay, .scene-specs-overlay,
+  .rating-banner, .preview-button, .card-check, .tag-card-header) :is(a, span, svg, div) {
+  color: #fff !important;
+}
+
+body.mui.mui-light :is(.wall-item-footer a, .GalleryWallCard-footer a, .scene-wall a, .marker-wall a) {
+  color: #fff !important;
+}
+
+body.mui.mui-light .preview-button .fa-icon {
+  color: #f5f8fa !important;
+}
+
+/* ===================================================================
+   Touch screens: selecting cards (press and hold a card to select)
+   Checkboxes stay out of the way until something is selected, then
+   every card in the list shows one.
+   =================================================================== */
+
+@media (hover: none) {
+  body.mui .grid-card {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  body.mui .grid-card .card-check {
+    opacity: 0 !important;
+    pointer-events: none;
+  }
+
+  body.mui :is(.row, .slick-track):has(.card-check:checked) .grid-card .card-check {
+    opacity: 1 !important;
+    pointer-events: auto;
+    width: 1.4rem;
+    height: 1.4rem;
+    accent-color: var(--mui-accent);
+  }
+
+  body.mui .grid-card:has(.card-check:checked) {
+    box-shadow: 0 0 0 3px var(--mui-accent), var(--mui-shadow) !important;
+  }
+
+  body.mui .grid-card:has(.card-check:checked) .thumbnail-section {
+    opacity: 0.85;
+  }
+}
+
+/* ===================================================================
+   Gallery page: name above the pictures
+   =================================================================== */
+
+body.mui .mui-gallery-title {
+  margin: 14px 0 6px;
+  font-size: 1.6rem;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+/* Phones/tablets: the details panel (with the name) is already right
+   above the pictures, so don't repeat it */
+@media (max-width: 1199px) {
+  body.mui .mui-gallery-title {
+    display: none;
+  }
+}
+
+/* ===================================================================
+   More panel: "Edit tab bar" (choose and order the tab bar pages)
+   =================================================================== */
+
+@media (max-width: 576px) {
+  .mui-sheet-grid svg,
+  .mui-bottom-nav svg {
+    flex: none;
+  }
+
+  .mui-sheet-edit {
+    display: block;
+    width: 100%;
+    margin-top: 12px;
+    padding: 10px;
+    border: none;
+    border-radius: 12px;
+    background: transparent;
+    color: var(--mui-accent);
+    font-size: 0.9rem;
+    font-weight: 600;
+  }
+
+  .mui-edit-heading {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin: 6px 4px 8px;
+    font-size: 0.8rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    opacity: 0.7;
+  }
+
+  .mui-edit-heading small {
+    font-weight: 500;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+
+  .mui-edit-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 14px;
+  }
+
+  .mui-edit-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 6px 6px 12px;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.06);
+    color: rgba(255, 255, 255, 0.9);
+  }
+
+  .mui-edit-icon svg {
+    display: block;
+    width: 22px;
+    height: 22px;
+  }
+
+  .mui-edit-label {
+    flex: 1 1 auto;
+    min-width: 0;
+    margin-left: 6px;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-size: 0.9rem;
+    font-weight: 500;
+  }
+
+  .mui-edit-row button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+    width: 38px;
+    height: 38px;
+    border: none;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.08);
+    color: inherit;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .mui-edit-row button svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  .mui-edit-row button:disabled {
+    opacity: 0.25;
+  }
+
+  .mui-edit-row button:not(:disabled):active {
+    transform: scale(0.92);
+  }
+
+  .mui-edit-row .mui-edit-toggle[data-act="add"]:not(:disabled) {
+    background: var(--mui-accent);
+    color: #fff;
+  }
+
+  .mui-edit-row .mui-edit-toggle[data-act="remove"] {
+    background: rgba(219, 55, 55, 0.2);
+    color: #ff7373;
+  }
+
+  .mui-edit-empty {
+    padding: 12px;
+    border-radius: 12px;
+    border: 1px dashed rgba(255, 255, 255, 0.2);
+    font-size: 0.85rem;
+    opacity: 0.7;
+    text-align: center;
+  }
+
+  .mui-edit-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 4px;
+  }
+
+  .mui-edit-actions button {
+    flex: 1 1 0;
+    height: 44px;
+    border: none;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.08);
+    color: inherit;
+    font-weight: 600;
+  }
+
+  .mui-edit-actions .mui-edit-done {
+    background: var(--mui-accent);
+    color: #fff;
+  }
+
+  .mui-sheet {
+    color: rgba(255, 255, 255, 0.9);
+  }
+
+  /* Light theme */
+  body.mui.mui-light .mui-sheet {
+    color: var(--mui-l-text);
+  }
+
+  body.mui.mui-light .mui-edit-row {
+    background: var(--mui-l-surface-2);
+    color: var(--mui-l-text);
+  }
+
+  body.mui.mui-light .mui-edit-row button,
+  body.mui.mui-light .mui-edit-actions button:not(.mui-edit-done) {
+    background: rgba(16, 22, 26, 0.07);
+  }
+
+  body.mui.mui-light .mui-edit-row .mui-edit-toggle[data-act="add"]:not(:disabled) {
+    background: var(--mui-accent);
+    color: #fff;
+  }
+
+  body.mui.mui-light .mui-edit-row .mui-edit-toggle[data-act="remove"] {
+    background: rgba(219, 55, 55, 0.12);
+    color: #c23030;
+  }
+
+  body.mui.mui-light .mui-edit-empty {
+    border-color: var(--mui-l-border);
+  }
+}
+
+/* ===================================================================
+   Home page rows run to the screen edges
+   The strip stretches past the page margins to both sides of the screen
+   (cards slide off the edge instead of being cut off inside the page),
+   while the first and last cards still line up with the row title.
+   =================================================================== */
+
+body.mui .slick-slider .slick-list {
+  margin-left: calc(50% - 50vw) !important;
+  margin-right: calc(50% - 50vw) !important;
+  padding-left: calc(50vw - 50%) !important;
+  padding-right: calc(50vw - 50%) !important;
+  scroll-padding-left: calc(50vw - 50%);
+}
+
+/* Desktop arrows sit on top of the pictures now, so give them a backing */
+body.mui .slick-slider .slick-arrow {
+  z-index: 3;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: rgba(16, 18, 22, 0.6) !important;
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+}
+
+body.mui .slick-slider .slick-prev { left: 8px; }
+body.mui .slick-slider .slick-next { right: 8px; }
+
+body.mui .slick-slider .slick-arrow::before {
+  color: #fff !important;
+  opacity: 1 !important;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
+  font-size: 26px;
+  font-weight: 600;
+  line-height: 1;
+  margin-top: -3px;
+}
+
+body.mui .slick-slider .slick-prev::before { content: "\2039"; margin-left: -2px; }
+body.mui .slick-slider .slick-next::before { content: "\203A"; margin-left: 2px; }
+
+body.mui.mui-light .slick-slider .slick-arrow {
+  background: rgba(255, 255, 255, 0.85) !important;
+  box-shadow: 0 2px 10px rgba(16, 22, 26, 0.18);
+}
+
+body.mui.mui-light .slick-slider .slick-arrow::before {
+  color: var(--mui-l-text) !important;
+}
+
+/* Arrows fade out at the ends of a row (overrides the stronger
+   backing above) */
+body.mui .slick-slider.mui-at-start .slick-prev,
+body.mui .slick-slider.mui-at-end .slick-next {
+  opacity: 0 !important;
+  pointer-events: none;
+}
+
+/* ===================================================================
+   Tags page: A-Z index view
+   =================================================================== */
+
+/* Hide Stash's own results while the index is showing */
+body.mui.mui-az-active .tag-list .sidebar-pane-content > :not(.filtered-list-toolbar):not(.filter-tags):not(.mui-az):not(.sidebar-toggle-button-container) {
+  display: none !important;
+}
+
+body.mui.mui-az-active .tag-list .filtered-list-toolbar .zoom-slider-container {
+  display: none;
+}
+
+/* Only the A-Z button looks selected */
+body.mui .filtered-list-toolbar .btn-group.mui-az-group-on > .btn.active:not(.mui-az-btn) {
+  background-color: transparent !important;
+  color: inherit !important;
+}
+
+body.mui .filtered-list-toolbar .mui-az-btn {
+  font-weight: 700;
+  font-size: 0.8rem;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.mui-az {
+  padding: 4px 12px 32px;
+}
+
+.mui-az-jump {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.mui-az-jump button {
+  min-width: 32px;
+  height: 32px;
+  padding: 0 6px;
+  border: none;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.07);
+  color: inherit;
+  font-weight: 700;
+  font-size: 0.85rem;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mui-az-jump button:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.mui-az-jump button:active {
+  transform: scale(0.94);
+}
+
+.mui-az-count {
+  margin: 4px 2px 12px;
+  font-size: 0.8rem;
+  opacity: 0.6;
+}
+
+.mui-az-columns {
+  columns: 220px auto;
+  column-gap: 32px;
+}
+
+.mui-az-group {
+  margin-bottom: 18px;
+  scroll-margin-top: 70px;
+}
+
+.mui-az-keep {
+  break-inside: avoid;
+  -webkit-column-break-inside: avoid;
+}
+
+.mui-az-letter {
+  margin: 0 0 8px;
+  padding-top: 4px;
+  font-size: 1.5rem;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+body.mui .mui-az-tag {
+  display: block;
+  padding: 5px 0;
+  break-inside: avoid;
+  color: inherit !important;
+  font-size: 0.95rem;
+  line-height: 1.3;
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+body.mui .mui-az-tag:hover {
+  color: var(--mui-accent) !important;
+  text-decoration: none;
+}
+
+.mui-az-empty {
+  padding: 40px 0;
+  text-align: center;
+  opacity: 0.6;
+}
+
+body.mui.mui-light .mui-az-jump button {
+  background: var(--mui-l-surface-2);
+  color: var(--mui-l-text);
+}
+
+body.mui.mui-light .mui-az-jump button:hover {
+  background: #dbe1e7;
+}
+
+@media (max-width: 576px) {
+  .mui-az {
+    padding: 0 12px 24px;
+  }
+
+  .mui-az-columns {
+    columns: 150px auto;
+    column-gap: 18px;
+  }
+
+  body.mui .mui-az-tag {
+    padding: 7px 0; /* easier to tap */
+    font-size: 0.9rem;
+  }
+}
+
+/* ===================================================================
+   Light theme: filter editor and dropdown fixes
+   =================================================================== */
+
+/* "is / is not / greater than..." pills */
+body.mui.mui-light .modifier-options .modifier-option {
+  background-color: var(--mui-l-surface-2) !important;
+  color: var(--mui-l-text) !important;
+  font-weight: 600;
+}
+
+body.mui.mui-light .modifier-options .modifier-option:hover {
+  background-color: #dbe1e7 !important;
+}
+
+body.mui.mui-light .modifier-options .modifier-option.selected {
+  background-color: var(--mui-accent) !important;
+  color: #fff !important;
+}
+
+/* Edit Filter list: soft dividers instead of dark borders */
+body.mui.mui-light .edit-filter-dialog .criterion-list .card {
+  border-color: var(--mui-l-border) !important;
+}
+
+body.mui.mui-light .edit-filter-dialog .filter-item-header {
+  background-color: var(--mui-l-surface) !important;
+  color: var(--mui-l-text);
+}
+
+body.mui.mui-light .edit-filter-dialog .filter-item-header:hover {
+  background-color: var(--mui-l-hover) !important;
+}
+
+body.mui.mui-light .edit-filter-dialog .filter-tags {
+  border-top-color: var(--mui-l-border) !important;
+}
+
+/* Stash forces dark slate + white text on some menus (sort by, operations)
+   with helper classes; make them match the other light menus */
+body.mui.mui-light :is(.dropdown-menu, .popover, .modal) .bg-secondary,
+body.mui.mui-light .dropdown-menu .bg-dark {
+  background-color: transparent !important;
+}
+
+body.mui.mui-light .dropdown-menu.bg-secondary,
+body.mui.mui-light .dropdown-menu.bg-dark {
+  background-color: var(--mui-l-surface) !important;
+}
+
+body.mui.mui-light :is(.dropdown-menu, .popover, .modal) .text-white,
+body.mui.mui-light .dropdown-menu.text-white {
+  color: var(--mui-l-text) !important;
+}
+
+body.mui.mui-light .dropdown-menu .dropdown-item {
+  border-radius: 8px;
+}
+
+body.mui.mui-light .dropdown-menu .dropdown-item:is(:hover, :focus) {
+  background-color: var(--mui-l-hover) !important;
+}
+
+body.mui.mui-light .dropdown-menu .dropdown-item:is(.active, :active) {
+  background-color: rgba(74, 155, 224, 0.15) !important;
+  color: #1a6fb5 !important;
+  font-weight: 600;
+}
+
+/* ===================================================================
+   Scene page (wide screens): details under the video, like a video site
+   Stash puts them in a side panel; phones already stack them. Setting
+   "Scene details beside the video" turns this off.
+   =================================================================== */
+
+@media (min-width: 1200px) {
+  body.mui.mui-scene-stack .row:has(> .scene-player-container) {
+    flex-direction: column;
+    flex-wrap: nowrap;
+  }
+
+  body.mui.mui-scene-stack .row > .scene-player-container {
+    order: 1;
+    flex: 0 0 auto !important;
+    max-width: 100% !important;
+    width: 100%;
+    padding: 0 15px !important;
+  }
+
+  /* Video: as wide as the page, but never so tall the title is hidden */
+  body.mui.mui-scene-stack .scene-player-container .VideoPlayer {
+    height: min(calc((100vw - 30px) * 0.5625), 74vh) !important;
+    max-height: none !important;
+  }
+
+  body.mui.mui-scene-stack .row > .scene-divider {
+    display: none !important;
+  }
+
+  body.mui.mui-scene-stack .row > .scene-tabs,
+  body.mui.mui-scene-stack .row > .scene-tabs.collapsed {
+    order: 2;
+    display: flex !important;
+    flex: 0 0 auto !important;
+    width: 100%;
+    max-width: 100% !important;
+    max-height: none !important;
+    overflow: visible !important;
+    padding: 18px 15px 40px !important;
+  }
+
+  body.mui.mui-scene-stack .scene-tabs .tab-content {
+    overflow: visible !important;
+    min-height: 0 !important;
+  }
+
+  /* Title row like a video site: big title, toolbar on one line */
+  body.mui.mui-scene-stack .scene-tabs .scene-header {
+    font-size: 1.5rem;
+    font-weight: 700;
+    line-height: 1.3;
+    margin-bottom: 4px;
+  }
+
+  /* Header panel: studio logo + title side by side, date and buttons
+     below, on a slightly different background so white logos show up */
+  body.mui.mui-scene-stack .scene-tabs > div:first-child {
+    padding: 16px 20px 14px;
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.05);
+  }
+
+  body.mui.mui-light.mui-scene-stack .scene-tabs > div:first-child {
+    background: linear-gradient(90deg, #aeb5bc 0%, #c3c9cf 45%, #d3d8dd 100%);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.4);
+  }
+
+  body.mui.mui-scene-stack .scene-tabs .scene-header-container {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 18px;
+    text-align: left;
+  }
+
+  body.mui.mui-scene-stack .scene-tabs .scene-header-container .studio-logo {
+    flex: none;
+    margin: 0;
+    text-align: left;
+  }
+
+  body.mui.mui-scene-stack .scene-tabs .scene-header-container img {
+    display: block;
+    max-height: 64px;
+    max-width: 200px;
+    width: auto;
+    object-fit: contain;
+  }
+
+  body.mui.mui-scene-stack .scene-tabs .scene-header-container .scene-header {
+    flex: 1 1 auto;
+    min-width: 0;
+    margin: 0;
+  }
+
+  body.mui.mui-scene-stack .scene-tabs .scene-subheader {
+    opacity: 0.75;
+  }
+
+  body.mui.mui-scene-stack .scene-tabs .scene-toolbar {
+    margin: 8px 0 4px;
+  }
+
+  body.mui.mui-scene-stack .scene-tabs .nav-tabs {
+    margin: 10px 0 14px;
+    justify-content: flex-start;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  body.mui.mui-light.mui-scene-stack .scene-tabs .nav-tabs {
+    border-bottom-color: var(--mui-l-border);
+  }
+
+  /* Performer cards etc. in the details tab: in a row, not one per line */
+  body.mui.mui-scene-stack .scene-tabs .tab-content .row.justify-content-center {
+    justify-content: flex-start !important;
+  }
+}
+
+/* ===================================================================
+   Scene page: "Suggested" row
+   =================================================================== */
+
+body.mui .mui-related {
+  order: 99;
+  flex: 0 0 100%;
+  max-width: 100%;
+  width: 100%;
+  padding: 8px 15px 40px;
+}
+
+.mui-related-row + .mui-related-row {
+  margin-top: 22px;
+}
+
+.mui-related-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.mui-related-head h3 {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+.mui-related-arrows {
+  display: flex;
+  gap: 6px;
+}
+
+.mui-related-arrows button {
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  color: inherit;
+  font-size: 22px;
+  line-height: 1;
+  padding: 0 0 3px;
+}
+
+.mui-related-arrows button:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.mui-related-strip {
+  display: flex;
+  gap: 14px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  padding: 2px 2px 8px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.mui-related-strip::-webkit-scrollbar {
+  display: none;
+}
+
+.mui-related-loading {
+  padding: 30px 4px;
+  opacity: 0.6;
+}
+
+body.mui a.mui-rel-card {
+  flex: 0 0 300px;
+  width: 300px;
+  color: inherit !important;
+  text-decoration: none !important;
+}
+
+.mui-rel-thumb {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #111;
+  box-shadow: var(--mui-shadow);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.mui-rel-thumb img,
+.mui-rel-thumb video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.mui-rel-duration {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  z-index: 1;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+@media (hover: hover) {
+  .mui-rel-card:hover .mui-rel-thumb {
+    transform: translateY(-2px);
+    box-shadow: var(--mui-shadow-hover);
+  }
+}
+
+.mui-rel-title {
+  margin-top: 8px;
+  font-size: 0.92rem;
+  font-weight: 600;
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.mui-rel-meta {
+  margin-top: 2px;
+  font-size: 0.8rem;
+  opacity: 0.65;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+body.mui.mui-light .mui-related-arrows button {
+  background: var(--mui-l-surface-2);
+}
+
+body.mui.mui-light .mui-related-arrows button:hover {
+  background: #dbe1e7;
+}
+
+body.mui.mui-light .mui-rel-meta {
+  color: var(--mui-l-muted);
+  opacity: 1;
+}
+
+/* Below 1200px Stash caps the details panel at the screen height
+   without scrolling it, so long details (lots of tags) spill out over
+   whatever comes next, i.e. the Suggested rows. Let it grow instead. */
+@media (max-width: 1199px) {
+  body.mui .row > .scene-tabs {
+    max-height: none;
+    overflow: visible;
+  }
+}
+
+@media (max-width: 576px) {
+  body.mui .mui-related {
+    padding: 8px 12px 24px;
+  }
+
+  body.mui a.mui-rel-card {
+    flex-basis: 72vw;
+    width: 72vw;
+    max-width: 300px;
+  }
+
+  .mui-related-arrows {
+    display: none;
+  }
+}
+
+/* ===================================================================
+   Image page: "Similar photos" grid
+   =================================================================== */
+
+body.mui .mui-similar {
+  order: 99;
+  flex: 0 0 100%;
+  max-width: 100%;
+  width: 100%;
+  padding: 18px 15px 40px;
+}
+
+.mui-similar h3 {
+  margin: 0 0 12px;
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+.mui-similar-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 8px;
+}
+
+body.mui a.mui-similar-card {
+  display: block;
+  aspect-ratio: var(--mui-picture-ratio, 3 / 4);
+  border-radius: 10px;
+  overflow: hidden;
+  background: rgba(127, 127, 127, 0.15);
+  box-shadow: var(--mui-shadow);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+body.mui a.mui-similar-card img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center 25%;
+  display: block;
+}
+
+body.mui.mui-fit-contain a.mui-similar-card img {
+  object-fit: contain;
+}
+
+@media (hover: hover) {
+  body.mui a.mui-similar-card:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--mui-shadow-hover);
+  }
+}
+
+.mui-similar-grid .mui-related-loading {
+  grid-column: 1 / -1;
+  padding: 30px 4px;
+  opacity: 0.6;
+}
+
+@media (max-width: 576px) {
+  body.mui .mui-similar {
+    padding: 14px 6px 24px;
+  }
+
+  .mui-similar h3 {
+    margin-left: 6px;
+  }
+
+  .mui-similar-grid {
+    grid-template-columns: repeat(var(--mui-mobile-image-cols, 3), minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  body.mui a.mui-similar-card {
+    border-radius: 8px;
+  }
+}
+
+/* "More from <gallery>" above Similar photos */
+.mui-from-gallery:not(:empty) {
+  margin-bottom: 26px;
+}
+
+/* "More with <performer>" below Similar photos */
+.mui-from-performer:not(:empty) {
+  margin-top: 26px;
+}
+
+.mui-similar-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.mui-similar-head h3 {
+  margin: 0 !important;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+body.mui a.mui-similar-all {
+  flex: none;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--mui-accent) !important;
+}
+
+/* The photo you're looking at */
+body.mui a.mui-similar-card.mui-current {
+  outline: 3px solid var(--mui-accent);
+  outline-offset: -3px;
+  opacity: 0.7;
+}
+
+@media (max-width: 576px) {
+  .mui-similar-head {
+    margin-left: 6px;
+    margin-right: 6px;
+  }
+}
+
+/* ===================================================================
+   Performer page: "Similar Performers" row
+   =================================================================== */
+
+/* Stash keeps the closed filter sidebar a full screen tall (it's only
+   slid off to the side), so a short list (e.g. a performer with one
+   scene) still takes up a whole screen, leaving a big empty gap before
+   whatever comes after it. Collapse it while it's closed. */
+body.mui .sidebar-pane.hide-sidebar .sidebar {
+  height: 0 !important;
+  max-height: 0 !important;
+  overflow: hidden !important;
+}
+
+body.mui .mui-perf-similar {
+  flex: 0 0 100%;
+  max-width: 100%;
+  width: 100%;
+  padding: 32px 15px 40px;
+}
+
+body.mui .mui-perf-similar:empty {
+  display: none;
+}
+
+/* On scene and image pages it comes last, after Suggested / Similar photos */
+body.mui .mui-perf-similar.mui-perf-similar-scene,
+body.mui .mui-perf-similar.mui-perf-similar-image {
+  order: 100;
+  padding-top: 0;
+}
+
+body.mui a.mui-perf-card {
+  flex: 0 0 180px;
+  width: 180px;
+}
+
+body.mui .mui-perf-card .mui-rel-thumb {
+  aspect-ratio: 2 / 3;
+}
+
+body.mui .mui-perf-card .mui-rel-thumb img {
+  object-position: top center;
+}
+
+body.mui.mui-light .mui-perf-card .mui-rel-thumb {
+  background: var(--mui-l-surface-2);
+}
+
+@media (max-width: 576px) {
+  body.mui .mui-perf-similar {
+    padding: 28px 12px 24px;
+  }
+
+  body.mui a.mui-perf-card {
+    flex-basis: 38vw;
+    width: 38vw;
+    max-width: 180px;
+  }
+
+  body.mui .mui-perf-similar .mui-related-arrows {
+    display: none;
+  }
+}
+
+/* ===================================================================
+   Light mode: "minimal" buttons (rating stars, O-counter, view count)
+   stay see-through. Our light .btn-secondary colour was giving them
+   a gray box.
+   =================================================================== */
+
+body.mui.mui-light .btn-secondary.minimal,
+body.mui.mui-light .btn-secondary.minimal:not(:disabled):not(.disabled):is(:hover, :focus, :active) {
+  background-color: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+@media (hover: hover) {
+  body.mui.mui-light .btn-secondary.minimal:not(:disabled):not(.disabled):hover {
+    background-color: rgba(16, 22, 26, 0.06);
+  }
+}
+
+/* ===================================================================
+   Scene page on phones / narrow windows: same header box as desktop
+   =================================================================== */
+
+@media (max-width: 1199px) {
+  body.mui .scene-tabs > div:first-child {
+    margin-top: 10px;
+    padding: 14px 14px 10px;
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.05);
+  }
+
+  body.mui.mui-light .scene-tabs > div:first-child {
+    background: linear-gradient(90deg, #aeb5bc 0%, #c3c9cf 45%, #d3d8dd 100%);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.4);
+  }
+
+  /* Small studio logo beside the title instead of a huge one above it */
+  body.mui .scene-tabs .scene-header-container {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 12px;
+    text-align: left;
+  }
+
+  body.mui .scene-tabs .scene-header-container .studio-logo {
+    flex: none;
+    margin: 0;
+    text-align: left;
+  }
+
+  body.mui .scene-tabs .scene-header-container img {
+    display: block;
+    max-height: 44px;
+    max-width: 96px;
+    width: auto;
+    object-fit: contain;
+  }
+
+  body.mui .scene-tabs .scene-header-container .scene-header {
+    flex: 1 1 auto;
+    min-width: 0;
+    margin: 0;
+    font-size: 1.15rem;
+    font-weight: 700;
+    line-height: 1.3;
+  }
+
+  body.mui .scene-tabs .scene-subheader {
+    margin-top: 6px;
+    font-size: 0.85rem;
+  }
+
+  body.mui .scene-tabs .scene-toolbar {
+    margin-top: 6px;
+  }
+
+  /* Tabs under the box: one scrollable line instead of wrapping */
+  body.mui .scene-tabs .nav-tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    margin-top: 6px;
+  }
+
+  body.mui .scene-tabs .nav-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  body.mui .scene-tabs .nav-tabs > *,
+  body.mui .scene-tabs .nav-tabs .nav-link {
+    flex: none;
+    white-space: nowrap;
+  }
+}
+
+/* ===================================================================
+   Scene header: studio with no logo
+   Stash shows the studio's name as a huge heading in that case, which
+   squashed the title beside it. Show it as a small label above the
+   title instead (all screen sizes).
+   =================================================================== */
+
+body.mui .scene-tabs .scene-header-container:has(.studio-name) {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+body.mui .scene-tabs h1.studio-logo:has(.studio-name) {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.3;
+  text-align: left;
+}
+
+body.mui .scene-tabs .studio-logo .studio-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  opacity: 0.75;
+}
+
+body.mui .scene-tabs .studio-logo .studio-name svg {
+  width: 1em;
+  height: 1em;
+  margin: 0;
+}
+
+body.mui .scene-tabs .scene-header-container:has(.studio-name) .scene-header {
+  width: 100%;
+}

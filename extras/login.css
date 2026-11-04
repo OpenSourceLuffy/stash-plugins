@@ -1,0 +1,181 @@
+/* ===================================================================
+   Modern UI - login page
+   Stash's login page doesn't load plugins, only this Custom CSS file,
+   so its styling lives here. Everything is scoped to body.login and
+   doesn't affect the rest of Stash. Follows the device's light/dark
+   setting.
+   =================================================================== */
+
+body.login {
+  --login-bg: #141a1f;
+  --login-glow-1: rgba(19, 124, 189, 0.35);
+  --login-glow-2: rgba(120, 80, 220, 0.22);
+  --login-card: rgba(32, 43, 51, 0.72);
+  --login-card-border: rgba(255, 255, 255, 0.08);
+  --login-text: #f5f8fa;
+  --login-muted: rgba(245, 248, 250, 0.6);
+  --login-input: rgba(255, 255, 255, 0.06);
+  --login-input-border: rgba(255, 255, 255, 0.1);
+  --login-accent: #3d8bfd;
+
+  min-height: 100vh;
+  min-height: 100dvh;
+  background:
+    radial-gradient(60vmax 60vmax at 15% 10%, var(--login-glow-1), transparent 60%),
+    radial-gradient(55vmax 55vmax at 90% 95%, var(--login-glow-2), transparent 60%),
+    var(--login-bg);
+  background-attachment: fixed;
+  color: var(--login-text);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+}
+
+@media (prefers-color-scheme: light) {
+  body.login {
+    --login-bg: #eef2f6;
+    --login-glow-1: rgba(74, 155, 224, 0.35);
+    --login-glow-2: rgba(150, 120, 230, 0.2);
+    --login-card: rgba(255, 255, 255, 0.75);
+    --login-card-border: rgba(255, 255, 255, 0.9);
+    --login-text: #1c2127;
+    --login-muted: #5f6b7c;
+    --login-input: rgba(16, 22, 26, 0.05);
+    --login-input-border: rgba(16, 22, 26, 0.1);
+    --login-accent: #4a9be0;
+  }
+}
+
+body.login .dialog {
+  min-height: 100vh;
+  min-height: 100dvh;
+  height: auto;
+  padding: 24px max(20px, env(safe-area-inset-right)) 24px max(20px, env(safe-area-inset-left));
+}
+
+body.login .card {
+  width: 100%;
+  max-width: 380px;
+  padding: 36px 30px 30px;
+  border: 1px solid var(--login-card-border);
+  border-radius: 22px;
+  background: var(--login-card);
+  -webkit-backdrop-filter: saturate(160%) blur(24px);
+  backdrop-filter: saturate(160%) blur(24px);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.3), 0 2px 6px rgba(0, 0, 0, 0.12);
+  animation: login-in 0.45s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* App name + greeting above the form (the page has no heading of its own) */
+body.login .card::before {
+  content: "Stash";
+  display: block;
+  margin-bottom: 4px;
+  font-size: 2rem;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  text-align: center;
+  background: linear-gradient(135deg, var(--login-accent), #8a6cf0);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+body.login form::before {
+  content: "Sign in to continue";
+  display: block;
+  margin-bottom: 26px;
+  color: var(--login-muted);
+  font-size: 0.95rem;
+  text-align: center;
+}
+
+body.login .form-group {
+  margin-bottom: 14px;
+}
+
+body.login label h6 {
+  margin: 0 0 6px 4px;
+  color: var(--login-muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+body.login .form-control.text-input {
+  height: 48px;
+  padding: 0 14px;
+  border: 1px solid var(--login-input-border);
+  border-radius: 12px;
+  background: var(--login-input);
+  box-shadow: none;
+  color: var(--login-text);
+  font-size: 16px; /* stops iPhone zooming in */
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
+}
+
+body.login .form-control.text-input::placeholder {
+  color: var(--login-muted);
+  opacity: 0.7;
+}
+
+body.login .form-control.text-input:focus {
+  outline: none;
+  border-color: var(--login-accent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--login-accent) 25%, transparent);
+}
+
+/* Browser autofill: keep our colours */
+body.login .form-control.text-input:-webkit-autofill {
+  -webkit-text-fill-color: var(--login-text);
+  -webkit-box-shadow: 0 0 0 100px var(--login-input) inset;
+  caret-color: var(--login-text);
+  transition: background-color 9999s ease 0s;
+}
+
+body.login .login-error {
+  min-height: 1.2em;
+  margin: 4px 2px 12px;
+  color: #ff6b6b;
+  font-size: 0.88rem;
+  font-weight: 500;
+  text-align: center;
+}
+
+body.login #login-button {
+  width: 100%;
+  height: 48px;
+  border: none;
+  border-radius: 12px;
+  background: linear-gradient(135deg, var(--login-accent), color-mix(in srgb, var(--login-accent) 70%, #6a4fe0));
+  color: #fff;
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  box-shadow: 0 8px 20px color-mix(in srgb, var(--login-accent) 35%, transparent);
+  transition: transform 0.1s ease, box-shadow 0.15s ease, filter 0.15s ease;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+body.login #login-button:hover {
+  filter: brightness(1.07);
+  box-shadow: 0 10px 26px color-mix(in srgb, var(--login-accent) 45%, transparent);
+}
+
+body.login #login-button:active {
+  transform: scale(0.98);
+}
+
+body.login #login-button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--login-accent) 35%, transparent);
+}
+
+@keyframes login-in {
+  from { opacity: 0; transform: translateY(12px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body.login .card { animation: none; }
+}

@@ -1,0 +1,70 @@
+name: Modern UI
+description: Cleaner scene, performer, image, gallery, studio, group and tag cards, plus a mobile-friendly layout.
+version: "0.32"
+ui:
+  javascript:
+    - modern-ui.js
+  css:
+    - modern-ui.css
+
+settings:
+  colorTheme:
+    displayName: Colour theme
+    description: "dark (default), light, or auto (follows your phone or computer's light/dark setting)"
+    type: STRING
+  showDetails:
+    displayName: Show card details
+    description: Bring back dates, descriptions, file paths, performer age/country and image titles on cards.
+    type: BOOLEAN
+  showPopovers:
+    displayName: Show count buttons
+    description: Bring back the row of tag, performer, scene, marker and O-count buttons on all cards.
+    type: BOOLEAN
+  showOverlays:
+    displayName: Show rating banner
+    description: Bring back the rating ribbon on card thumbnails. (The studio name/logo always shows on desktop and is hidden on phones.)
+    type: BOOLEAN
+  hideTitle:
+    displayName: Hide titles
+    description: Show pictures only, with no title, on every card type.
+    type: BOOLEAN
+  showWholePictures:
+    displayName: Show whole pictures on image and gallery cards
+    description: Fit the entire picture inside the card (with empty bars at the sides) instead of filling the card and cropping the edges.
+    type: BOOLEAN
+  pictureShape:
+    displayName: Image and gallery card shape
+    description: "portrait (default), square, landscape or wide"
+    type: STRING
+  mobileColumns:
+    displayName: Cards per row on phones
+    description: 1 or 2 (default 2). Image grids show one extra per row.
+    type: NUMBER
+  sceneDetailsBeside:
+    displayName: Scene details beside the video
+    description: On a scene's page on wide screens, keep Stash's side panel instead of showing the details under the video.
+    type: BOOLEAN
+  showGalleryDetails:
+    displayName: Open gallery details panel by default
+    description: On a gallery's page, show the details panel on the left straight away instead of starting with it closed. (Wide screens only.)
+    type: BOOLEAN
+  disableMobile:
+    displayName: Disable mobile tweaks
+    description: Turn off the phone layout changes.
+    type: BOOLEAN
+  disableImageSwipe:
+    displayName: Disable swiping between images
+    description: Turn off swipe left/right (and arrow keys) to move between images on an image's page.
+    type: BOOLEAN
+  disableBottomNav:
+    displayName: Disable bottom tab bar on phones
+    description: Turn off the app-style tab bar at the bottom of the screen on phones.
+    type: BOOLEAN
+  bottomNavItems:
+    displayName: Bottom tab bar pages
+    description: "Easiest to change from the phone: More > Edit tab bar. Up to 4, comma separated, in order. Default: home,scenes,images,performers. Also: galleries, studios, groups, tags, markers, settings, and pages added by other plugins by their name (e.g. tv). A More button is always added."
+    type: STRING
+  moreNavOrder:
+    displayName: More panel order
+    description: "Set from the phone: More > Edit tab bar. Comma-separated order of the pages in the More panel; anything not listed goes at the end."
+    type: STRING
