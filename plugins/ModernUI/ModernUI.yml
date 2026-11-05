@@ -1,6 +1,6 @@
 name: Modern UI
 description: Cleaner scene, performer, image, gallery, studio, group and tag cards, plus a mobile-friendly layout.
-version: "0.33"
+version: "0.48"
 ui:
   javascript:
     - modern-ui.js
@@ -43,6 +43,10 @@ settings:
   sceneDetailsBeside:
     displayName: Scene details beside the video
     description: On a scene's page on wide screens, keep Stash's side panel instead of showing the details under the video.
+    type: BOOLEAN
+  imageDetailsBeside:
+    displayName: Image details beside the picture
+    description: On an image's page on wide screens, keep Stash's side panel instead of showing the details under the picture.
     type: BOOLEAN
   showGalleryDetails:
     displayName: Open gallery details panel by default

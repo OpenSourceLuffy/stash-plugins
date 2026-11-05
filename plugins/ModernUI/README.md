@@ -38,7 +38,11 @@ A cleaner, app-like look for Stash, built to feel good on a phone as well as a c
 - These rows are hidden while the **Edit** tab is open, so they don't get mixed in with the edit form.
 
 **Images and galleries**
-- **Similar photos** (shared tags), **More from [gallery]** when you came from a gallery, and **More with [performer]**.
+- Image details (title, rating, tabs) sit under the picture on wide screens, like scenes. You can change this in the settings.
+- **Similar photos**: scored by shared tags and galleries (2 points each) and look-alike performers (up to 5). Photos of the same performer are left out, since they have their own row. If there aren't enough matches, it fills up with unorganised photos, then random ones.
+- **More from [gallery]** when you came from a gallery, or **More from [row]** when you came from a home page row, using that row's own filter. It shows the 2 photos before this one, this one, then the ones after it.
+- **More with [performer]**: other photos with the same performers.
+- Each of these is a scrolling row with a **Load more** card at the end.
 - Gallery pages show the gallery's name at the top. The details panel starts closed; you can change this in the settings.
 
 **Performers**
@@ -70,6 +74,7 @@ Under **Settings → Plugins → Modern UI**:
 | Image and gallery card shape | `portrait` (default), `square`, `landscape` or `wide`. |
 | Cards per row on phones | `1` or `2` (default). Image grids show one extra. |
 | Scene details beside the video | Keep Stash's side panel on scene pages on wide screens. |
+| Image details beside the picture | Keep Stash's side panel on image pages on wide screens. |
 | Open gallery details panel by default | Start gallery pages with the details panel open. |
 | Disable mobile tweaks | Turn off the phone layout. |
 | Disable swiping between images | Turn off swipe / arrow-key navigation on image pages. |
