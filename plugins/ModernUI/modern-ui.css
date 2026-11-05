@@ -1146,7 +1146,9 @@ body.mui.mui-fit-contain :is(.image-card, .gallery-card) .thumbnail-section vide
   body.mui.mui-mobile.mui-has-bottom-nav .mui-bottom-nav {
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
-    background-color: rgba(16, 18, 22, 0.97);
+    /* Fully opaque: on portrait phones Stash's own menu bar sits right
+       behind this one and would show through */
+    background-color: rgb(16, 18, 22);
   }
 }
 
@@ -1665,7 +1667,7 @@ body.mui.mui-light :is(.image-card, .gallery-card) .thumbnail-section {
 /* Phone tab bar and More sheet */
 @media (max-width: 576px) {
   body.mui.mui-light.mui-mobile.mui-has-bottom-nav .mui-bottom-nav {
-    background-color: rgba(255, 255, 255, 0.97);
+    background-color: #fff;
     border-top-color: var(--mui-l-border);
   }
 
@@ -2441,6 +2443,12 @@ body.mui.mui-light .dropdown-menu .dropdown-item:is(.active, :active) {
   body.mui.mui-scene-stack .scene-tabs .tab-content .row.justify-content-center {
     justify-content: flex-start !important;
   }
+}
+
+/* While an edit form is open, hide the Suggested / Similar sections so
+   they don't get mixed in with it */
+body.mui.mui-editing :is(.mui-related, .mui-similar, .mui-perf-similar) {
+  display: none !important;
 }
 
 /* ===================================================================

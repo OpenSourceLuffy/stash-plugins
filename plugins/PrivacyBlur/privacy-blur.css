@@ -1,0 +1,85 @@
+/* ===================================================================
+   Privacy Blur
+   Everything is scoped to html.pb-on, so nothing changes while the blur
+   is off. Only the on-screen look changes; nothing in the library does.
+   =================================================================== */
+
+:root {
+  --pb-blur: 18px;
+  --pb-text-blur: 6px;
+}
+
+/* ----- Pictures and videos ----- */
+
+html.pb-on :is(img, video, canvas):not(.top-nav *):not(.pb-keep):not(.pb-keep *) {
+  filter: blur(var(--pb-blur)) !important;
+}
+
+/* Pictures drawn as backgrounds: performer page backdrop, video player
+   poster, scrubber and seek-bar previews */
+html.pb-on :is(
+  .background-image-container,
+  .vjs-poster,
+  .scrubber-item,
+  .vjs-vtt-thumbnail-display,
+  .vjs-thumbnail-holder,
+  .wall-item-media
+):not(.top-nav *) {
+  filter: blur(var(--pb-blur)) !important;
+}
+
+/* Keep the blur inside each card/picture box instead of bleeding out */
+html.pb-on :is(.thumbnail-section, .image-card-preview, .wall-item, .scrubber-wrapper,
+  .detail-header-image, .performer-image-container, .mui-rel-thumb) {
+  overflow: hidden;
+}
+
+/* Peek: un-blur the picture under the mouse (computers only) */
+@media (hover: hover) {
+  html.pb-on.pb-peek :is(img, video):hover,
+  html.pb-on.pb-peek .thumbnail-section:hover :is(img, video),
+  html.pb-on.pb-peek .mui-rel-card:hover :is(img, video) {
+    filter: none !important;
+  }
+}
+
+/* ----- Performer and studio names (optional) ----- */
+
+html.pb-on.pb-names :is(
+  .studio-overlay,
+  .performer-card .card-section-title,
+  .performer-card .card-section h5,
+  #performer-page .performer-head h2,
+  #performer-page .performer-name,
+  #performer-page .alias-head,
+  #performer-page .detail-item.aliases .detail-item-value,
+  .sticky.detail-header .performer-name,
+  .performer-tag-container,
+  a.tag-item[href^="/performers/"],
+  .scene-card .performer-tag-container,
+  .mui-perf-card .mui-rel-title,
+  .mui-rel-meta,
+  .mui-related-head h3
+) {
+  filter: blur(var(--pb-text-blur)) !important;
+}
+
+/* ----- Titles and file names (optional) ----- */
+
+html.pb-on.pb-titles :is(
+  .grid-card .card-section-title,
+  .grid-card .card-section h5,
+  .scene-header,
+  .scene-tabs .scene-header-container h3,
+  .gallery-header,
+  .image-header,
+  #image-page .image-header,
+  .group-head h2,
+  .mui-gallery-title,
+  .mui-rel-title,
+  .file-info-panel .text-truncate,
+  .scene-file-info,
+  .wall-item-text
+) {
+  filter: blur(var(--pb-text-blur)) !important;
+}

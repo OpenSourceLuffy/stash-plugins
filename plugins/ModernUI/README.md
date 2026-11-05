@@ -2,7 +2,21 @@
 
 A cleaner, app-like look for Stash, built to feel good on a phone as well as a computer.
 
-<!-- Add screenshots here, e.g. ![Home](../../docs/screenshots/home.png) -->
+![The top bar and list toolbar, dark theme](../../docs/screenshots/Toolbar.png)
+
+*The top bar and the list toolbar on a computer, in the dark theme: everything sits on rounded, frosted panels with the filters, sort and view buttons grouped together.*
+
+| Dark theme | Light theme |
+| --- | --- |
+| ![Home page, dark theme](../../docs/screenshots/Dark_Mode_Home.png) | ![Home page, light theme](../../docs/screenshots/Light_Mode_Home.png) |
+
+*The home page on a computer in both themes. Rows run edge to edge with round scroll arrows. (Pictures are blurred with the [Privacy Blur](../PrivacyBlur) plugin.)*
+
+### On a phone
+
+<img src="../../docs/screenshots/Mobile_dark.jpeg" width="200" alt="Home page on a phone, dark theme"> <img src="../../docs/screenshots/Mobile_dark_nav.jpeg" width="200" alt="More sheet open, dark theme"> <img src="../../docs/screenshots/Mobile_light.jpeg" width="200" alt="Home page on a phone, light theme"> <img src="../../docs/screenshots/Mobile_light_nav.jpeg" width="200" alt="More sheet open, light theme">
+
+*The tab bar at the bottom of the screen, and the **More** sheet with the rest of the pages. Tap **Edit tab bar** to choose which pages sit on the bar.*
 
 ## Features
 
@@ -21,6 +35,7 @@ A cleaner, app-like look for Stash, built to feel good on a phone as well as a c
 - **Suggested**: scored by shared tags, same studio, look-alike performers, length and orientation, best match first.
 - **More with [performer]**: other scenes with the same performers.
 - **Similar Performers**: performers who look like the ones in the scene.
+- These rows are hidden while the **Edit** tab is open, so they don't get mixed in with the edit form.
 
 **Images and galleries**
 - **Similar photos** (shared tags), **More from [gallery]** when you came from a gallery, and **More with [performer]**.
@@ -29,8 +44,16 @@ A cleaner, app-like look for Stash, built to feel good on a phone as well as a c
 **Performers**
 - **Similar Performers** row, scored by shared tags, ethnicity, hair and eye colour, country, height and age.
 
+![Similar Performers row](../../docs/screenshots/Similar_Performers_light.png)
+
+*The Similar Performers row in the light theme, with names blurred by Privacy Blur.*
+
 **Tags**
 - A–Z index view: a new button next to the grid/list buttons on the Tags page. It only lists tags that are used on at least one scene or image.
+
+![A–Z tag index](../../docs/screenshots/New_Tag_Wall.png)
+
+*The A–Z view (shown with example tags): tap a letter in the bar to jump to it, or type in the search box to narrow the list.*
 
 ## Settings
 
@@ -59,6 +82,8 @@ Stash's login page doesn't load plugins, so its styling can't come from this plu
 To give it a matching look, copy
 [`extras/login.css`](https://github.com/OpenSourceLuffy/stash-plugins/blob/main/extras/login.css)
 into **Settings → Interface → Custom CSS** and tick **Custom CSS enabled**.
+
+<img src="../../docs/screenshots/login.png" width="600" alt="The restyled login page">
 
 ## Notes
 

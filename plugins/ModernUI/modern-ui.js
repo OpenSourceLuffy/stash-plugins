@@ -75,6 +75,7 @@
   setupNativeCarouselScroll();
   setupSidebarButton();
   setupHomeFlag();
+  setupEditingFlag();
   setupLongPressSelect();
   setupGalleryTitle();
   setupTagIndex();
@@ -1192,6 +1193,24 @@
     }).observe(document.body, { childList: true, subtree: true });
     window.addEventListener("popstate", sync);
     sync();
+  }
+
+  // Mark when an edit form is open (the Edit tab on scene, image and gallery
+  // pages, or edit mode on a performer page) so the Suggested / Similar
+  // sections can be hidden and don't get mixed in with the form
+  function setupEditingFlag() {
+    const EDITING = '.nav-link.active[data-rb-event-key$="-edit-panel"], #performer-page .detail-header.edit';
+    const update = () => body.toggle("mui-editing", !!document.querySelector(EDITING));
+    let queued = false;
+    new MutationObserver(() => {
+      if (queued) return;
+      queued = true;
+      requestAnimationFrame(() => {
+        queued = false;
+        update();
+      });
+    }).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["class"] });
+    update();
   }
 
   // Mark the home page so the "Stash" logo button only lights up there

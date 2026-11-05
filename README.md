@@ -6,6 +6,11 @@ Plugins for [Stash](https://stashapp.cc):
 | --- | --- |
 | [Modern UI](plugins/ModernUI) | A cleaner, app-like look for Stash, with a phone-friendly layout, light and dark themes, an A–Z tag index, and "Suggested" / "Similar" rows on scene, image and performer pages. |
 | [Vertical Cover Stitcher](plugins/VerticalStitcher) | Turns portrait (vertical) videos' covers into proper 16:9 covers by stitching several frames side by side. |
+| [Privacy Blur](plugins/PrivacyBlur) | One switch in its settings (or Shift+Alt+B) blurs every picture and video in Stash, and optionally names and titles. Good for screenshots or browsing in company. |
+
+![Modern UI's home page in the dark theme, with Privacy Blur on](docs/screenshots/Dark_Mode_Home.png)
+
+*Modern UI's home page on a computer, with Privacy Blur turned on.*
 
 ## Installing
 

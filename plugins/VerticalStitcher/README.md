@@ -5,7 +5,11 @@ as a thin strip with big black bars. This plugin builds a proper horizontal cove
 instead by taking several evenly spaced frames from the video and placing them side
 by side.
 
-<!-- Add a before/after screenshot here -->
+| Before | After |
+| --- | --- |
+| ![Before](../../docs/screenshots/Before_Stitcher.png) | ![After](../../docs/screenshots/After_Stitcher.png) |
+
+*Before: Stash's own cover, a single frame squeezed between black bars. After: three frames from the same video side by side, filling the frame.*
 
 ## How it works
 

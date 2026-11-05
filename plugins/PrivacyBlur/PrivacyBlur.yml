@@ -1,0 +1,31 @@
+name: Privacy Blur
+description: A settings switch that blurs every cover, thumbnail, photo and video in Stash, with optional blurring of names and titles. Handy for taking screenshots or browsing around other people.
+version: "1.2"
+url: https://github.com/OpenSourceLuffy/stash-plugins/tree/main/plugins/PrivacyBlur
+ui:
+  javascript:
+    - privacy-blur.js
+  css:
+    - privacy-blur.css
+
+settings:
+  enabled:
+    displayName: Blur on
+    description: Blur pictures across Stash. Takes effect straight away. Shortcut - Shift+Alt+B.
+    type: BOOLEAN
+  blurStrength:
+    displayName: Blur strength
+    description: How strong the blur is, from 4 (light) to 40 (very strong). Default 18.
+    type: NUMBER
+  blurNames:
+    displayName: Also blur performer and studio names
+    description: Blur performer names (cards, performer pages, suggestion rows) and the studio name in the corner of each card while the blur is on.
+    type: BOOLEAN
+  blurTitles:
+    displayName: Also blur titles
+    description: Blur scene, image, gallery and group titles and file names while the blur is on.
+    type: BOOLEAN
+  peekOnHover:
+    displayName: Peek on hover
+    description: On a computer, un-blur a picture while the mouse is over it. Leave off when taking screenshots.
+    type: BOOLEAN
