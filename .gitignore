@@ -2,3 +2,13 @@
 __pycache__/
 *.pyc
 _site/
+
+# Files plugins write while running (per-install data, never published)
+plugins/*/auto_tags.json
+plugins/*/gallery_tags.json
+plugins/*/queue.json
+plugins/*/settings_cache.json
+plugins/*/*.lock
+plugins/*/*.tmp
+plugins/*/.zip
+plugins/*/picture_hashes.json

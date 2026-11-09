@@ -39,6 +39,6 @@ Changes apply as soon as you flip a switch; no reload needed.
 
 ## Notes
 
-- Works on its own or alongside Modern UI.
+- Works on its own or alongside Modern UI and Stash Suggestions (names and titles in its Suggested / Similar rows are blurred too).
 - Some other themes or plugins may show pictures in ways it doesn't catch. If something isn't
   blurred, please open an issue with the page it was on.

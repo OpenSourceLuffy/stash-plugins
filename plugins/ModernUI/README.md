@@ -32,27 +32,24 @@ A cleaner, app-like look for Stash, built to feel good on a phone as well as a c
 
 **Scenes**
 - On wide screens, details sit under the video instead of in a side panel, with the studio logo beside the title.
-- **Suggested**: scored by shared tags, same studio, look-alike performers, length and orientation, best match first.
-- **More with [performer]**: other scenes with the same performers.
-- **Similar Performers**: performers who look like the ones in the scene.
-- These rows are hidden while the **Edit** tab is open, so they don't get mixed in with the edit form.
 
 **Images and galleries**
 - Image details (title, rating, tabs) sit under the picture on wide screens, like scenes. You can change this in the settings.
-- **Similar photos**: scored by shared tags and galleries (2 points each) and look-alike performers (up to 5). Photos of the same performer are left out, since they have their own row. If there aren't enough matches, it fills up with unorganised photos, then random ones.
-- **More from [gallery]** when you came from a gallery, or **More from [row]** when you came from a home page row, using that row's own filter. It shows the 2 photos before this one, this one, then the ones after it.
-- **More with [performer]**: other photos with the same performers.
-- Each of these is a scrolling row with a **Load more** card at the end.
 - Gallery pages show the gallery's name at the top. The details panel starts closed; you can change this in the settings.
 
-**Performers**
-- **Similar Performers** row, scored by shared tags, ethnicity, hair and eye colour, country, height and age.
+**Suggested and Similar rows**
+- The "Suggested", "Similar photos", "More with…" and "Similar Performers" rows now live in their own plugin, [Stash Suggestions](../StashSuggestions), which also works without Modern UI. Install it alongside Modern UI to keep them; they pick up Modern UI's look, and swiping between photos follows the row you picked from.
 
-![Similar Performers row](../../docs/screenshots/Similar_Performers_light.png)
-
-*The Similar Performers row in the light theme, with names blurred by Privacy Blur.*
+**Sorting**
+- A **Count** option in the Sort menu on the Tags, Performers and Studios pages: scenes + images + galleries added together, highest first (flip the arrow for lowest first). Paging, filters and search work as usual. Stash can't sort by a total itself, so Modern UI works out the order in your browser.
 
 **Tags**
+- Tag cards look like gallery cards: the tag's picture fills the card, with the name underneath. Tags without a picture show a small tag icon instead. (The [Better Tagging Tools](../BetterTaggingTools) plugin can give your tags pictures from your library.)
+
+![Tag cards](../../docs/screenshots/Tag_Cards.jpeg)
+
+*Tag cards in the light theme (pictures blurred with Privacy Blur, example tag names).*
+
 - A–Z index view: a new button next to the grid/list buttons on the Tags page. It only lists tags that are used on at least one scene or image.
 
 ![A–Z tag index](../../docs/screenshots/New_Tag_Wall.png)
@@ -70,7 +67,7 @@ Under **Settings → Plugins → Modern UI**:
 | Show count buttons | Bring back the tag/performer/scene/marker/O-count buttons on cards. |
 | Show rating banner | Bring back the rating ribbon on card pictures. |
 | Hide titles | Pictures only, no titles, on every card. |
-| Show whole pictures | Fit the whole picture inside image and gallery cards instead of cropping. |
+| Show whole pictures | Fit the whole picture inside image, gallery and tag cards instead of cropping. |
 | Image and gallery card shape | `portrait` (default), `square`, `landscape` or `wide`. |
 | Cards per row on phones | `1` or `2` (default). Image grids show one extra. |
 | Scene details beside the video | Keep Stash's side panel on scene pages on wide screens. |
@@ -93,4 +90,4 @@ into **Settings → Interface → Custom CSS** and tick **Custom CSS enabled**.
 ## Notes
 
 - Tested with Stash v0.31. Other themes or CSS plugins may clash with it, so turn those off if something looks wrong.
-- The Suggested and Similar rows use Stash's own data and run in your browser after the page loads. Nothing is sent anywhere else.
+- Upgrading from 0.48 or earlier: the Suggested / Similar rows moved to [Stash Suggestions](../StashSuggestions). Install it to keep them.

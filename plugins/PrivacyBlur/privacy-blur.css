@@ -30,7 +30,8 @@ html.pb-on :is(
 
 /* Keep the blur inside each card/picture box instead of bleeding out */
 html.pb-on :is(.thumbnail-section, .image-card-preview, .wall-item, .scrubber-wrapper,
-  .detail-header-image, .performer-image-container, .mui-rel-thumb) {
+  .detail-header-image, .performer-image-container, .mui-rel-thumb, .mlt-rel-thumb,
+  .mlt-similar-card) {
   overflow: hidden;
 }
 
@@ -38,7 +39,7 @@ html.pb-on :is(.thumbnail-section, .image-card-preview, .wall-item, .scrubber-wr
 @media (hover: hover) {
   html.pb-on.pb-peek :is(img, video):hover,
   html.pb-on.pb-peek .thumbnail-section:hover :is(img, video),
-  html.pb-on.pb-peek .mui-rel-card:hover :is(img, video) {
+  html.pb-on.pb-peek :is(.mui-rel-card, .mlt-rel-card, .mlt-similar-card):hover :is(img, video) {
     filter: none !important;
   }
 }
@@ -59,7 +60,12 @@ html.pb-on.pb-names :is(
   .scene-card .performer-tag-container,
   .mui-perf-card .mui-rel-title,
   .mui-rel-meta,
-  .mui-related-head h3
+  .mui-related-head h3,
+  /* Stash Suggestions rows ("More with <performer>" headings, names) */
+  .mlt-perf-card .mlt-rel-title,
+  .mlt-rel-meta,
+  .mlt-related-head h3,
+  .mlt-similar-head h3
 ) {
   filter: blur(var(--pb-text-blur)) !important;
 }
@@ -77,6 +83,7 @@ html.pb-on.pb-titles :is(
   .group-head h2,
   .mui-gallery-title,
   .mui-rel-title,
+  .mlt-rel-title,
   .file-info-panel .text-truncate,
   .scene-file-info,
   .wall-item-text
