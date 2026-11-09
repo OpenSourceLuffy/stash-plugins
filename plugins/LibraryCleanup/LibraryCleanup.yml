@@ -1,0 +1,32 @@
+name: Library Cleanup
+description: Finds and deletes tags, performers and studios that nothing is connected to. Preview first; favourites and parent tags and studios are always kept.
+version: "1.0"
+url: https://github.com/OpenSourceLuffy/stash-plugins/tree/main/plugins/LibraryCleanup
+exec:
+  - python
+  - "{pluginDir}/library_cleanup.py"
+interface: raw
+
+tasks:
+  - name: Preview unused tags, performers and studios
+    description: Lists the tags, performers and studios that nothing is connected to (no scenes, images, galleries, markers, groups, studios or performers), without deleting anything.
+    defaultArgs:
+      mode: preview
+  - name: Delete unused tags
+    description: PERMANENTLY deletes every tag that nothing is connected to. Favourite tags and tags that are a parent of other tags are kept. Run the preview and make a backup first.
+    defaultArgs:
+      mode: tags
+  - name: Delete unused performers
+    description: PERMANENTLY deletes every performer with no scenes, images, galleries or groups. Favourite performers are kept. Run the preview and make a backup first.
+    defaultArgs:
+      mode: performers
+  - name: Delete unused studios
+    description: PERMANENTLY deletes every studio with no scenes, images, galleries or groups. Favourite studios and studios that are the parent of other studios are kept. Run the preview and make a backup first.
+    defaultArgs:
+      mode: studios
+
+settings:
+  keepTags:
+    displayName: Tags to always keep
+    description: Comma-separated tag names that are never deleted, even when unused (e.g. tags you're about to use, or ones your filters rely on).
+    type: STRING

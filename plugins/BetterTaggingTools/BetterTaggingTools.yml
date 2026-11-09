@@ -1,0 +1,111 @@
+name: Better Tagging Tools
+description: Tags each performer with the tags used most often in their scenes, images and galleries, shows those tags as one-click "Suggested tags" when editing tags, and adds "Bulk tag" buttons on performer pages (a performer's scenes, images and galleries) and gallery pages (a gallery's images). Can also tag every image in a gallery with the gallery's name, give tags without a picture one from your library, and keep tag names consistently capitalised.
+version: "1.0"
+url: https://github.com/OpenSourceLuffy/stash-plugins/tree/main/plugins/BetterTaggingTools
+exec:
+  - python
+  - "{pluginDir}/better_tagging_tools.py"
+interface: raw
+
+ui:
+  javascript:
+    - better-tagging-tools.js
+  css:
+    - better-tagging-tools.css
+
+hooks:
+  - name: Refresh performer top tags on edit
+    description: When tags or performers change on a scene, image or gallery, queues that item's performers. A background job refreshes each of them once, a few seconds after the last edit, so batch edits are handled in one go.
+    triggeredBy:
+      - Scene.Update.Post
+      - Image.Update.Post
+      - Gallery.Update.Post
+  - name: Tag gallery images with the gallery's name
+    description: When "Tag gallery images with the gallery's name" is on, new galleries, renamed galleries, newly scanned images and images moved into a gallery get queued, and the background job tags them.
+    triggeredBy:
+      - Gallery.Create.Post
+      - Image.Create.Post
+  - name: Capitalise new tags
+    description: When "Capitalise new tags automatically" is on, capitalises a tag's name as soon as it's created.
+    triggeredBy:
+      - Tag.Create.Post
+
+tasks:
+  - name: Tag performers with their top tags
+    description: Counts the tags on every performer's scenes, images and galleries and adds the most used ones to the performer. Tags this plugin added earlier that are no longer in the top list are taken off again; tags you added yourself are never removed.
+    defaultArgs:
+      mode: apply
+  - name: Preview performer top tags (no changes)
+    description: Writes what the task above would add and remove to the log, without changing anything.
+    defaultArgs:
+      mode: dryrun
+  - name: Tag gallery images with the gallery's name
+    description: Gives every image in every gallery a tag named after its gallery (its title, or the zip or folder name), creating the tags as needed. Use it once to catch up existing galleries; the setting below keeps new ones tagged.
+    defaultArgs:
+      mode: gallerynames
+  - name: Give tags without a picture one from your library
+    description: Every tag that has no picture gets one from your library - the photo that's most "about" that tag (fewest other tags, then highest rated), else a scene screenshot, a marker screenshot or a gallery cover. Each tag gets a picture no other tag has where possible, if need be a different frame from one of its scenes. Tags that already have a picture are never changed.
+    defaultArgs:
+      mode: tagpictures
+  - name: Give tags that share a picture their own
+    description: Finds tags that have the same picture as another tag and gives each its own from your library where possible. In each group the rarest tag keeps the picture. Only tags that share a picture are changed.
+    defaultArgs:
+      mode: uniquepictures
+  - name: Give every tag a new picture (replaces existing ones)
+    description: Gives EVERY tag a different picture from the one it has now - including pictures you chose yourself - picked the same way (most "about" the tag, unique where possible, rarest tags first, video frames if need be). Tags with no other picture available keep theirs. Old pictures can't be brought back, so make a backup first.
+    defaultArgs:
+      mode: newpictures
+  - name: Capitalise tag names
+    description: Capitalises every tag name the same way - "dating app" becomes "Dating App", small words like "on", "to" and "and" stay lowercase in the middle ("Behind the Scenes"). Capitals already in a name are never lowered.
+    defaultArgs:
+      mode: titlecase
+  - name: Preview tag name capitalisation (no changes)
+    description: Writes what "Capitalise tag names" would rename to the log, without changing anything.
+    defaultArgs:
+      mode: titlecase_preview
+
+settings:
+  topTagCount:
+    displayName: Top tags per performer
+    description: How many of a performer's most used tags to add to them. Default 10.
+    type: NUMBER
+  minUses:
+    displayName: Minimum uses
+    description: A tag must be on at least this many of the performer's scenes, images and galleries to count. Default 3.
+    type: NUMBER
+  skipImages:
+    displayName: Don't count images
+    description: Only count scenes and galleries. Useful if large image sets drown out everything else.
+    type: BOOLEAN
+  excludeTags:
+    displayName: Tags to ignore
+    description: Comma-separated tag names that should never be added to performers (for example housekeeping tags like "Organized, To Review").
+    type: STRING
+  noAutoRefresh:
+    displayName: Don't refresh on edit
+    description: Turn off the automatic refresh of a performer's top tags when you change tags on their scenes, images or galleries. The task still works.
+    type: BOOLEAN
+  galleryNameTags:
+    displayName: Tag gallery images with the gallery's name
+    description: Automatically tag images in a gallery with a tag named after the gallery (its title, or the zip or folder name). Runs for new and renamed galleries, newly scanned images and images moved into a gallery. Images added with a gallery's "Add" tab are picked up by the task. These tags never count towards performers' top tags.
+    type: BOOLEAN
+  galleryTagParent:
+    displayName: Parent tag for gallery-name tags
+    description: Optional. New gallery-name tags are put under this tag (created if needed), e.g. "Galleries", to keep the tag list tidy.
+    type: STRING
+  autoTagPictures:
+    displayName: Give tags a picture automatically
+    description: When a tag that has no picture is added to a scene, image or gallery, give the tag a picture from your library (see the "Give tags without a picture" task). Tags that already have a picture are never changed.
+    type: BOOLEAN
+  titleCaseNewTags:
+    displayName: Capitalise new tags automatically
+    description: Capitalise a tag's name (see the "Capitalise tag names" task) as soon as it's created - from the tag picker, a scraper or another plugin.
+    type: BOOLEAN
+  titleCaseSpellings:
+    displayName: Special spellings
+    description: Comma-separated words or tag names to always write exactly like this when capitalising, for acronyms and odd capitals - for example "CNN, POV, HD, iPhone". Matched without caring about case.
+    type: STRING
+  maxSuggestions:
+    displayName: Suggested tags to show
+    description: The most suggestions shown under a tag box while editing. Default 15.
+    type: NUMBER

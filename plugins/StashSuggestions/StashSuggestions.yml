@@ -1,0 +1,9 @@
+name: Stash Suggestions
+description: '"Suggested" scenes, "Similar photos" and "Similar Performers" rows at the bottom of scene, image and performer pages. Works with any theme; looks its best with Modern UI.'
+version: "1.0"
+url: https://github.com/OpenSourceLuffy/stash-plugins/tree/main/plugins/StashSuggestions
+ui:
+  javascript:
+    - stash-suggestions.js
+  css:
+    - stash-suggestions.css
