@@ -85,7 +85,9 @@ To give it a matching look, copy
 [`extras/login.css`](https://github.com/OpenSourceLuffy/stash-plugins/blob/main/extras/login.css)
 into **Settings → Interface → Custom CSS** and tick **Custom CSS enabled**.
 
-<img src="../../docs/screenshots/login.png" width="600" alt="The restyled login page">
+<img src="../../docs/screenshots/login.png" width="600" alt="The restyled login page"> <img src="../../docs/screenshots/login_mobile.png" width="180" alt="The login page on a phone">
+
+On phones the sign-in box sits near the top of the screen, so it stays in view when the keyboard opens.
 
 ## Notes
 
