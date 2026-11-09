@@ -1,6 +1,6 @@
 name: Better Tagging Tools
-description: Tags each performer with the tags used most often in their scenes, images and galleries, shows those tags as one-click "Suggested tags" when editing tags, and adds "Bulk tag" buttons on performer pages (a performer's scenes, images and galleries) and gallery pages (a gallery's images). Can also tag every image in a gallery with the gallery's name, give tags without a picture one from your library, and keep tag names consistently capitalised.
-version: "1.0"
+description: Tags each performer with the tags used most often in their scenes, images and galleries, shows those tags as one-click "Suggested tags" when editing tags, and adds "Bulk tag" buttons on performer pages (a performer's scenes, images and galleries) and gallery pages (a gallery's images). Can also tag every image in a gallery with the gallery's name, give tags without a picture one from your library, keep tag names consistently capitalised, and tag scenes and images with a local AI model (Ollama).
+version: "1.1"
 url: https://github.com/OpenSourceLuffy/stash-plugins/tree/main/plugins/BetterTaggingTools
 exec:
   - python
@@ -20,11 +20,12 @@ hooks:
       - Scene.Update.Post
       - Image.Update.Post
       - Gallery.Update.Post
-  - name: Tag gallery images with the gallery's name
-    description: When "Tag gallery images with the gallery's name" is on, new galleries, renamed galleries, newly scanned images and images moved into a gallery get queued, and the background job tags them.
+  - name: New galleries, scenes and images
+    description: When "Tag gallery images with the gallery's name" is on, new galleries and newly scanned images get their gallery-name tag; when "AI-tag new scenes and images" is on, new scenes and images are AI-tagged. They're queued and a background job does the work once the scan is done.
     triggeredBy:
       - Gallery.Create.Post
       - Image.Create.Post
+      - Scene.Create.Post
   - name: Capitalise new tags
     description: When "Capitalise new tags automatically" is on, capitalises a tag's name as soon as it's created.
     triggeredBy:
@@ -55,6 +56,18 @@ tasks:
     description: Gives EVERY tag a different picture from the one it has now - including pictures you chose yourself - picked the same way (most "about" the tag, unique where possible, rarest tags first, video frames if need be). Tags with no other picture available keep theirs. Old pictures can't be brought back, so make a backup first.
     defaultArgs:
       mode: newpictures
+  - name: "AI tagging: preview on 10 items (no changes)"
+    description: Shows 10 random scenes/images to the local AI model (Ollama) and writes the tags it would add to the log, without changing anything. Try this first.
+    defaultArgs:
+      mode: ai_preview
+  - name: "AI tagging: items with no tags"
+    description: Uses the local AI model (Ollama) to tag scenes and images that have no tags yet, choosing from your most used tags. Organized items are skipped unless you change that in the settings.
+    defaultArgs:
+      mode: ai_untagged
+  - name: "AI tagging: everything not done yet"
+    description: Uses the local AI model (Ollama) on every scene and image it hasn't looked at before (only ever adds tags). Can take many hours on a big library; it can be stopped and run again, and carries on where it left off.
+    defaultArgs:
+      mode: ai_all
   - name: Capitalise tag names
     description: Capitalises every tag name the same way - "dating app" becomes "Dating App", small words like "on", "to" and "and" stay lowercase in the middle ("Behind the Scenes"). Capitals already in a name are never lowered.
     defaultArgs:
@@ -105,6 +118,30 @@ settings:
     displayName: Special spellings
     description: Comma-separated words or tag names to always write exactly like this when capitalising, for acronyms and odd capitals - for example "CNN, POV, HD, iPhone". Matched without caring about case.
     type: STRING
+  aiAuto:
+    displayName: "AI: tag new scenes and images automatically"
+    description: Have the local AI model tag scenes and images as they're added by a scan.
+    type: BOOLEAN
+  aiOllamaUrl:
+    displayName: "AI: Ollama address"
+    description: Where Ollama runs, as seen from Stash. Default http://host.docker.internal:11434 (Ollama on the same computer as Stash's Docker container); use http://localhost:11434 if Stash isn't in Docker.
+    type: STRING
+  aiModel:
+    displayName: "AI: model"
+    description: An Ollama vision model. Default gemma3:4b (install it with "ollama pull gemma3:4b") - about 5 seconds a picture on an Apple M4. Bigger models (e.g. qwen2.5vl:7b) can be more detailed but are much slower.
+    type: STRING
+  aiTagCount:
+    displayName: "AI: tags to choose from"
+    description: The model picks only from your most used tags - this many of them. Default 250.
+    type: NUMBER
+  aiMaxTags:
+    displayName: "AI: most tags per item"
+    description: The most tags the model adds to one scene or image. Default 6.
+    type: NUMBER
+  aiIncludeOrganized:
+    displayName: "AI: include organized items"
+    description: Also AI-tag scenes and images you've marked as organized (they're skipped by default).
+    type: BOOLEAN
   maxSuggestions:
     displayName: Suggested tags to show
     description: The most suggestions shown under a tag box while editing. Default 15.

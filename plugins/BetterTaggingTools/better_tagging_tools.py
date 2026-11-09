@@ -123,6 +123,7 @@ def settings(stash, plugin_dir=None):
         "auto_pictures": bool(s.get("autoTagPictures")),
         "title_case_new": bool(s.get("titleCaseNewTags")),
         "spellings": {i.strip().lower(): i.strip() for i in (s.get("titleCaseSpellings") or "").split(",") if i.strip()},
+        "ai": ai_settings(s),
     }
 
 
@@ -325,7 +326,8 @@ def run_hook(stash, plugin_dir, hook):
     gallery_event = kind == "Gallery" and (action == "Create" or not fields or "title" in fields)
     # A new image (scans), or one moved into a gallery
     image_event = kind == "Image" and (action == "Create" or "gallery_ids" in fields)
-    if not (performer_edit or gallery_event or image_event):
+    new_item = action == "Create" and kind in ("Scene", "Image")
+    if not (performer_edit or gallery_event or image_event or new_item):
         return
 
     cfg = settings(stash, plugin_dir)
@@ -350,17 +352,20 @@ def run_hook(stash, plugin_dir, hook):
             galleries = [str(hook["id"])]
         if image_event:
             images = [str(hook["id"])]  # its galleries are looked up by the job
-    if performers or galleries or images or tags:
-        enqueue(stash, plugin_dir, performers, galleries, images, tags)
+    ai_scenes, ai_images = [], []
+    if new_item and cfg["ai"]["auto"]:
+        (ai_scenes if kind == "Scene" else ai_images).append(str(hook["id"]))
+    if performers or galleries or images or tags or ai_scenes or ai_images:
+        enqueue(stash, plugin_dir, performers, galleries, images, tags, ai_scenes, ai_images)
 
 
 JOB_DESCRIPTION = "Better Tagging Tools: processing recent edits"
 QUIET_SECONDS = 4  # how long edits must stop before the batch counts as done
 MAX_WAIT_SECONDS = 600
-QUEUE_KEYS = ("performers", "galleries", "images", "tags")
+QUEUE_KEYS = ("performers", "galleries", "images", "tags", "ai_scenes", "ai_images")
 
 
-def enqueue(stash, plugin_dir, performers=(), galleries=(), images=(), tags=()):
+def enqueue(stash, plugin_dir, performers=(), galleries=(), images=(), tags=(), ai_scenes=(), ai_images=()):
     """Add to the waiting list and make sure one background job is lined up.
 
     Stash runs hooks one after another and waits for each, so a batch edit
@@ -369,7 +374,7 @@ def enqueue(stash, plugin_dir, performers=(), galleries=(), images=(), tags=()):
     """
     with locked_queue(plugin_dir) as queue:
         last = queue.get("touched", 0)
-        for key, ids in zip(QUEUE_KEYS, (performers, galleries, images, tags)):
+        for key, ids in zip(QUEUE_KEYS, (performers, galleries, images, tags, ai_scenes, ai_images)):
             if ids:
                 queue[key] = sorted(set(queue.get(key, [])) | set(ids), key=int)
         queue["touched"] = time.time()
@@ -417,6 +422,12 @@ def run_queued(stash, plugin_dir):
 
     if todo["tags"] and cfg["auto_pictures"]:
         give_pictures(stash, plugin_dir, todo["tags"])
+
+    if (todo["ai_scenes"] or todo["ai_images"]) and cfg["ai"]["auto"]:
+        try:
+            run_ai_queued(stash, plugin_dir, todo["ai_scenes"], todo["ai_images"])
+        except Exception as e:
+            log("warning", f"AI tagging of new items skipped: {e}")
 
     ids = todo["performers"]
     if not ids:
@@ -1068,6 +1079,259 @@ def title_case_new_tag(stash, plugin_dir, tag_id):
         log("info", f'New tag "{tag["name"]}" renamed to "{new}"')
 
 
+# --- AI tagging (local, via Ollama) -----------------------------------------
+# Shows a vision model running in Ollama (on this computer or another one on
+# the network) a few frames of a scene, or an image, together with a list of
+# your most used tags, and adds the tags it says clearly apply. Nothing
+# leaves your network. The model can only answer with tags from the list
+# (Ollama's structured output enforces it), so it never invents tags.
+# ai_done.json remembers which scenes/images were done, so runs can be
+# stopped and picked up again.
+
+AI_FRAME_POINTS = (0.25, 0.5, 0.75)  # scene frames shown to the model
+AI_SYSTEM = (
+    "You tag photos and video frames for a private media library.\n"
+    "Rules:\n"
+    "- Only choose tags that clearly describe what is visible in the pictures. "
+    "Do not guess; leave a tag out if you are not sure.\n"
+    "- Never choose two tags that contradict each other (for example two different hair "
+    "colours, or two different sizes of the same thing); pick the one that fits best.\n"
+    "- Fewer, accurate tags are better than many.\n"
+    "- Notice whether it's a photo or a drawing, cartoon, 3D render or animation, and use the "
+    "matching tag if there is one.\n"
+    "- Only use tags from the allowed list, spelled exactly as listed."
+)
+
+
+def ai_settings(s):
+    def num(key, default, lo):
+        try:
+            return max(int(s.get(key) or default), lo)
+        except (TypeError, ValueError):
+            return default
+    return {
+        "url": (s.get("aiOllamaUrl") or "http://host.docker.internal:11434").rstrip("/"),
+        "model": (s.get("aiModel") or "gemma3:4b").strip(),
+        "vocab_size": num("aiTagCount", 250, 10),
+        "max_tags": num("aiMaxTags", 6, 1),
+        "include_organized": bool(s.get("aiIncludeOrganized")),
+        "auto": bool(s.get("aiAuto")),
+    }
+
+
+def ai_vocabulary(stash, cfg, plugin_dir):
+    """The tags the model may choose from: your most used ones (minus
+    ignored and gallery-name tags). {lowercase name: tag id}, plus the
+    names in order."""
+    tags = stash.call(
+        f"{{ findTags(filter: {{per_page: -1}}) {{ tags {{ id name {TAG_USES_FIELDS} child_count }} }} }}"
+    )["findTags"]["tags"]
+    _, excluded = tag_lookup(stash, cfg, plugin_dir)
+    usable = [t for t in tags if t["id"] not in excluded and uses(t) > 0]
+    usable.sort(key=lambda t: -uses(t))
+    chosen = usable[: cfg["ai"]["vocab_size"]]
+    return {t["name"].lower(): t["id"] for t in chosen}, [t["name"] for t in chosen]
+
+
+def ollama_tags(cfg, pictures, names):
+    """Ask the model which of `names` apply to the pictures (JPEG bytes).
+    The rules and the tag list go first and are the same every time, so
+    Ollama reads them once and reuses that for every item (reading the list
+    is most of the work); only the pictures are new each time."""
+    ai = cfg["ai"]
+    system = AI_SYSTEM + "\n\nAllowed tags: " + "; ".join(names)
+    prompt = (
+        f"Which of the allowed tags clearly apply to {'these frames from one video' if len(pictures) > 1 else 'this picture'}? "
+        f"Choose at most {ai['max_tags']}, best first. If none clearly apply, return an empty list."
+    )
+    body = {
+        "model": ai["model"],
+        "stream": False,
+        "keep_alive": "15m",
+        "options": {"temperature": 0},
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": prompt, "images": [base64.b64encode(p).decode() for p in pictures]},
+        ],
+        # structured output: an object whose "tags" are only allowed names
+        "format": {
+            "type": "object",
+            "properties": {"tags": {"type": "array", "items": {"type": "string", "enum": names}}},
+            "required": ["tags"],
+        },
+    }
+    req = urllib.request.Request(ai["url"] + "/api/chat", data=json.dumps(body).encode(),
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=300) as resp:
+        reply = json.loads(resp.read())
+    content = (reply.get("message") or {}).get("content") or "{}"
+    try:
+        picked = json.loads(content).get("tags") or []
+    except ValueError:
+        picked = []
+    return [p for p in picked if isinstance(p, str)]
+
+
+def ai_pictures(stash, kind, item):
+    """JPEG bytes to show the model: an image's thumbnail, or a few frames
+    of a scene."""
+    if kind == "image":
+        if not all(f["__typename"] == "ImageFile" for f in item.get("visual_files") or []):
+            return []  # videos / animations stored as images
+        data, ctype = stash.fetch(item["paths"]["thumbnail"])
+        return [data] if ctype.startswith("image/") else []
+    f = (item.get("files") or [None])[0]
+    if not f or not (f.get("duration") or 0) > 2:
+        return []
+    return [grab_frame(stash, f["path"], f["duration"] * p)[0] for p in AI_FRAME_POINTS]
+
+
+AI_ITEM_FIELDS = {
+    "image": "id title organized tags { id name } paths { thumbnail } visual_files { __typename }",
+    "scene": "id title organized tags { id name } files { path duration }",
+}
+
+
+def ai_tag_item(stash, cfg, vocab, names, kind, item, apply):
+    """Returns the names of the tags the model picked that the item doesn't
+    have yet (added when `apply`)."""
+    pictures = ai_pictures(stash, kind, item)
+    if not pictures:
+        return None
+    have = {t["id"] for t in item.get("tags") or []}
+    picked, seen = [], set()
+    for name in ollama_tags(cfg, pictures, names):
+        tid = vocab.get(name.lower())
+        if tid and tid not in have and tid not in seen:
+            seen.add(tid)
+            picked.append((tid, name))
+    picked = picked[: cfg["ai"]["max_tags"]]
+    if apply and picked:
+        mutation = "bulkImageUpdate(input: $i) { id }" if kind == "image" else "bulkSceneUpdate(input: $i) { id }"
+        input_type = "BulkImageUpdateInput" if kind == "image" else "BulkSceneUpdateInput"
+        stash.call(f"mutation($i: {input_type}!) {{ {mutation} }}",
+                   {"i": {"ids": [item["id"]], "tag_ids": {"ids": [t for t, _ in picked], "mode": "ADD"}}})
+    return [n for _, n in picked]
+
+
+def locked_ai_done(plugin_dir):
+    return locked_json(os.path.join(plugin_dir, "ai_done.json"))
+
+
+def ai_check(cfg):
+    """Fail early with a clear message if Ollama or the model isn't there."""
+    ai = cfg["ai"]
+    try:
+        with urllib.request.urlopen(ai["url"] + "/api/tags", timeout=10) as resp:
+            models = [m.get("name") for m in json.loads(resp.read()).get("models", [])]
+    except Exception as e:
+        raise RuntimeError(f"can't reach Ollama at {ai['url']} ({e}). Is it running?")
+    want = ai["model"] if ":" in ai["model"] else ai["model"] + ":latest"
+    if want not in models:
+        raise RuntimeError(f'Ollama doesn\'t have the model "{ai["model"]}" - run: ollama pull {ai["model"]}')
+
+
+def ai_targets(stash, cfg, only_untagged, done):
+    """(kind, item) pairs still to do."""
+    out = []
+    for kind, (query, field, farg, ftype) in (("scene", ("findScenes", "scenes", "scene_filter", "SceneFilterType")),
+                                             ("image", ("findImages", "images", "image_filter", "ImageFilterType"))):
+        f = {}
+        if not cfg["ai"]["include_organized"]:
+            f["organized"] = False
+        if only_untagged:
+            f["tag_count"] = {"value": 0, "modifier": "EQUALS"}
+        page = 1
+        skip = set(done.get(kind + "s", []))
+        while True:
+            items = stash.call(
+                f"query($p: {ftype}, $f: FindFilterType) {{ {query}({farg}: $p, filter: $f) {{ {field} {{ {AI_ITEM_FIELDS[kind]} }} }} }}",
+                {"p": f, "f": {"page": page, "per_page": 500, "sort": "created_at", "direction": "DESC"}},
+            )[query][field]
+            out += [(kind, i) for i in items if i["id"] not in skip]
+            if len(items) < 500:
+                break
+            page += 1
+    return out
+
+
+def run_ai(stash, plugin_dir, only_untagged=False, preview=False, targets=None):
+    """Task: AI-tag scenes and images. `preview`: 10 random items, nothing
+    saved. `targets`: specific (kind, item) pairs (the automatic job)."""
+    cfg = settings(stash)
+    ai_check(cfg)
+    vocab, names = ai_vocabulary(stash, cfg, plugin_dir)
+    if not names:
+        log("warning", "No tags to choose from yet.")
+        return
+    if targets is None:
+        with locked_ai_done(plugin_dir) as done:
+            done = dict(done)
+        targets = ai_targets(stash, cfg, only_untagged, {} if preview else done)
+        if preview:
+            import random
+            targets = random.sample(targets, min(10, len(targets)))
+    what = "Preview" if preview else "AI tagging"
+    log("info", f"{what}: {len(targets)} item(s), choosing from your {len(names)} most used tags with {cfg['ai']['model']}")
+    added = tagged = 0
+    started = time.time()
+    for n, (kind, item) in enumerate(targets):
+        label = f'{kind} {item["id"]}' + (f' "{item["title"]}"' if item.get("title") else "")
+        try:
+            picked = ai_tag_item(stash, cfg, vocab, names, kind, item, apply=not preview)
+        except Exception as e:
+            log("warning", f"{label}: {e}")
+            if "urlopen" in repr(e) or "Connection" in repr(e):
+                raise RuntimeError(f"lost contact with Ollama: {e}")
+            continue
+        if picked is None:
+            log("debug", f"{label}: nothing to look at, skipped")
+        elif picked:
+            tagged += 1
+            added += len(picked)
+            log("info", f"{label}: {'would add' if preview else '+'} {', '.join(picked)}")
+        else:
+            log("debug", f"{label}: no new tags")
+        if not preview and picked is not None:
+            with locked_ai_done(plugin_dir) as done:
+                done.setdefault(kind + "s", []).append(item["id"])
+        progress((n + 1) / max(len(targets), 1))
+    took = time.time() - started
+    per = f" ({took / max(len(targets), 1):.1f}s each)" if targets else ""
+    if preview:
+        log("info", f"Preview done{per}: {tagged} of {len(targets)} items would get new tags. Nothing was saved.")
+    else:
+        log("info", f"Done{per}: added {added} tag(s) to {tagged} of {len(targets)} item(s).")
+
+
+def run_ai_queued(stash, plugin_dir, scene_ids, image_ids):
+    """Background job: AI-tag scenes/images that were just added."""
+    targets = []
+    for kind, ids in (("scene", scene_ids), ("image", image_ids)):
+        if not ids:
+            continue
+        query, field = ("findScenes", "scenes") if kind == "scene" else ("findImages", "images")
+        items = stash.call(f"query($ids: [ID!]) {{ {query}(ids: $ids, filter: {{per_page: -1}}) {{ {field} {{ {AI_ITEM_FIELDS[kind]} }} }} }}",
+                           {"ids": ids})[query][field]
+        targets += [(kind, i) for i in items]
+    if targets:
+        run_ai(stash, plugin_dir, targets=targets)
+
+
+def run_ai_suggest(stash, plugin_dir, kind, item_id):
+    """Asked by the page (runPluginOperation): AI suggestions for one scene
+    or image, nothing saved. Returns [{id, name}]."""
+    cfg = settings(stash)
+    ai_check(cfg)
+    vocab, names = ai_vocabulary(stash, cfg, plugin_dir)
+    query, field = ("findScene", "scene") if kind == "scene" else ("findImage", "image")
+    item = stash.call(f"query($id: ID!) {{ {query}(id: $id) {{ {AI_ITEM_FIELDS[kind]} }} }}", {"id": str(item_id)})[query]
+    if not item:
+        raise RuntimeError(f"{kind} {item_id} not found")
+    picked = ai_tag_item(stash, cfg, vocab, names, kind, item, apply=False) or []
+    return [{"id": vocab[n.lower()], "name": n} for n in picked]
+
+
 BULK_MUTATIONS = {
     "scenes": ("bulkSceneUpdate", "BulkSceneUpdateInput"),
     "images": ("bulkImageUpdate", "BulkImageUpdateInput"),
@@ -1182,6 +1446,14 @@ def main():
             run_tag_pictures(stash, plugin_dir)
         elif args.get("mode") == "uniquepictures":
             run_unique_pictures(stash, plugin_dir)
+        elif args.get("mode") == "ai_untagged":
+            run_ai(stash, plugin_dir, only_untagged=True)
+        elif args.get("mode") == "ai_all":
+            run_ai(stash, plugin_dir)
+        elif args.get("mode") == "ai_preview":
+            run_ai(stash, plugin_dir, preview=True)
+        elif args.get("mode") == "ai_suggest":
+            print(json.dumps({"output": run_ai_suggest(stash, plugin_dir, args["kind"], args["id"])}))
         elif args.get("mode") == "titlecase":
             run_title_case(stash, dry_run=False)
         elif args.get("mode") == "titlecase_preview":

@@ -6,7 +6,7 @@ Plugins for [Stash](https://stashapp.cc):
 | --- | --- |
 | [Modern UI](plugins/ModernUI) | A cleaner, app-like look for Stash, with a phone-friendly layout, light and dark themes, picture-first cards (tags included) and an A–Z tag index. |
 | [Stash Suggestions](plugins/StashSuggestions) | "Suggested", "Similar photos", "More with…" and "Similar Performers" rows at the bottom of scene, image and performer pages. Works with any theme. |
-| [Better Tagging Tools](plugins/BetterTaggingTools) | Tags performers with their most used tags and suggests tags while you edit. Also bulk tagging on performer and gallery pages, gallery-name tags, pictures for tags from your own library, and consistent tag name capitalisation (`dating app` → `Dating App`). |
+| [Better Tagging Tools](plugins/BetterTaggingTools) | Tags performers with their most used tags and suggests tags while you edit. Also bulk tagging on performer and gallery pages, gallery-name tags, pictures for tags from your own library, consistent tag name capitalisation (`dating app` → `Dating App`), and tagging with a local AI model (Ollama). |
 | [Library Cleanup](plugins/LibraryCleanup) | Finds and deletes tags, performers and studios that nothing is connected to, with a preview first. |
 | [Vertical Cover Stitcher](plugins/VerticalStitcher) | Turns portrait (vertical) videos' covers into proper 16:9 covers by stitching several frames side by side. |
 | [Privacy Blur](plugins/PrivacyBlur) | One switch in its settings (or Shift+Alt+B) blurs every picture and video in Stash, and optionally names and titles. Good for screenshots or browsing in company. |

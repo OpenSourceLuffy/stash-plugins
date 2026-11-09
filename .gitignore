@@ -12,3 +12,4 @@ plugins/*/*.lock
 plugins/*/*.tmp
 plugins/*/.zip
 plugins/*/picture_hashes.json
+plugins/*/ai_done.json

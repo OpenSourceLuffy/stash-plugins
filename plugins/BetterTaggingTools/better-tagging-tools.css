@@ -130,3 +130,13 @@ body > .react-select__menu-portal {
   opacity: 0.5;
   transition: opacity 0.2s ease;
 }
+
+/* "Ask AI" row under the Tags box */
+.pts-ai-ask {
+  border-style: solid;
+}
+
+.pts-ai-note {
+  font-size: 0.8rem;
+  opacity: 0.75;
+}

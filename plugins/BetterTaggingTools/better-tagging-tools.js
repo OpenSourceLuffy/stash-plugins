@@ -180,6 +180,9 @@
     const performers = fixed || state.performers;
     const galleries = fixed ? [] : state.galleries;
     const [rows, setRows] = React.useState([]);
+    // "Ask AI" (local model via Ollama), on a scene or image's own page
+    const [ai, setAi] = React.useState({ state: "idle" });
+    const pageItem = fixed ? null : (location.pathname.match(/^\/(scenes|images)\/(\d+)/) || null);
 
     React.useEffect(() => {
       if (fixed) return;
@@ -246,8 +249,23 @@
       };
     }, [pSig, gSig, fixed ? "fixed" : pageKind()]);
 
+    async function askAi() {
+      setAi({ state: "loading" });
+      try {
+        const d = await gql("mutation($p: ID!, $a: Map) { runPluginOperation(plugin_id: $p, args: $a) }", {
+          p: PLUGIN_ID,
+          a: { mode: "ai_suggest", kind: pageItem[1] === "scenes" ? "scene" : "image", id: pageItem[2] },
+        });
+        const tags = (d.runPluginOperation || []).map((t) => ({ id: String(t.id), name: t.name, aliases: [] }));
+        setAi({ state: "done", tags });
+      } catch (e) {
+        setAi({ state: "error", message: e.message });
+      }
+    }
+
     // Leave out tags already chosen, and repeats from an earlier row
     const seen = new Set((values || []).map((t) => String(t.id)));
+    const aiTags = ai.state === "done" ? ai.tags.filter((t) => !seen.has(String(t.id))) : [];
     const shown = rows
       .map((row) => {
         const items = row.items.filter((e) => !seen.has(String(e.tag.id))).slice(0, maxSuggestions);
@@ -255,13 +273,33 @@
         return { ...row, items };
       })
       .filter((row) => row.items.length);
-    if (!shown.length) return null;
+    if (!shown.length && !pageItem) return null;
 
     const add = (tags) => onSelect([...(values || []), ...tags]);
+
+    const aiRow =
+      pageItem &&
+      h(
+        "div",
+        { className: "pts-suggest pts-ai", key: "ai" },
+        h("span", { className: "pts-label" }, "AI"),
+        ai.state === "idle" &&
+          h("button", { type: "button", className: "pts-chip pts-ai-ask", onClick: askAi, title: "Ask the local AI model (Ollama) which of your tags fit" }, "Ask AI for tags"),
+        ai.state === "loading" && h("span", { className: "pts-ai-note" }, "Looking at it…"),
+        ai.state === "error" &&
+          h("span", { className: "pts-ai-note" }, "Couldn't ask the AI: " + ai.message + " ",
+            h("button", { type: "button", className: "pts-chip", onClick: askAi }, "Try again")),
+        ai.state === "done" && !aiTags.length && h("span", { className: "pts-ai-note" }, ai.tags.length ? "All its suggestions are already added" : "No suggestions"),
+        aiTags.map((t) =>
+          h("button", { key: t.id, type: "button", className: "pts-chip", title: "Suggested by the local AI model", onClick: () => add([t]) }, "+ " + t.name)
+        ),
+        aiTags.length > 1 && h("button", { type: "button", className: "pts-chip pts-all", onClick: () => add(aiTags) }, "Add all")
+      );
 
     return h(
       "div",
       { className: "pts-suggest-rows" },
+      aiRow,
       shown.map((row) =>
         h(
           "div",

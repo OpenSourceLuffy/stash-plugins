@@ -3,7 +3,8 @@
 Tags each performer with the tags used most often on their scenes, images and galleries, then
 uses those tags to suggest tags while you edit. It also adds bulk tagging to performer and
 gallery pages, can tag a gallery's photos with the gallery's name, can give tags without
-a picture one from your library, and keeps tag names consistently capitalised.
+a picture one from your library, keeps tag names consistently capitalised, and can tag scenes
+and images with a local AI model.
 
 ![Suggested tags under the Tags box](../../docs/screenshots/Tag_Suggestions.png)
 
@@ -103,6 +104,28 @@ from the one it has now, picked the same way (unique, rarest tags first). This i
 you set yourself, and the old ones can't be brought back, so make a backup first
 (**Settings → Tasks → Backup**). A tag with no other picture available keeps the one it has.
 
+## AI tagging (local, with Ollama)
+
+Tags scenes and images with a vision model running on your own computer through
+[Ollama](https://ollama.com). Nothing is sent to the internet.
+
+**Setup**
+1. Install Ollama (on a Mac: `brew install ollama`, then `brew services start ollama`).
+2. Download the model: `ollama pull gemma3:4b` (about 3 GB).
+3. If Stash runs in Docker on the same computer, the default address
+   (`http://host.docker.internal:11434`) works as is. Otherwise set **AI: Ollama address**.
+
+**Using it**
+- **AI tagging: preview on 10 items**: writes what it would add to the log, without changing anything. Start here.
+- **AI tagging: items with no tags** and **AI tagging: everything not done yet**: add tags. They only ever *add* tags, skip organized items (unless you change that), and remember what's done, so you can stop a run and start it again later.
+- **Ask AI for tags**: a button under the Tags box when you edit a scene or image. Suggestions show up as one-click chips; nothing is added until you click them and save.
+- **AI: tag new scenes and images automatically**: AI-tags new items after a scan.
+
+The model is shown a picture (or 3 frames from a scene) and your most used tags (250 by default),
+and can only answer with tags from that list, so it never invents new tags. Gemma 3 4B takes about
+5 seconds per picture on an Apple M4 (a scene about 15), so tagging thousands of items takes hours.
+It gets most things right but not all. Check the preview, and use **Ask AI** where accuracy matters.
+
 ## Tag names
 
 Keeps tag names capitalised the same way: `dating app` becomes `Dating App`, while small words
@@ -138,12 +161,19 @@ Under **Settings → Plugins → Better Tagging Tools**:
 | Parent tag for gallery-name tags | Optional; files the gallery-name tags under one tag, e.g. `Galleries`. |
 | Give tags a picture automatically | See above. |
 | Capitalise new tags automatically | See "Tag names" above. |
+| AI: tag new scenes and images automatically | See "AI tagging" above. |
+| AI: Ollama address | Default `http://host.docker.internal:11434`. |
+| AI: model | Default `gemma3:4b`. |
+| AI: tags to choose from | How many of your most used tags the model picks from. Default 250. |
+| AI: most tags per item | Default 6. |
+| AI: include organized items | Also AI-tag items marked as organized. |
 | Special spellings | Comma-separated words or tag names to always write exactly as given when capitalising, e.g. `CNN, POV, HD, iPhone`. |
 | Suggested tags to show | The most suggestions per row. Default 15. |
 
 ## Requirements and notes
 
 - Python 3 (standard library only). Tested with Stash v0.31.
-- ffmpeg, only for video frames used as tag pictures. It uses the one Stash uses; the official Docker image includes it.
+- ffmpeg, only for video frames (tag pictures and AI tagging of scenes).
+- Ollama, only for AI tagging. It uses the one Stash uses; the official Docker image includes it.
 - The plugin keeps a few small files in its own folder (which tags it added, a short work queue). Deleting them is safe; it just forgets which performer tags it added.
 - Works with any theme.
