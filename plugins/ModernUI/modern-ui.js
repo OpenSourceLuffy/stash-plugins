@@ -84,12 +84,11 @@
   setupLongPressSelect();
   setupGalleryTitle();
   setupTagIndex();
-  setupImageViewer();
   if (!cfg.showGalleryDetails) setupGalleryPanelClosed();
 
-  if (!cfg.disableImageSwipe) {
-    setupImageSwipe();
-  }
+  // the full-screen viewer swipes between images too, unless that's off
+  const imageNav = cfg.disableImageSwipe ? null : setupImageSwipe();
+  setupImageViewer(imageNav);
 
   // Stash's filter sidebar toggle is a half-transparent tab stuck to the left
   // edge. Put a proper "Filters" button at the start of the toolbar instead;
@@ -828,6 +827,8 @@
       if (e.key === "ArrowRight" && go(1)) e.preventDefault();
       if (e.key === "ArrowLeft" && go(-1)) e.preventDefault();
     });
+
+    return { neighbour, go };
   }
 
   // ------------------------------------------------------------------
@@ -835,9 +836,11 @@
   // ------------------------------------------------------------------
   // Zoom with the mouse wheel / trackpad pinch, pinch on a phone, or
   // double-click / double-tap; drag to move around when zoomed. Clicking or
-  // tapping outside the picture, Esc, or the Close button closes it.
+  // tapping outside the picture, Esc, or the Close button closes it. While
+  // not zoomed in, swipe (or drag, or the arrow keys) to the next / previous
+  // image in the same list as the image page's swipe; the viewer stays open.
 
-  function setupImageViewer() {
+  function setupImageViewer(nav) {
     const IMAGE_PAGE = /^\/images\/\d+\/?$/;
     const MAX = 8;
     let viewer = null;
@@ -849,6 +852,37 @@
       e.preventDefault();
       open(img.currentSrc || img.src, img.alt);
     });
+
+    // id -> promise of the picture's URL (null for videos / clips)
+    const srcCache = new Map();
+    function pictureOf(id) {
+      if (!srcCache.has(id)) {
+        srcCache.set(
+          id,
+          fetch("/graphql", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              query: "query($id: ID!) { findImage(id: $id) { paths { image } visual_files { __typename } } }",
+              variables: { id },
+            }),
+          })
+            .then((r) => r.json())
+            .then((j) => {
+              const im = j.data && j.data.findImage;
+              if (!im || (im.visual_files[0] && im.visual_files[0].__typename === "VideoFile")) return null;
+              // load it now, so it shows straight away
+              return new Promise((done) => {
+                const pre = new Image();
+                pre.onload = pre.onerror = () => done(im.paths.image);
+                pre.src = im.paths.image;
+              });
+            })
+            .catch(() => null)
+        );
+      }
+      return srcCache.get(id);
+    }
 
     function open(src, alt) {
       const box = document.createElement("div");
@@ -874,6 +908,46 @@
       // Where the press started: with pointer capture the click itself is
       // reported on the backdrop even when it was on the picture
       let moved = false, lastTap = 0, downOnPic = false, mouse = true;
+      let swipeT = 0, busy = false, ownNav = false;
+
+      // Get the neighbours' pictures ready
+      const prefetch = () => nav && [1, -1].forEach((st) => { const n = nav.neighbour(st); if (n) pictureOf(n); });
+      prefetch();
+
+      // Move to the next (1) / previous (-1) image, staying full screen
+      async function step(dir, fromX) {
+        const id = nav && nav.neighbour(dir);
+        if (!id || busy) {
+          // end of the list: spring back
+          tx = 0;
+          apply(true);
+          return;
+        }
+        busy = true;
+        const W = box.clientWidth;
+        pic.style.transition = "transform 0.18s ease-out, opacity 0.18s ease-out";
+        pic.style.transform = `translate(${-dir * W}px, 0px)`;
+        pic.style.opacity = "0";
+        const [src] = await Promise.all([pictureOf(id), new Promise((r) => setTimeout(r, 180))]);
+        ownNav = true;
+        nav.go(dir);
+        ownNav = false;
+        if (!src) {
+          // a video clip: show it on its page instead
+          busy = false;
+          shut();
+          return;
+        }
+        pic.src = src;
+        s = 1; tx = 0; ty = 0;
+        pic.style.transition = "none";
+        pic.style.transform = `translate(${dir * W * 0.3}px, 0px)`;
+        void pic.offsetWidth;
+        pic.style.opacity = "";
+        apply(true);
+        busy = false;
+        prefetch();
+      }
 
       const apply = (animate) => {
         // keep the picture from being dragged away off the screen
@@ -903,20 +977,23 @@
         box.remove();
         document.body.classList.remove("mui-viewer-open");
         document.removeEventListener("keydown", onKey, true);
-        window.removeEventListener("popstate", shut);
+        window.removeEventListener("popstate", onPop);
         window.removeEventListener("resize", onResize);
       }
       const onKey = (e) => {
         if (e.key === "Escape") shut();
         else if (e.key === "+" || e.key === "=") zoomAt(s * 1.5, box.clientWidth / 2, box.clientHeight / 2, true);
         else if (e.key === "-") zoomAt(s / 1.5, box.clientWidth / 2, box.clientHeight / 2, true);
+        else if ((e.key === "ArrowRight" || e.key === "ArrowLeft") && s <= 1.01 && nav) step(e.key === "ArrowRight" ? 1 : -1);
+        else if (e.key === "ArrowRight" || e.key === "ArrowLeft") { /* zoomed in: nothing */ }
         else return;
         e.preventDefault();
         e.stopPropagation();
       };
       const onResize = () => apply(false);
       document.addEventListener("keydown", onKey, true);
-      window.addEventListener("popstate", shut); // e.g. the phone's back gesture
+      const onPop = () => { if (!ownNav) shut(); }; // e.g. the phone's back gesture
+      window.addEventListener("popstate", onPop);
       window.addEventListener("resize", onResize);
       viewer = { shut };
 
@@ -946,6 +1023,7 @@
           moved = false;
           downOnPic = e.target === pic;
           mouse = e.pointerType === "mouse";
+          swipeT = performance.now();
           gesture = { type: "pan", x: e.clientX, y: e.clientY, tx, ty, onPic: e.target === pic };
         } else if (pointers.size === 2) {
           const [a, b] = [...pointers.values()];
@@ -978,6 +1056,15 @@
             tx = gesture.tx + dx;
             ty = gesture.ty + dy;
             apply(false);
+          } else if (nav && !busy && moved) {
+            // not zoomed: the picture follows the finger sideways
+            if (!gesture.dir) gesture.dir = Math.abs(dx) > Math.abs(dy) ? "x" : "y";
+            if (gesture.dir === "x") {
+              const end = !nav.neighbour(dx < 0 ? 1 : -1);
+              gesture.dx = dx;
+              pic.style.transition = "none";
+              pic.style.transform = `translate(${end ? dx * 0.25 : dx}px, 0px)`;
+            }
           }
         }
       });
@@ -994,6 +1081,13 @@
         if (pointers.size) return;
         const g = gesture;
         gesture = null;
+        if (g && g.dir === "x" && s <= 1.01) {
+          const dx = g.dx || 0;
+          const fast = Math.abs(dx) / Math.max(performance.now() - swipeT, 1) > 0.5;
+          if (e.type !== "pointercancel" && (Math.abs(dx) > 60 || (fast && Math.abs(dx) > 25))) step(dx < 0 ? 1 : -1);
+          else apply(true); // not far enough: spring back
+          return;
+        }
         if (e.type === "pointercancel" || moved || !g) return;
         // double-tap on a phone (a mouse uses dblclick)
         if (e.pointerType !== "mouse" && g.onPic) {

@@ -26,7 +26,8 @@ A cleaner, app-like look for Stash, built to feel good on a phone as well as a c
 - Home page rows run edge to edge with round scroll arrows.
 - On an image's page, click the picture to see it full screen. Zoom in with the mouse wheel, a
   trackpad or two-finger pinch, or a double-click / double-tap, and drag to move around. Click
-  outside the picture, press Esc or tap **Close** to go back.
+  outside the picture, press Esc or tap **Close** to go back. While zoomed out, swipe (or drag, or
+  use the arrow keys) to the next or previous image without leaving full screen.
 
 **Phones**
 - App-style tab bar at the bottom of the screen. Pick and reorder its tabs from **More → Edit tab bar**. Pages added by other plugins (e.g. stash-tv) can go on it too.
