@@ -249,6 +249,12 @@
       if (e.target.closest("input, button, .btn, .card-popovers")) return;
       const check = checkOf(card);
       if (!check) return;
+      // Once anything is selected Stash makes cards draggable (mouse
+      // drag-select). On a phone, holding a draggable card picks it up for
+      // the browser's drag-and-drop instead, which cancels this touch.
+      [card, ...card.querySelectorAll("[draggable], img, a")].forEach((el) => {
+        if (el.draggable) el.draggable = false;
+      });
       start = { x: e.touches[0].clientX, y: e.touches[0].clientY };
       timer = setTimeout(() => {
         timer = null;
@@ -304,6 +310,18 @@
         e.preventDefault();
         e.stopPropagation();
         suppressUntil = 0;
+      }
+    }, { capture: true });
+
+    // Backup for the above: no browser drag-and-drop started by a finger
+    let touching = false;
+    window.addEventListener("touchstart", () => { touching = true; }, { capture: true, passive: true });
+    window.addEventListener("touchend", (e) => { if (!e.touches.length) touching = false; }, { capture: true, passive: true });
+    window.addEventListener("touchcancel", () => { touching = false; }, { capture: true, passive: true });
+    window.addEventListener("dragstart", (e) => {
+      if ((touching || drag) && e.target instanceof Element && e.target.closest(".grid-card")) {
+        e.preventDefault();
+        e.stopPropagation();
       }
     }, { capture: true });
 

@@ -2834,6 +2834,13 @@ body.mui-viewer-open {
 }
 
 /* ---- Touch screens: hold a card, then slide to select more ---- */
+@media (hover: none) {
+  /* holding a card must not pick it up for drag-and-drop */
+  body.mui .grid-card,
+  body.mui .grid-card * {
+    -webkit-user-drag: none;
+  }
+}
 body.mui-drag-selecting {
   overscroll-behavior: none;
   -webkit-user-select: none;
