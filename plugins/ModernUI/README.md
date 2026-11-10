@@ -24,6 +24,9 @@ A cleaner, app-like look for Stash, built to feel good on a phone as well as a c
 - Cleaner scene, performer, image, gallery, studio, group and tag cards.
 - Dark, light, or auto (follows your device) colour themes.
 - Home page rows run edge to edge with round scroll arrows.
+- On an image's page, click the picture to see it full screen. Zoom in with the mouse wheel, a
+  trackpad or two-finger pinch, or a double-click / double-tap, and drag to move around. Click
+  outside the picture, press Esc or tap **Close** to go back.
 
 **Phones**
 - App-style tab bar at the bottom of the screen. Pick and reorder its tabs from **More → Edit tab bar**. Pages added by other plugins (e.g. stash-tv) can go on it too.

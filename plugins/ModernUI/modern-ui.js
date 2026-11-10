@@ -84,6 +84,7 @@
   setupLongPressSelect();
   setupGalleryTitle();
   setupTagIndex();
+  setupImageViewer();
   if (!cfg.showGalleryDetails) setupGalleryPanelClosed();
 
   if (!cfg.disableImageSwipe) {
@@ -689,6 +690,7 @@
     // The big image/video on the image page (not thumbnails or icons)
     function mainMedia(target) {
       if (!currentImageId() || !(target instanceof Element)) return null;
+      if (document.body.classList.contains("mui-viewer-open")) return null;
       if (target.closest(".grid-card, .mlt-related, .mlt-similar, .mlt-perf-similar, .top-nav, .mui-bottom-nav, .mui-sheet, .modal, " + LIGHTBOX)) return null;
       const media = target.closest("img, video") || target.querySelector?.("img, video");
       if (!media || media.getBoundingClientRect().width < 150) return null;
@@ -822,9 +824,202 @@
       if (!currentImageId() || e.altKey || e.ctrlKey || e.metaKey) return;
       const el = document.activeElement;
       if (el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))) return;
-      if (document.querySelector(".modal.show, " + LIGHTBOX)) return; // Stash's own viewer handles keys
+      if (document.querySelector(".modal.show, .mui-viewer, " + LIGHTBOX)) return; // a full-screen viewer handles keys
       if (e.key === "ArrowRight" && go(1)) e.preventDefault();
       if (e.key === "ArrowLeft" && go(-1)) e.preventDefault();
+    });
+  }
+
+  // ------------------------------------------------------------------
+  // Image page: click the picture to see it full screen and zoom in
+  // ------------------------------------------------------------------
+  // Zoom with the mouse wheel / trackpad pinch, pinch on a phone, or
+  // double-click / double-tap; drag to move around when zoomed. Clicking or
+  // tapping outside the picture, Esc, or the Close button closes it.
+
+  function setupImageViewer() {
+    const IMAGE_PAGE = /^\/images\/\d+\/?$/;
+    const MAX = 8;
+    let viewer = null;
+
+    document.addEventListener("click", (e) => {
+      if (viewer || e.button !== 0 || !IMAGE_PAGE.test(location.pathname)) return;
+      const img = e.target instanceof Element && e.target.closest(".image-container img.image-image");
+      if (!img || !img.complete || !img.naturalWidth) return;
+      e.preventDefault();
+      open(img.currentSrc || img.src, img.alt);
+    });
+
+    function open(src, alt) {
+      const box = document.createElement("div");
+      box.className = "mui-viewer";
+      box.setAttribute("role", "dialog");
+      box.setAttribute("aria-label", "Picture, full screen");
+      const pic = document.createElement("img");
+      pic.className = "mui-viewer-img";
+      pic.src = src;
+      pic.alt = alt || "";
+      pic.draggable = false;
+      const close = document.createElement("button");
+      close.type = "button";
+      close.className = "mui-viewer-close";
+      close.textContent = "✕ Close";
+      box.append(pic, close);
+      document.body.appendChild(box);
+      document.body.classList.add("mui-viewer-open");
+
+      let s = 1, tx = 0, ty = 0; // zoom and offset of the picture
+      const pointers = new Map(); // pointerId -> {x, y}
+      let gesture = null; // what the current touch / drag is doing
+      // Where the press started: with pointer capture the click itself is
+      // reported on the backdrop even when it was on the picture
+      let moved = false, lastTap = 0, downOnPic = false, mouse = true;
+
+      const apply = (animate) => {
+        // keep the picture from being dragged away off the screen
+        const w = pic.offsetWidth * s, hgt = pic.offsetHeight * s;
+        const mx = Math.max(0, (w - box.clientWidth) / 2), my = Math.max(0, (hgt - box.clientHeight) / 2);
+        tx = Math.min(mx, Math.max(-mx, tx));
+        ty = Math.min(my, Math.max(-my, ty));
+        pic.style.transition = animate ? "transform 0.2s ease" : "none";
+        pic.style.transform = `translate(${tx}px, ${ty}px) scale(${s})`;
+        box.classList.toggle("mui-viewer-zoomed", s > 1.01);
+      };
+      // Zoom to `next`, keeping the point under (x, y) where it is
+      const zoomAt = (next, x, y, animate) => {
+        next = Math.min(MAX, Math.max(1, next));
+        const cx = x - box.clientWidth / 2, cy = y - box.clientHeight / 2;
+        tx = cx - ((cx - tx) * next) / s;
+        ty = cy - ((cy - ty) * next) / s;
+        s = next;
+        if (s === 1) tx = ty = 0;
+        apply(animate);
+      };
+      const toggleZoom = (x, y) => zoomAt(s > 1.01 ? 1 : 2.5, x, y, true);
+
+      function shut() {
+        if (!viewer) return;
+        viewer = null;
+        box.remove();
+        document.body.classList.remove("mui-viewer-open");
+        document.removeEventListener("keydown", onKey, true);
+        window.removeEventListener("popstate", shut);
+        window.removeEventListener("resize", onResize);
+      }
+      const onKey = (e) => {
+        if (e.key === "Escape") shut();
+        else if (e.key === "+" || e.key === "=") zoomAt(s * 1.5, box.clientWidth / 2, box.clientHeight / 2, true);
+        else if (e.key === "-") zoomAt(s / 1.5, box.clientWidth / 2, box.clientHeight / 2, true);
+        else return;
+        e.preventDefault();
+        e.stopPropagation();
+      };
+      const onResize = () => apply(false);
+      document.addEventListener("keydown", onKey, true);
+      window.addEventListener("popstate", shut); // e.g. the phone's back gesture
+      window.addEventListener("resize", onResize);
+      viewer = { shut };
+
+      close.addEventListener("click", (e) => {
+        e.stopPropagation();
+        shut();
+      });
+
+      box.addEventListener("wheel", (e) => {
+        e.preventDefault();
+        // ctrlKey: a trackpad pinch, which sends small steps
+        const f = Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.002));
+        zoomAt(s * f, e.clientX, e.clientY, false);
+      }, { passive: false });
+
+      box.addEventListener("dblclick", (e) => {
+        // touch screens get their own double-tap below (some browsers fire
+        // dblclick for taps too, which would undo it)
+        if (downOnPic && mouse) toggleZoom(e.clientX, e.clientY);
+      });
+
+      box.addEventListener("pointerdown", (e) => {
+        if (e.target === close) return;
+        pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        box.setPointerCapture(e.pointerId);
+        if (pointers.size === 1) {
+          moved = false;
+          downOnPic = e.target === pic;
+          mouse = e.pointerType === "mouse";
+          gesture = { type: "pan", x: e.clientX, y: e.clientY, tx, ty, onPic: e.target === pic };
+        } else if (pointers.size === 2) {
+          const [a, b] = [...pointers.values()];
+          moved = true;
+          gesture = {
+            type: "pinch",
+            dist: Math.hypot(a.x - b.x, a.y - b.y) || 1,
+            mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2, s, tx, ty,
+          };
+        }
+      });
+
+      box.addEventListener("pointermove", (e) => {
+        if (!pointers.has(e.pointerId) || !gesture) return;
+        pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (gesture.type === "pinch" && pointers.size >= 2) {
+          const [a, b] = [...pointers.values()];
+          const g = gesture;
+          const next = Math.min(MAX, Math.max(1, (g.s * Math.hypot(a.x - b.x, a.y - b.y)) / g.dist));
+          const mx = (a.x + b.x) / 2 - box.clientWidth / 2, my = (a.y + b.y) / 2 - box.clientHeight / 2;
+          const ox = g.mx - box.clientWidth / 2, oy = g.my - box.clientHeight / 2;
+          tx = mx - ((ox - g.tx) * next) / g.s;
+          ty = my - ((oy - g.ty) * next) / g.s;
+          s = next;
+          apply(false);
+        } else if (gesture.type === "pan") {
+          const dx = e.clientX - gesture.x, dy = e.clientY - gesture.y;
+          if (Math.abs(dx) > 6 || Math.abs(dy) > 6) moved = true;
+          if (s > 1.01) {
+            tx = gesture.tx + dx;
+            ty = gesture.ty + dy;
+            apply(false);
+          }
+        }
+      });
+
+      const lift = (e) => {
+        if (!pointers.delete(e.pointerId)) return;
+        if (pointers.size === 1 && gesture && gesture.type === "pinch") {
+          // one finger left after a pinch: carry on moving with it
+          const [p] = [...pointers.values()];
+          gesture = { type: "pan", x: p.x, y: p.y, tx, ty, onPic: true };
+          if (s < 1.01) zoomAt(1, 0, 0, true);
+          return;
+        }
+        if (pointers.size) return;
+        const g = gesture;
+        gesture = null;
+        if (e.type === "pointercancel" || moved || !g) return;
+        // double-tap on a phone (a mouse uses dblclick)
+        if (e.pointerType !== "mouse" && g.onPic) {
+          const now = performance.now();
+          if (now - lastTap < 300) {
+            lastTap = 0;
+            toggleZoom(e.clientX, e.clientY);
+          } else lastTap = now;
+        }
+      };
+      box.addEventListener("pointerup", lift);
+      box.addEventListener("pointercancel", lift);
+
+      // A plain click or tap outside the picture closes it. (Done on click,
+      // not pointerup, so the tap doesn't also land on the page underneath.)
+      box.addEventListener("click", (e) => {
+        if (!downOnPic && !moved && e.target !== close) shut();
+      });
+
+      if (!pic.complete) pic.addEventListener("load", () => apply(false), { once: true });
+      apply(false);
+    }
+
+    // Leaving the image page (e.g. a link elsewhere) closes it too
+    window.addEventListener("popstate", () => {
+      if (viewer && !IMAGE_PAGE.test(location.pathname)) viewer.shut();
     });
   }
 

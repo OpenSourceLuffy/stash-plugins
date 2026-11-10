@@ -2778,3 +2778,57 @@ body.mui .scene-tabs .studio-logo .studio-name svg {
 body.mui .scene-tabs .scene-header-container:has(.studio-name) .scene-header {
   width: 100%;
 }
+
+/* ---- Image page: full-screen picture with zoom ---- */
+body.mui .image-container img.image-image {
+  cursor: zoom-in;
+}
+body.mui-viewer-open {
+  overflow: hidden;
+}
+.mui-viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.94);
+  touch-action: none;
+  overscroll-behavior: contain;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.mui-viewer-img {
+  max-width: 100vw;
+  max-height: 100vh;
+  max-height: 100dvh;
+  object-fit: contain;
+  transform-origin: center center;
+  cursor: zoom-in;
+  will-change: transform;
+  -webkit-touch-callout: none;
+}
+.mui-viewer-zoomed .mui-viewer-img {
+  cursor: grab;
+}
+.mui-viewer-zoomed .mui-viewer-img:active {
+  cursor: grabbing;
+}
+.mui-viewer-close {
+  position: absolute;
+  top: calc(12px + env(safe-area-inset-top, 0px));
+  right: calc(12px + env(safe-area-inset-right, 0px));
+  padding: 8px 14px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(40, 40, 40, 0.85);
+  color: #fff;
+  font-size: 15px;
+  line-height: 1.2;
+  cursor: pointer;
+}
+.mui-viewer-close:hover,
+.mui-viewer-close:focus-visible {
+  background: rgba(70, 70, 70, 0.95);
+}
