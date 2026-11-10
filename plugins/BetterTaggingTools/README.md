@@ -1,7 +1,7 @@
 # Better Tagging Tools
 
-Tags each performer with the tags used most often on their scenes, images and galleries, then
-uses those tags to suggest tags while you edit. It also adds bulk tagging to performer and
+Tags each performer and studio with the tags used most often on their scenes, images and
+galleries (and each gallery with its photos' most used tags), then suggests tags while you edit. It also adds bulk tagging to performer and
 gallery pages, can tag a gallery's photos with the gallery's name, can give tags without
 a picture one from your library, keeps tag names consistently capitalised, auto tags from file
 names in more places than Stash does, fills in dates from file names, and can tag scenes and images
@@ -39,16 +39,20 @@ tags** is shown as well.
   suggested tag narrows the next suggestions.
 - Tags already on the item aren't suggested.
 
-## Performers' top tags
+## Top tags for performers, studios and galleries
 
 The **Tag performers with their top tags** task counts the tags on every performer's scenes,
 images and galleries and adds their most used ones (10 by default) to the performer.
+**Tag studios with their top tags** does the same for studios, and **Tag galleries with their top
+tags** gives each gallery the most used tags of its photos (gallery-name tags never count).
 
 - After that, whenever you save a change to the tags or performers of a scene, image or gallery,
   the performers in it are recounted. Batch edits are handled once at the end, in a background job.
-- Tags the plugin added are taken off again when they drop out of a performer's top list.
+  Turn on **Refresh studios' top tags on edit** and **Refresh galleries' top tags on edit** to keep
+  studios and galleries up to date the same way.
+- Tags the plugin added are taken off again when they drop out of the top list.
   **Tags you added yourself are never removed.**
-- **Preview performer top tags** writes what would change to the log without changing anything.
+- **Preview top tags** writes what the three tasks would change to the log without changing anything.
 
 ## Bulk tagging
 
@@ -211,11 +215,13 @@ Under **Settings → Plugins → Better Tagging Tools**:
 
 | Setting | What it does |
 | --- | --- |
-| Top tags per performer | How many tags to add to each performer. Default 10. |
-| Minimum uses | A tag must be on at least this many of the performer's items. Default 3. |
-| Don't count images | Count only scenes and galleries. |
-| Tags to ignore | Comma-separated tags never added to performers, e.g. `Organized, To Review`. |
-| Don't refresh on edit | Only update performers when you run the task. |
+| Top tags per performer, studio or gallery | How many tags to add to each. Default 10. |
+| Minimum uses | A tag must be on at least this many of the performer's, studio's or gallery's items. Default 3. |
+| Don't count images | Count only scenes and galleries for performers and studios. |
+| Tags to ignore | Comma-separated tags never added as top tags, e.g. `Organized, To Review`. Doesn't affect Auto Tag. |
+| Don't refresh on edit | Only update top tags when you run the tasks. |
+| Refresh studios' top tags on edit | Recount a studio when tags or the studio change on its scenes, images or galleries. |
+| Refresh galleries' top tags on edit | Recount a gallery when its photos' tags change or photos move into it. |
 | Tag gallery images with the gallery's name | See above. |
 | Parent tag for gallery-name tags | Optional; files the gallery-name tags under one tag, e.g. `Galleries`. |
 | Give tags a picture automatically | See above. |

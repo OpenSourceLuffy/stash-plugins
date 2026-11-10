@@ -1,12 +1,15 @@
-"""Better Tagging Tools - tag performers with their most used tags.
+"""Better Tagging Tools - tag performers, studios and galleries with their
+most used tags.
 
-Counts the tags on each performer's scenes, images and galleries and adds the
-top ones to the performer. Tags the plugin added are remembered in
-auto_tags.json so that a later run can take them off again when they drop out
-of the top list. Tags that were already on a performer are never touched.
+Counts the tags on each performer's (or studio's) scenes, images and
+galleries, or on a gallery's images, and adds the top ones to it. Tags the
+plugin added are remembered in auto_tags.json so that a later run can take
+them off again when they drop out of the top list. Tags that were already
+there are never touched.
 
-Runs as a task (every performer) or as a hook: when tags or performers change
-on a scene, image or gallery, only that item's performers are refreshed.
+Runs as a task (every performer / studio / gallery) or as a hook: when tags,
+performers, the studio or galleries change on a scene, image or gallery, only
+the performers, studio and galleries involved are refreshed.
 
 Also: suggested tags, bulk tagging, gallery-name tags, tag pictures and
 consistent tag name capitalisation (see each section below).
@@ -118,6 +121,7 @@ def settings(stash, plugin_dir=None):
         "kinds": ["scenes", "galleries"] if skip_images else ["scenes", "images", "galleries"],
         "exclude": exclude,
         "no_hook": bool(s.get("noAutoRefresh")),
+        "hook_owners": [o for o, key in (("studios", "studioTopTags"), ("galleries", "galleryTopTags")) if s.get(key)],
         "gallery_tags": bool(s.get("galleryNameTags")),
         "gallery_parent": (s.get("galleryTagParent") or "").strip(),
         "auto_pictures": bool(s.get("autoTagPictures")),
@@ -153,13 +157,50 @@ KINDS = {
 }
 
 
-def count_all(stash, kinds, step_total):
-    """Every performer's tag uses: {performer_id: Counter({tag_id: uses})}."""
+# Who gets top tags: what they're called, how to find and update them, how
+# the items that count point at them, and where they're kept in
+# auto_tags.json (performers by plain id, the others with a prefix).
+OWNERS = {
+    "performers": {
+        "one": "performer", "find": "findPerformers", "update": "performerUpdate",
+        "input": "PerformerUpdateInput", "fields": "id name tags { id }",
+        "filter": "performers", "item": "performers { id }",
+        "ids": lambda it: [p["id"] for p in it.get("performers") or []], "prefix": "",
+    },
+    "studios": {
+        "one": "studio", "find": "findStudios", "update": "studioUpdate",
+        "input": "StudioUpdateInput", "fields": "id name tags { id }",
+        "filter": "studios", "item": "studio { id }",
+        "ids": lambda it: [it["studio"]["id"]] if it.get("studio") else [], "prefix": "studio:",
+    },
+    "galleries": {
+        "one": "gallery", "find": "findGalleries", "update": "galleryUpdate",
+        "input": "GalleryUpdateInput", "fields": "id title files { basename } folder { path } tags { id }",
+        "filter": "galleries", "item": "galleries { id }",
+        "ids": lambda it: [g["id"] for g in it.get("galleries") or []], "prefix": "gallery:",
+    },
+}
+
+
+def owner_sources(owner, cfg):
+    """What gets counted: a gallery's images; everyone else's scenes, images
+    (unless "Don't count images") and galleries."""
+    return ["images"] if owner == "galleries" else cfg["kinds"]
+
+
+def owner_name(owner, obj):
+    return gallery_name(obj) or f"Gallery {obj['id']}" if owner == "galleries" else obj["name"]
+
+
+def count_all(stash, owner, kinds, step, step_total):
+    """Tag uses for every performer / studio / gallery:
+    {id: Counter({tag_id: uses})}."""
+    o = OWNERS[owner]
     counts = defaultdict(Counter)
     for i, kind in enumerate(kinds):
         query_name, field, _, _ = KINDS[kind]
         q = f"""query($f: FindFilterType) {{
-            {query_name}(filter: $f) {{ count {field} {{ performers {{ id }} tags {{ id }} }} }}
+            {query_name}(filter: $f) {{ count {field} {{ {o["item"]} tags {{ id }} }} }}
         }}"""
         page = 1
         seen = 0
@@ -168,21 +209,22 @@ def count_all(stash, kinds, step_total):
             items = data[field]
             for item in items:
                 tags = item.get("tags") or []
-                for p in item.get("performers") or []:
-                    c = counts[p["id"]]
+                for oid in o["ids"](item):
+                    c = counts[oid]
                     for t in tags:
                         c[t["id"]] += 1
             seen += len(items)
-            progress((i + seen / (data["count"] or 1)) / step_total)
+            progress((step + i + seen / (data["count"] or 1)) / step_total)
             if len(items) < PAGE_SIZE:
                 break
             page += 1
-        log("info", f"Counted tags on {seen} {kind}")
+        log("info", f"Counted tags on {seen} {kind} for {owner}")
     return counts
 
 
-def count_one(stash, kinds, pid):
-    """One performer's tag uses, from just their own scenes/images/galleries."""
+def count_one(stash, owner, kinds, oid):
+    """One performer's / studio's / gallery's tag uses, from just its own
+    items."""
     c = Counter()
     for kind in kinds:
         query_name, field, farg, ftype = KINDS[kind]
@@ -192,7 +234,7 @@ def count_one(stash, kinds, pid):
         page = 1
         while True:
             items = stash.call(q, {
-                "p": {"performers": {"value": [pid], "modifier": "INCLUDES"}},
+                "p": {OWNERS[owner]["filter"]: {"value": [oid], "modifier": "INCLUDES"}},
                 "f": {"page": page, "per_page": PAGE_SIZE},
             })[query_name][field]
             for item in items:
@@ -234,14 +276,16 @@ def locked_queue(plugin_dir):
     return locked_json(os.path.join(plugin_dir, "queue.json"))
 
 
-def refresh_performer(stash, cfg, perf, counts, record, names, excluded, dry_run):
-    """Bring one performer's auto tags in line with their top tags.
+def refresh_owner(stash, cfg, owner, obj, counts, record, names, excluded, dry_run):
+    """Bring one performer's / studio's / gallery's auto tags in line with
+    its top tags.
 
-    Updates `record` in place and returns True if the performer changed."""
-    pid = perf["id"]
-    current = [t["id"] for t in perf["tags"]]
+    Updates `record` in place and returns True if it changed."""
+    o = OWNERS[owner]
+    key = o["prefix"] + obj["id"]
+    current = [t["id"] for t in obj["tags"]]
     current_set = set(current)
-    prev_auto = set(record.get(pid, [])) & current_set  # still on the performer
+    prev_auto = set(record.get(key, [])) & current_set  # still on it
 
     ranked = [tid for tid, uses in counts.most_common() if uses >= cfg["min"] and tid not in excluded]
     top = ranked[: cfg["top"]]
@@ -252,9 +296,9 @@ def refresh_performer(stash, cfg, perf, counts, record, names, excluded, dry_run
     auto_now = (prev_auto & top_set) | set(to_add)
     if not dry_run:
         if auto_now:
-            record[pid] = sorted(auto_now, key=int)
+            record[key] = sorted(auto_now, key=int)
         else:
-            record.pop(pid, None)
+            record.pop(key, None)
 
     if not (to_add or to_remove):
         return False
@@ -264,42 +308,58 @@ def refresh_performer(stash, cfg, perf, counts, record, names, excluded, dry_run
         parts.append("+ " + ", ".join(names.get(t, t) for t in to_add))
     if to_remove:
         parts.append("- " + ", ".join(names.get(t, t) for t in to_remove))
-    log("info", f"{perf['name']}: {'  '.join(parts)}")
+    prefix = "" if owner == "performers" else o["one"].capitalize() + " "
+    log("info", f"{prefix}{owner_name(owner, obj)}: {'  '.join(parts)}")
     if not dry_run:
         stash.call(
-            "mutation($i: PerformerUpdateInput!) { performerUpdate(input: $i) { id } }",
-            {"i": {"id": pid, "tag_ids": [t for t in current if t not in to_remove] + to_add}},
+            f"mutation($i: {o['input']}!) {{ {o['update']}(input: $i) {{ id }} }}",
+            {"i": {"id": obj["id"], "tag_ids": [t for t in current if t not in to_remove] + to_add}},
         )
     return True
 
 
-def run_all(stash, plugin_dir, dry_run):
-    cfg = settings(stash)
-    steps = len(cfg["kinds"]) + 1
-    names, excluded = tag_lookup(stash, cfg, plugin_dir)
-    counts = count_all(stash, cfg["kinds"], steps)
-    performers = stash.call(
-        "{ findPerformers(filter: {per_page: -1}) { performers { id name tags { id } } } }"
-    )["findPerformers"]["performers"]
+def find_owners(stash, owner, ids=None):
+    o = OWNERS[owner]
+    if ids is None:
+        q = f"{{ {o['find']}(filter: {{per_page: -1}}) {{ {owner} {{ {o['fields']} }} }} }}"
+        return stash.call(q)[o["find"]][owner]
+    q = f"query($ids: [ID!]) {{ {o['find']}(ids: $ids, filter: {{per_page: -1}}) {{ {owner} {{ {o['fields']} }} }} }}"
+    return stash.call(q, {"ids": ids})[o["find"]][owner]
 
-    changed = 0
-    with locked_record(plugin_dir) as record:
-        if not dry_run:
-            # performers that no longer exist drop out of the record
-            live = {p["id"] for p in performers}
-            for pid in list(record):
-                if pid not in live:
-                    del record[pid]
-        for n, perf in enumerate(performers):
-            if refresh_performer(stash, cfg, perf, counts.get(perf["id"], Counter()),
+
+def run_all(stash, plugin_dir, dry_run, owners=("performers",)):
+    cfg = settings(stash)
+    names, excluded = tag_lookup(stash, cfg, plugin_dir)
+    steps = sum(len(owner_sources(o, cfg)) + 1 for o in owners)
+    step = 0
+    summary = []
+    for owner in owners:
+        o = OWNERS[owner]
+        kinds = owner_sources(owner, cfg)
+        counts = count_all(stash, owner, kinds, step, steps)
+        step += len(kinds)
+        objs = find_owners(stash, owner)
+        changed = 0
+        with locked_record(plugin_dir) as record:
+            if not dry_run:
+                # ones that no longer exist drop out of the record
+                live = {o["prefix"] + x["id"] for x in objs}
+                for key in list(record):
+                    is_mine = key.startswith(o["prefix"]) if o["prefix"] else ":" not in key
+                    if is_mine and key not in live:
+                        del record[key]
+            for n, obj in enumerate(objs):
+                if refresh_owner(stash, cfg, owner, obj, counts.get(obj["id"], Counter()),
                                  record, names, excluded, dry_run):
-                changed += 1
-            progress((len(cfg["kinds"]) + (n + 1) / max(len(performers), 1)) / steps)
+                    changed += 1
+                progress((step + (n + 1) / max(len(objs), 1)) / steps)
+        step += 1
+        summary.append(f"{changed} of {len(objs)} {owner}")
 
     if dry_run:
-        log("info", f"Preview done: {changed} of {len(performers)} performers would change. Nothing was saved.")
+        log("info", f"Preview done: {', '.join(summary)} would change. Nothing was saved.")
     else:
-        log("info", f"Done: updated tags on {changed} of {len(performers)} performers.")
+        log("info", f"Done: updated top tags on {', '.join(summary)}.")
 
 
 HOOK_ITEMS = {
@@ -328,30 +388,41 @@ def run_hook(stash, plugin_dir, hook):
     performer_edit = (
         action == "Update" and kind in HOOK_ITEMS and ("tag_ids" in fields or "performer_ids" in fields)
     )
+    # ... and tags or the studio a studio's; an image's tags or galleries a
+    # gallery's
+    studio_edit = action == "Update" and kind in HOOK_ITEMS and ("tag_ids" in fields or "studio_id" in fields)
+    gallery_edit = action == "Update" and kind == "Image" and ("tag_ids" in fields or "gallery_ids" in fields)
     # A new gallery, a renamed one, or one a scan touched (no fields)
     gallery_event = kind == "Gallery" and (action == "Create" or not fields or "title" in fields)
     # A new image (scans), or one moved into a gallery
     image_event = kind == "Image" and (action == "Create" or "gallery_ids" in fields)
     new_item = action == "Create" and kind in ("Scene", "Image")
     created = action == "Create" and kind in HOOK_ITEMS
-    if not (performer_edit or gallery_event or image_event or new_item or created):
+    if not (performer_edit or studio_edit or gallery_edit or gallery_event or image_event or new_item or created):
         return
 
     cfg = settings(stash, plugin_dir)
     performers, galleries, images, tags = [], [], [], []
-    want_performers = performer_edit and not cfg["no_hook"] and not (
-        kind == "Image" and "images" not in cfg["kinds"]
-    )
+    counted = not (kind == "Image" and "images" not in cfg["kinds"])
+    want_performers = performer_edit and not cfg["no_hook"] and counted
+    want_studios = studio_edit and not cfg["no_hook"] and counted and "studios" in cfg["hook_owners"]
+    want_galleries = gallery_edit and not cfg["no_hook"] and "galleries" in cfg["hook_owners"]
     # Tags were changed: any of the item's tags that still have no picture
     want_tags = performer_edit and "tag_ids" in fields and cfg["auto_pictures"]
-    if want_performers or want_tags:
+    top_studios, top_galleries = [], []
+    if want_performers or want_studios or want_galleries or want_tags:
         query_name, _ = HOOK_ITEMS[kind]
+        extra = " galleries { id }" if kind == "Image" else ""
         item = stash.call(
-            f"query($id: ID!) {{ {query_name}(id: $id) {{ performers {{ id }} tags {{ id image_path }} }} }}",
+            f"query($id: ID!) {{ {query_name}(id: $id) {{ performers {{ id }} studio {{ id }}{extra} tags {{ id image_path }} }} }}",
             {"id": str(hook["id"])},
         )[query_name] or {}
         if want_performers:
             performers = [p["id"] for p in item.get("performers") or []]
+        if want_studios:
+            top_studios = OWNERS["studios"]["ids"](item)
+        if want_galleries:
+            top_galleries = OWNERS["galleries"]["ids"](item)
         if want_tags:
             tags = [t["id"] for t in item.get("tags") or [] if not has_picture(t)]
     if cfg["gallery_tags"]:
@@ -365,8 +436,9 @@ def run_hook(stash, plugin_dir, hook):
     dates = {}
     if created and cfg["dates_new"]:
         dates = {"dates_" + kind.lower(): [str(hook["id"])]}
-    if performers or galleries or images or tags or ai_scenes or ai_images or dates:
-        enqueue(stash, plugin_dir, performers, galleries, images, tags, ai_scenes, ai_images, **dates)
+    if performers or galleries or images or tags or ai_scenes or ai_images or dates or top_studios or top_galleries:
+        enqueue(stash, plugin_dir, performers, galleries, images, tags, ai_scenes, ai_images,
+                top_studios=top_studios, top_galleries=top_galleries, **dates)
 
 
 JOB_DESCRIPTION = "Better Tagging Tools: processing recent edits"
@@ -374,12 +446,12 @@ QUIET_SECONDS = 4  # how long edits must stop before the batch counts as done
 MAX_WAIT_SECONDS = 600
 QUEUE_KEYS = ("performers", "galleries", "images", "tags", "ai_scenes", "ai_images",
               "autotag_performers", "autotag_studios", "autotag_tags",
-              "dates_scene", "dates_image", "dates_gallery")
+              "dates_scene", "dates_image", "dates_gallery", "top_studios", "top_galleries")
 
 
 def enqueue(stash, plugin_dir, performers=(), galleries=(), images=(), tags=(), ai_scenes=(), ai_images=(),
             autotag_performers=(), autotag_studios=(), autotag_tags=(),
-            dates_scene=(), dates_image=(), dates_gallery=()):
+            dates_scene=(), dates_image=(), dates_gallery=(), top_studios=(), top_galleries=()):
     """Add to the waiting list and make sure one background job is lined up.
 
     Stash runs hooks one after another and waits for each, so a batch edit
@@ -390,7 +462,7 @@ def enqueue(stash, plugin_dir, performers=(), galleries=(), images=(), tags=(), 
         last = queue.get("touched", 0)
         for key, ids in zip(QUEUE_KEYS, (performers, galleries, images, tags, ai_scenes, ai_images,
                                          autotag_performers, autotag_studios, autotag_tags,
-                                         dates_scene, dates_image, dates_gallery)):
+                                         dates_scene, dates_image, dates_gallery, top_studios, top_galleries)):
             if ids:
                 queue[key] = sorted(set(queue.get(key, [])) | set(ids), key=int)
         queue["touched"] = time.time()
@@ -462,24 +534,22 @@ def run_queued(stash, plugin_dir):
         except Exception as e:
             log("warning", f"AI tagging of new items skipped: {e}")
 
-    ids = todo["performers"]
-    if not ids:
+    work = [(o, todo[k]) for o, k in (("performers", "performers"), ("studios", "top_studios"),
+                                      ("galleries", "top_galleries")) if todo[k]]
+    if not work:
         return
     names, excluded = tag_lookup(stash, cfg, plugin_dir)
-    performers = stash.call(
-        "query($ids: [ID!]) { findPerformers(ids: $ids, filter: {per_page: -1}) "
-        "{ performers { id name tags { id } } } }",
-        {"ids": ids},
-    )["findPerformers"]["performers"]
-
-    changed = 0
-    with locked_record(plugin_dir) as record:
-        for n, perf in enumerate(performers):
-            counts = count_one(stash, cfg["kinds"], perf["id"])
-            if refresh_performer(stash, cfg, perf, counts, record, names, excluded, False):
-                changed += 1
-            progress((n + 1) / len(performers))
-    log("info", f"Refreshed top tags for {len(performers)} edited performer(s), {changed} changed.")
+    for owner, ids in work:
+        objs = find_owners(stash, owner, ids)
+        kinds = owner_sources(owner, cfg)
+        changed = 0
+        with locked_record(plugin_dir) as record:
+            for n, obj in enumerate(objs):
+                counts = count_one(stash, owner, kinds, obj["id"])
+                if refresh_owner(stash, cfg, owner, obj, counts, record, names, excluded, False):
+                    changed += 1
+                progress((n + 1) / len(objs))
+        log("info", f"Refreshed top tags for {len(objs)} edited {OWNERS[owner]['one']}(s), {changed} changed.")
 
 
 # --- gallery-name tags ----------------------------------------------------
@@ -1839,6 +1909,10 @@ def main():
             # Asked by the page (runPluginOperation): the plugin's
             # gallery-name tags, so suggestions can leave them out
             print(json.dumps({"output": sorted(gallery_name_tag_ids(plugin_dir), key=int)}))
+        elif args.get("mode") in ("apply_studios", "apply_galleries"):
+            run_all(stash, plugin_dir, dry_run=False, owners=(args["mode"].split("_")[1],))
+        elif args.get("mode") == "dryrun_all":
+            run_all(stash, plugin_dir, dry_run=True, owners=("performers", "studios", "galleries"))
         else:
             run_all(stash, plugin_dir, dry_run=args.get("mode") == "dryrun")
     except Exception as e:

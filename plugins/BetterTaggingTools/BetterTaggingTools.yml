@@ -1,5 +1,5 @@
 name: Better Tagging Tools
-description: Tags each performer with the tags used most often in their scenes, images and galleries, shows one-click "Suggested tags" when editing tags (tags that usually go with the ones already chosen, and the performers' top tags), and adds "Bulk tag" buttons on performer pages (a performer's scenes, images and galleries) and gallery pages (a gallery's images). Can also tag every image in a gallery with the gallery's name, give tags without a picture one from your library, keep tag names consistently capitalised, auto tag from file names (new performers, studios and tags, or one item at a time), fill in dates from file names, and tag scenes and images with a local AI model (Ollama).
+description: Tags each performer and studio with the tags used most often in their scenes, images and galleries, and each gallery with its images' most used tags, shows one-click "Suggested tags" when editing tags (tags that usually go with the ones already chosen, and the performers' top tags), and adds "Bulk tag" buttons on performer pages (a performer's scenes, images and galleries) and gallery pages (a gallery's images). Can also tag every image in a gallery with the gallery's name, give tags without a picture one from your library, keep tag names consistently capitalised, auto tag from file names (new performers, studios and tags, or one item at a time), fill in dates from file names, and tag scenes and images with a local AI model (Ollama).
 version: "1.4"
 url: https://github.com/OpenSourceLuffy/stash-plugins/tree/main/plugins/BetterTaggingTools
 exec:
@@ -15,7 +15,7 @@ ui:
 
 hooks:
   - name: Refresh performer top tags on edit
-    description: When tags or performers change on a scene, image or gallery, queues that item's performers. A background job refreshes each of them once, a few seconds after the last edit, so batch edits are handled in one go.
+    description: When tags or performers change on a scene, image or gallery, queues that item's performers (and, if turned on, its studio and galleries). A background job refreshes each of them once, a few seconds after the last edit, so batch edits are handled in one go.
     triggeredBy:
       - Scene.Update.Post
       - Image.Update.Post
@@ -38,10 +38,18 @@ tasks:
     description: Counts the tags on every performer's scenes, images and galleries and adds the most used ones to the performer. Tags this plugin added earlier that are no longer in the top list are taken off again; tags you added yourself are never removed.
     defaultArgs:
       mode: apply
-  - name: Preview performer top tags (no changes)
-    description: Writes what the task above would add and remove to the log, without changing anything.
+  - name: Tag studios with their top tags
+    description: The same for studios - counts the tags on each studio's scenes, images and galleries and adds the most used ones to the studio.
     defaultArgs:
-      mode: dryrun
+      mode: apply_studios
+  - name: Tag galleries with their top tags
+    description: The same for galleries - counts the tags on each gallery's images and adds the most used ones to the gallery. Gallery-name tags never count.
+    defaultArgs:
+      mode: apply_galleries
+  - name: Preview top tags (no changes)
+    description: Writes what the three tasks above would add and remove for performers, studios and galleries to the log, without changing anything.
+    defaultArgs:
+      mode: dryrun_all
   - name: Tag gallery images with the gallery's name
     description: Gives every image in every gallery a tag named after its gallery (its title, or the zip or folder name), creating the tags as needed. Use it once to catch up existing galleries; the setting below keeps new ones tagged.
     defaultArgs:
@@ -89,24 +97,32 @@ tasks:
 
 settings:
   topTagCount:
-    displayName: Top tags per performer
-    description: How many of a performer's most used tags to add to them. Default 10.
+    displayName: Top tags per performer, studio or gallery
+    description: How many of the most used tags to add to each performer, studio or gallery. Default 10.
     type: NUMBER
   minUses:
     displayName: Minimum uses
-    description: A tag must be on at least this many of the performer's scenes, images and galleries to count. Default 3.
+    description: A tag must be on at least this many of the performer's (or studio's) scenes, images and galleries, or of a gallery's images, to count. Default 3.
     type: NUMBER
   skipImages:
     displayName: Don't count images
-    description: Only count scenes and galleries. Useful if large image sets drown out everything else.
+    description: Only count scenes and galleries for performers and studios. Useful if large image sets drown out everything else. (Galleries always count their images.)
     type: BOOLEAN
   excludeTags:
     displayName: Tags to ignore
-    description: Comma-separated tag names that should never be added to performers (for example housekeeping tags like "Organized, To Review").
+    description: Comma-separated tag names that should never be added to performers, studios or galleries as top tags (for example housekeeping tags like "Organized, To Review"). This doesn't affect Auto Tag; for that, turn on "Ignore Auto Tag" on the tag itself.
     type: STRING
   noAutoRefresh:
     displayName: Don't refresh on edit
-    description: Turn off the automatic refresh of a performer's top tags when you change tags on their scenes, images or galleries. The task still works.
+    description: Turn off the automatic refresh of top tags (performers, and studios and galleries if turned on below) when you change tags on scenes, images or galleries. The tasks still work.
+    type: BOOLEAN
+  studioTopTags:
+    displayName: Refresh studios' top tags on edit
+    description: When tags or the studio change on a scene, image or gallery, refresh that studio's top tags too (like performers'). Run "Tag studios with their top tags" once to catch up.
+    type: BOOLEAN
+  galleryTopTags:
+    displayName: Refresh galleries' top tags on edit
+    description: When an image's tags or galleries change, refresh its galleries' top tags too. Run "Tag galleries with their top tags" once to catch up.
     type: BOOLEAN
   galleryNameTags:
     displayName: Tag gallery images with the gallery's name
