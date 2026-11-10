@@ -141,27 +141,113 @@
   // Touch screens: press and hold a card to select it
   // ------------------------------------------------------------------
   // Stash's select checkbox only appears on mouse hover. Holding a card
-  // ticks it; once anything is selected, Stash itself makes a normal tap
+  // ticks it, and sliding the finger on ticks the cards it passes; once
+  // anything is selected, Stash itself makes a normal tap
   // add/remove cards, and its toolbar shows Edit / Delete for the selection.
 
   function setupLongPressSelect() {
     const HOLD_MS = 450;
     const MOVE_TOLERANCE = 10; // px
+    const EDGE = 70; // px from the top / bottom where dragging scrolls the page
     let timer = null, start = null, fired = false, suppressUntil = 0;
+    // After a hold, sliding the finger selects every card from the held one
+    // to the one under the finger (or unselects, if the held one was
+    // selected). Sliding back puts the ones left behind back as they were.
+    let drag = null; // { cards, from, select, changed: Set, x, y, raf }
 
     const cancel = () => {
       clearTimeout(timer);
       timer = null;
     };
 
+    const checkOf = (card) => card.querySelector(".card-check");
+
+    function cardAt(x, y) {
+      // a finger on a bar counts as just inside it
+      const { top, bottom } = visibleArea();
+      y = Math.min(bottom - 4, Math.max(top + 4, y));
+      const el = document.elementFromPoint(x, y);
+      const card = el && el.closest(".grid-card");
+      return card && drag.cards.includes(card) ? card : null;
+    }
+
+    function setCard(card, on) {
+      const check = checkOf(card);
+      if (check && check.checked !== on) check.click();
+    }
+
+    function dragTo(x, y) {
+      const card = cardAt(x, y);
+      if (!card) return;
+      const to = drag.cards.indexOf(card);
+      const lo = Math.min(drag.from, to), hi = Math.max(drag.from, to);
+      // cards no longer in the range go back to how they were
+      [...drag.changed].forEach((c) => {
+        const i = drag.cards.indexOf(c);
+        if (i < lo || i > hi) {
+          setCard(c, !drag.select);
+          drag.changed.delete(c);
+        }
+      });
+      for (let i = lo; i <= hi; i++) {
+        const c = drag.cards[i];
+        const check = checkOf(c);
+        if (check && check.checked !== drag.select) {
+          check.click();
+          drag.changed.add(c);
+        }
+      }
+    }
+
+    // The part of the screen between the bars at the top and bottom (Stash's
+    // navbar is at the bottom on phones, as is our tab bar)
+    function visibleArea() {
+      let top = 0, bottom = window.innerHeight;
+      document.querySelectorAll(".top-nav, .mui-bottom-nav").forEach((bar) => {
+        const r = bar.getBoundingClientRect();
+        if (!r.height || getComputedStyle(bar).position !== "fixed") return;
+        if (r.top < window.innerHeight / 2) top = Math.max(top, r.bottom);
+        else bottom = Math.min(bottom, r.top);
+      });
+      return { top, bottom };
+    }
+
+    // Near the top or bottom edge, keep scrolling while the finger is there
+    function edgeScroll() {
+      if (!drag) return;
+      // only once the finger has moved, so holding a card near an edge
+      // doesn't scroll by itself
+      if (!drag.moved) {
+        drag.raf = requestAnimationFrame(edgeScroll);
+        return;
+      }
+      const { top, bottom } = visibleArea();
+      let v = 0;
+      if (drag.y > bottom - EDGE) v = Math.min(1, (drag.y - (bottom - EDGE)) / EDGE);
+      else if (drag.y < top + EDGE) v = -Math.min(1, (top + EDGE - drag.y) / EDGE);
+      if (v) {
+        window.scrollBy(0, v * 18);
+        dragTo(drag.x, drag.y);
+      }
+      drag.raf = requestAnimationFrame(edgeScroll);
+    }
+
+    function endDrag() {
+      if (!drag) return;
+      cancelAnimationFrame(drag.raf);
+      document.body.classList.remove("mui-drag-selecting");
+      drag = null;
+    }
+
     window.addEventListener("touchstart", (e) => {
       cancel();
+      endDrag();
       fired = false;
       if (e.touches.length !== 1 || !(e.target instanceof Element)) return;
       const card = e.target.closest(".grid-card");
       if (!card || card.closest(".slick-list")) return; // home rows can't select
       if (e.target.closest("input, button, .btn, .card-popovers")) return;
-      const check = card.querySelector(".card-check");
+      const check = checkOf(card);
       if (!check) return;
       start = { x: e.touches[0].clientX, y: e.touches[0].clientY };
       timer = setTimeout(() => {
@@ -170,23 +256,46 @@
         suppressUntil = performance.now() + 800;
         check.click(); // goes through Stash's own selection handling
         if (navigator.vibrate) navigator.vibrate(15);
+        // the cards of this list, in order
+        const list = card.parentElement;
+        const cards = [...list.querySelectorAll(":scope > .grid-card, :scope > * > .grid-card")].filter((c) => checkOf(c));
+        drag = { cards, from: cards.indexOf(card), select: check.checked, changed: new Set(), x: start.x, y: start.y };
+        if (drag.from === -1) drag = null;
+        else {
+          document.body.classList.add("mui-drag-selecting");
+          drag.raf = requestAnimationFrame(edgeScroll);
+        }
       }, HOLD_MS);
     }, { capture: true, passive: true });
 
     window.addEventListener("touchmove", (e) => {
+      if (drag) {
+        // selecting: the finger picks cards instead of scrolling
+        if (e.cancelable) e.preventDefault();
+        const t = e.touches[0];
+        drag.x = t.clientX;
+        drag.y = t.clientY;
+        if (Math.abs(drag.x - start.x) > 2 * MOVE_TOLERANCE || Math.abs(drag.y - start.y) > 2 * MOVE_TOLERANCE) drag.moved = true;
+        dragTo(t.clientX, t.clientY);
+        return;
+      }
       if (!timer || !start) return;
       const t = e.touches[0];
       if (Math.abs(t.clientX - start.x) > MOVE_TOLERANCE || Math.abs(t.clientY - start.y) > MOVE_TOLERANCE) cancel();
-    }, { capture: true, passive: true });
+    }, { capture: true, passive: false });
 
     window.addEventListener("touchend", (e) => {
       cancel();
+      endDrag();
       if (fired) {
         e.preventDefault(); // don't also open the card
         fired = false;
       }
     }, { capture: true, passive: false });
-    window.addEventListener("touchcancel", cancel, { capture: true, passive: true });
+    window.addEventListener("touchcancel", () => {
+      cancel();
+      endDrag();
+    }, { capture: true, passive: true });
 
     // Backup: swallow the tap the browser may still send after a hold
     window.addEventListener("click", (e) => {

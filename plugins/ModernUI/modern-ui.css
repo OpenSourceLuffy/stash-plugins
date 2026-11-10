@@ -2832,3 +2832,10 @@ body.mui-viewer-open {
 .mui-viewer-close:focus-visible {
   background: rgba(70, 70, 70, 0.95);
 }
+
+/* ---- Touch screens: hold a card, then slide to select more ---- */
+body.mui-drag-selecting {
+  overscroll-behavior: none;
+  -webkit-user-select: none;
+  user-select: none;
+}

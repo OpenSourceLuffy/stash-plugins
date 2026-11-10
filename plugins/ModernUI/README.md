@@ -31,7 +31,10 @@ A cleaner, app-like look for Stash, built to feel good on a phone as well as a c
 
 **Phones**
 - App-style tab bar at the bottom of the screen. Pick and reorder its tabs from **More → Edit tab bar**. Pages added by other plugins (e.g. stash-tv) can go on it too.
-- Press and hold a card to select it, then tap others to select several for bulk editing.
+- Press and hold a card to select it, then tap others to select several for bulk editing. Or keep
+  your finger down after the hold and slide it over more cards to select them all in one go (sliding
+  back unselects them again; near the top or bottom of the screen the page scrolls along). Starting
+  on a card that's already selected unselects the cards you slide over instead.
 - Swipe left and right between images on an image's page.
 
 **Scenes**
