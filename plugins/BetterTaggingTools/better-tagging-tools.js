@@ -1,10 +1,9 @@
 // Better Tagging Tools - shows suggested tags under tag boxes: the tags
 // most often found together with the tags already chosen, the top tags of the
 // performers picked in the same form (the "Tag performers with their top
-// tags" task fills those in) and - while there are no tags or galleries -
-// the tags most used on those performers' items, the tags most used in the
-// picked galleries (until there are tags), or the library's most used
-// image/scene tags. Also adds the bulk tag windows on performer and gallery
+// tags" task fills those in), and - while there are no tags - the tags most
+// used in the picked galleries, on the picked performers' items or on the
+// studio's, or else the library's most used tags. Also adds the bulk tag windows on performer and gallery
 // pages.
 (function () {
   "use strict";
@@ -38,7 +37,7 @@
   // ---- what's picked in the form right now ---------------------------------
   // Every mounted performer box and gallery box reports its picks here; tag
   // boxes listen.
-  const picks = { performers: new Map(), galleries: new Map() }; // type -> (reporter key -> [{id, name}])
+  const picks = { performers: new Map(), galleries: new Map(), studios: new Map() }; // type -> (reporter key -> [{id, name}])
   const listeners = new Set();
   const notify = () => listeners.forEach((fn) => fn());
 
@@ -179,8 +178,8 @@
     };
     const skip = await galleryNameTagIds();
     let all = true;
-    let found = await items("INCLUDES_ALL");
-    if (found.count < 2 && ids.length > 1) {
+    let found = await items(by === "studios" ? "INCLUDES" : "INCLUDES_ALL");
+    if (by !== "studios" && found.count < 2 && ids.length > 1) {
       all = false;
       found = await items("INCLUDES");
     }
@@ -203,38 +202,41 @@
 
   // The most used image or scene tags in the whole library
   const libraryCommon = cached(60000, async (kind) => {
-    const sort = kind === "image" ? "images_count" : "scenes_count";
+    const one = KINDS[kind][4];
     const [d, skip] = await Promise.all([
       gql(
-        `query($f: FindFilterType) { findTags(filter: $f) { tags { ${TAG_FIELDS} image_count scene_count } } }`,
-        { f: { sort, direction: "DESC", per_page: 80 } }
+        `query($f: FindFilterType) { findTags(filter: $f) { tags { ${TAG_FIELDS} ${one}_count } } }`,
+        { f: { sort: KINDS[kind][3] + "_count", direction: "DESC", per_page: 80 } }
       ),
       galleryNameTagIds(),
     ]);
     return d.findTags.tags
-      .filter((t) => !skip.has(String(t.id)))
-      .map((t) => ({ tag: t, uses: kind === "image" ? t.image_count : t.scene_count }));
+      .filter((t) => !skip.has(String(t.id)) && t[one + "_count"] > 0)
+      .map((t) => ({ tag: t, uses: t[one + "_count"] }));
   });
 
-  // On an image or scene's own page, what kind it is
-  function pageKind() {
-    const m = location.pathname.match(/^\/(images|scenes)\/\d+/);
-    return m ? (m[1] === "images" ? "image" : "scene") : null;
+  // On a scene, image, gallery, performer, studio or group page (or their
+  // lists, for bulk edit) rather than e.g. a tag's own page
+  function onItemPage() {
+    const m = location.pathname.match(/^\/(\w+)/);
+    return !!(m && KINDS[m[1]]);
   }
 
   // ---- the suggestion rows -------------------------------------------------
-  // Rows: the tags that go with the chosen ones, the picked performers' top
-  // tags, the tags most used in the picked galleries (only while no tags are
-  // chosen), and - when there are neither, on an image or scene
-  // page - the library's most used image/scene tags. `fixed` gives the
-  // performers directly (bulk tag window) and skips the other rows.
+  // Rows: the tags that go with the chosen ones; else the tags most used in
+  // the picked galleries; else on the picked performers' items; else on the
+  // studio's; else the library's most used tags. Plus the picked performers'
+  // top tags. `fixed` gives the performers directly (bulk tag window) and
+  // skips the other rows.
   function Suggestions({ values, onSelect, fixed, label }) {
     const [state, setState] = React.useState(() => ({
       performers: picked("performers"),
       galleries: picked("galleries"),
+      studios: picked("studios"),
     }));
     const performers = fixed || state.performers;
     const galleries = fixed ? [] : state.galleries;
+    const studios = fixed ? [] : state.studios;
     const [rows, setRows] = React.useState([]);
     // "Ask AI" (local model via Ollama), on a scene or image's own page
     const [ai, setAi] = React.useState({ state: "idle" });
@@ -242,7 +244,7 @@
 
     React.useEffect(() => {
       if (fixed) return;
-      const fn = () => setState({ performers: picked("performers"), galleries: picked("galleries") });
+      const fn = () => setState({ performers: picked("performers"), galleries: picked("galleries"), studios: picked("studios") });
       listeners.add(fn);
       fn();
       return () => listeners.delete(fn);
@@ -250,51 +252,77 @@
 
     const pSig = performers.map((p) => p.id).sort().join(",");
     const gSig = galleries.map((g) => g.id).sort().join(",");
+    const sSig = studios.map((x) => x.id).sort().join(",");
     const chosen = (values || []).map((t) => ({ id: String(t.id), name: t.name }));
     const tSig = fixed ? "" : chosen.map((t) => t.id).sort().join(",");
     React.useEffect(() => {
       let live = true;
       (async () => {
+        // Each source is only asked when the ones before it found nothing:
+        // the chosen tags, the picked galleries, the picked performers, the
+        // studio, and last the library's most used tags. The performers' top
+        // tags are shown whenever there are performers.
         const out = [];
-        // Tags already chosen: what's usually tagged along with them
+        const found = () => out.some((r) => r.items.length);
+        const kind = editingKind();
+        const plural = KINDS[kind][3];
+        const nounOf = (n) => KINDS[kind][n === 1 ? 4 : 3];
+        const both = (names) => names.join(" & ");
+        const poss = (name) => name + (/s$/i.test(name) ? "'" : "'s");
+
         if (chosen.length && !fixed) {
-          const kind = editingKind();
           const ids = chosen.map((t) => t.id).sort();
           const common = await tagsCommon(kind + ":" + tSig, kind, ids);
           const names = chosen.map((t) => t.name);
-          const noun = KINDS[kind][common.total === 1 ? 4 : 3];
           out.push({
             key: "tags",
-            label: !common.all
-              ? "Often with these tags"
-              : names.length <= 2
-              ? `Goes with ${names.join(" & ")}`
-              : "Goes with these tags",
+            label: !common.all ? "Often with these tags" : names.length <= 2 ? `Goes with ${both(names)}` : "Goes with these tags",
             items: common.items.map((e) => ({
               tag: e.tag,
-              title: `On ${e.uses} of the ${common.total} ${noun} with ${common.all ? (names.length > 1 ? "all these tags" : names[0]) : "any of these tags"}`,
+              title: `On ${e.uses} of the ${common.total} ${nounOf(common.total)} with ${common.all ? (names.length > 1 ? "all these tags" : names[0]) : "any of these tags"}`,
             })),
           });
         }
-        // No tags and no galleries yet: the tags most used on the picked
-        // performers' other scenes / images / galleries
-        const pKind = editingKind();
-        if (performers.length && !fixed && !chosen.length && !galleries.length && ["scenes", "images", "galleries"].includes(pKind)) {
+
+        if (galleries.length && !found()) {
+          const ids = galleries.map((g) => g.id).sort();
+          const common = await galleryCommon(ids.join(","), ids);
+          const gNames = galleries.map((g) => g.name).filter(Boolean);
+          out.push({
+            key: "galleries",
+            label: gNames.length === galleries.length && gNames.length <= 2 ? `Common in ${both(gNames)}` : "Common in these galleries",
+            items: common.items.map((e) => ({ tag: e.tag, title: `On ${e.uses} of ${common.total} images` })),
+          });
+        }
+
+        if (performers.length && !fixed && !found() && ["scenes", "images", "galleries"].includes(kind)) {
           const ids = performers.map((p) => p.id).sort();
-          const common = await tagsCommon(pKind + ":p:" + pSig, pKind, ids, "performers");
+          const common = await tagsCommon(kind + ":p:" + pSig, kind, ids, "performers");
           const names = performers.map((p) => p.name);
-          const noun = KINDS[pKind][common.total === 1 ? 4 : 3];
-          const who = !common.all ? "any of these performers" : names.length === 1 ? names[0] : names.length === 2 ? names.join(" & ") : "all these performers";
+          const who = !common.all ? "any of these performers" : names.length <= 2 ? both(names) : "all these performers";
           out.push({
             key: "perfcommon",
             label: !common.all
-              ? `Common on these performers' ${KINDS[pKind][3]}`
+              ? `Common on these performers' ${plural}`
               : names.length <= 2
-              ? `Common on ${names.join(" & ")}'s ${KINDS[pKind][3]}`
-              : `Common on their ${KINDS[pKind][3]} together`,
-            items: common.items.map((e) => ({ tag: e.tag, title: `On ${e.uses} of the ${common.total} ${noun} with ${who}` })),
+              ? `Common on ${poss(both(names))} ${plural}`
+              : `Common on their ${plural} together`,
+            items: common.items.map((e) => ({ tag: e.tag, title: `On ${e.uses} of the ${common.total} ${nounOf(common.total)} with ${who}` })),
           });
         }
+
+        if (studios.length && !fixed && !found() && ["scenes", "images", "galleries", "groups"].includes(kind)) {
+          const ids = studios.map((x) => x.id).sort();
+          const common = await tagsCommon(kind + ":s:" + sSig, kind, ids, "studios");
+          const names = studios.map((x) => x.name).filter(Boolean);
+          const which = names.length === 1 ? names[0] : "these studios";
+          out.push({
+            key: "studio",
+            label: `Common on ${poss(which)} ${plural}`,
+            items: common.items.map((e) => ({ tag: e.tag, title: `On ${e.uses} of the ${common.total} ${nounOf(common.total)} from ${which}` })),
+          });
+        }
+
         if (performers.length) {
           const lists = await performerTags(performers.map((p) => p.id));
           const byTag = new Map(); // tag id -> {tag, from: [names]}
@@ -311,33 +339,26 @@
           const names = performers.map((p) => p.name);
           out.push({
             key: "performers",
-            label:
-              label ||
-              (names.length === 1 ? `${names[0]}'s top tags` : names.length === 2 ? `Top tags of ${names.join(" & ")}` : "Performers' top tags"),
+            label: label || (names.length === 1 ? `${poss(names[0])} top tags` : names.length === 2 ? `Top tags of ${both(names)}` : "Performers' top tags"),
             items,
           });
         }
-        // The picked galleries' common tags, until the item has tags of its own
-        if (galleries.length && !chosen.length) {
-          const ids = galleries.map((g) => g.id).sort();
-          const common = await galleryCommon(ids.join(","), ids);
-          const gNames = galleries.map((g) => g.name).filter(Boolean);
-          out.push({
-            key: "galleries",
-            label:
-              gNames.length === galleries.length && gNames.length <= 2
-                ? `Common in ${gNames.join(" & ")}`
-                : "Common in these galleries",
-            items: common.items.map((e) => ({ tag: e.tag, title: `On ${e.uses} of ${common.total} images` })),
-          });
-        }
-        const kind = pageKind();
-        if (!fixed && !chosen.length && !performers.length && !galleries.length && kind) {
-          const common = await libraryCommon(kind, kind);
+
+        // Nothing else: the library's most used tags for this kind of item
+        // (galleries, studios and groups fall back to image / scene tags
+        // while none of them has tags)
+        if (!fixed && !found() && onItemPage()) {
+          let lk = kind;
+          let common = await libraryCommon(lk, lk);
+          if (!common.length && kind !== "scenes" && kind !== "images") {
+            lk = kind === "galleries" ? "images" : "scenes";
+            common = await libraryCommon(lk, lk);
+          }
+          const one = KINDS[lk][4];
           out.push({
             key: "library",
-            label: `Most used ${kind} tags`,
-            items: common.map((e) => ({ tag: e.tag, title: `Used on ${e.uses} ${kind}s` })),
+            label: `Most used ${one} tags`,
+            items: common.map((e) => ({ tag: e.tag, title: `Used on ${e.uses} ${KINDS[lk][e.uses === 1 ? 4 : 3]}` })),
           });
         }
         if (live) setRows(out);
@@ -345,7 +366,7 @@
       return () => {
         live = false;
       };
-    }, [pSig, gSig, tSig, fixed ? "fixed" : pageKind()]);
+    }, [pSig, gSig, sSig, tSig, fixed ? "fixed" : location.pathname]);
 
     async function askAi() {
       setAi({ state: "loading" });
@@ -436,11 +457,13 @@
   for (const [component, type] of [
     ["PerformerSelect", "performers"],
     ["GallerySelect", "galleries"],
+    ["StudioSelect", "studios"],
   ]) {
     api.patch.after(component, function (...args) {
       const props = args[0] || {};
       const result = args[args.length - 1];
-      if (!props.isMulti || !props.onSelect) return result;
+      // the studio box picks one studio; the others are multi-pick
+      if ((!props.isMulti && type !== "studios") || !props.onSelect) return result;
       return h(React.Fragment, null, result, h(PickReporter, { type, values: props.values }));
     });
   }

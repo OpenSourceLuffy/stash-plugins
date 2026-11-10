@@ -15,22 +15,27 @@ with a local AI model.
 
 Under the **Tags** box when you edit a scene, image or gallery:
 
+The first row comes from the first of these the item has:
+
 | The item has… | You see |
 | --- | --- |
 | Tags | **Goes with [tag]**: the tags most often found together with the ones it already has |
-| Performers, but no tags or gallery yet | **Common on [Name]'s scenes** (or images, galleries): the tags used most on that performer's other items |
-| Performers | **[Name]'s top tags**: the tags on the performers you've picked |
-| A gallery, but no tags yet | **Common in [gallery]**: the tags used most on that gallery's photos |
-| None of these | **Most used image tags** (or scene tags) across your library |
+| A gallery | **Common in [gallery]**: the tags used most on that gallery's photos |
+| Performers | **Common on [Name]'s scenes** (or images, galleries): the tags used most on that performer's items |
+| A studio | **Common on [Studio]'s scenes** (or images, galleries): the tags used most on that studio's items |
+| None of these | **Most used scene tags** (or image tags, …) across your library |
+
+If one finds nothing new to suggest, the next one is used. With performers picked, **[Name]'s top
+tags** is shown as well.
 
 - **Goes with** looks at every item of the same kind (scenes on a scene, images on an image, and so on)
   that has *all* the tags already chosen, and suggests the other tags those items have most often.
   With one tag it uses everything with that tag. If no other item has all of them, it uses items with
   any of them instead (**Often with these tags**). Hover over a tag to see how many items it's on.
-- **Common on [Name]'s scenes** works the same way with the performers you've picked: items with
-  all of them, else any of them. Once you add a tag, **Goes with** takes over.
+- The performer row works the same way: items with all the picked performers, else any of them.
+  Once you add a tag, **Goes with** takes over.
 - Click a tag to add it, or **Add all**. They go into the form like any other tag, so you still press **Save**.
-- The rows update as soon as you change the tags, performers or galleries in the form. Adding a
+- The rows update as soon as you change the tags, galleries, performers or studio in the form. Adding a
   suggested tag narrows the next suggestions.
 - Tags already on the item aren't suggested.
 
