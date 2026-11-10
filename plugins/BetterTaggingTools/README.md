@@ -4,7 +4,8 @@ Tags each performer with the tags used most often on their scenes, images and ga
 uses those tags to suggest tags while you edit. It also adds bulk tagging to performer and
 gallery pages, can tag a gallery's photos with the gallery's name, can give tags without
 a picture one from your library, keeps tag names consistently capitalised, auto tags from file
-names in more places than Stash does, and can tag scenes and images with a local AI model.
+names in more places than Stash does, fills in dates from file names, and can tag scenes and images
+with a local AI model.
 
 ![Suggested tags under the Tags box](../../docs/screenshots/Tag_Suggestions.png)
 
@@ -127,6 +128,27 @@ also match by their aliases. A studio is only set when the item has none. Anythi
 > Short, everyday tag names (like a tag called "Me") match a lot of file names. Turn on
 > **Ignore Auto Tag** on such tags (edit the tag) to keep them out.
 
+## Dates from file names
+
+Scenes, images and galleries without a date can get the one in their file name, or in the name of
+the folder they're in:
+
+| File name | Date |
+| --- | --- |
+| `2023-05-19_video_0042.m4v`, `IMG-20121202-00362.jpg` | 2023-05-19, 2012-12-02 |
+| `Studio - 6 Nov 2026 - Title.mp4`, `Name 17 may 2026 title.mp4` | 2026-11-06, 2026-05-17 |
+| `Studio - November 6th, 2025 - Title.mp4` | 2025-11-06 |
+| `Studio.21.07.08.Name.XXX.1080p.mp4` (scene release names) | 2021-07-08 |
+| `05-27-2014 17_26_15.jpg`, `ScreenRecording_05-19-2025 …` | 2014-05-27, 2025-05-19 |
+
+Only full dates count, so a lone year (`1998_IMG_0004`) or a month (`01-January`) is ignored, and so
+are dates in the future. When it can't tell the day from the month (`05-06-2014`), the file is left alone.
+A date you've already set is never changed.
+
+- **Fill in dates from file names** (task), with **Preview dates from file names** to check first.
+- **Fill in dates of new scenes, images and galleries** (setting): new items from a scan get their date.
+- **Auto tag this / Auto tag selected** and AI tagging fill in empty dates too.
+
 ## AI tagging (local, with Ollama)
 
 Tags scenes and images with a vision model running on your own computer through
@@ -185,6 +207,7 @@ Under **Settings → Plugins → Better Tagging Tools**:
 | Give tags a picture automatically | See above. |
 | Capitalise new tags automatically | See "Tag names" above. |
 | Auto tag new performers, studios and tags | See "Auto tag" above. |
+| Fill in dates of new scenes, images and galleries | See "Dates from file names" above. |
 | AI: tag new scenes and images automatically | See "AI tagging" above. |
 | AI: don't auto tag from file names first | Skip the file-name matching before the AI looks at an item. |
 | AI: Ollama address | Default `http://host.docker.internal:11434`. |

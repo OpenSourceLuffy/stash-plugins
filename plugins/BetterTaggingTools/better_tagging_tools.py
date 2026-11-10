@@ -125,6 +125,7 @@ def settings(stash, plugin_dir=None):
         "spellings": {i.strip().lower(): i.strip() for i in (s.get("titleCaseSpellings") or "").split(",") if i.strip()},
         "ai": ai_settings(s),
         "autotag_new": bool(s.get("autoTagNew")),
+        "dates_new": bool(s.get("datesNewItems")),
     }
 
 
@@ -332,7 +333,8 @@ def run_hook(stash, plugin_dir, hook):
     # A new image (scans), or one moved into a gallery
     image_event = kind == "Image" and (action == "Create" or "gallery_ids" in fields)
     new_item = action == "Create" and kind in ("Scene", "Image")
-    if not (performer_edit or gallery_event or image_event or new_item):
+    created = action == "Create" and kind in HOOK_ITEMS
+    if not (performer_edit or gallery_event or image_event or new_item or created):
         return
 
     cfg = settings(stash, plugin_dir)
@@ -360,19 +362,24 @@ def run_hook(stash, plugin_dir, hook):
     ai_scenes, ai_images = [], []
     if new_item and cfg["ai"]["auto"]:
         (ai_scenes if kind == "Scene" else ai_images).append(str(hook["id"]))
-    if performers or galleries or images or tags or ai_scenes or ai_images:
-        enqueue(stash, plugin_dir, performers, galleries, images, tags, ai_scenes, ai_images)
+    dates = {}
+    if created and cfg["dates_new"]:
+        dates = {"dates_" + kind.lower(): [str(hook["id"])]}
+    if performers or galleries or images or tags or ai_scenes or ai_images or dates:
+        enqueue(stash, plugin_dir, performers, galleries, images, tags, ai_scenes, ai_images, **dates)
 
 
 JOB_DESCRIPTION = "Better Tagging Tools: processing recent edits"
 QUIET_SECONDS = 4  # how long edits must stop before the batch counts as done
 MAX_WAIT_SECONDS = 600
 QUEUE_KEYS = ("performers", "galleries", "images", "tags", "ai_scenes", "ai_images",
-              "autotag_performers", "autotag_studios", "autotag_tags")
+              "autotag_performers", "autotag_studios", "autotag_tags",
+              "dates_scene", "dates_image", "dates_gallery")
 
 
 def enqueue(stash, plugin_dir, performers=(), galleries=(), images=(), tags=(), ai_scenes=(), ai_images=(),
-            autotag_performers=(), autotag_studios=(), autotag_tags=()):
+            autotag_performers=(), autotag_studios=(), autotag_tags=(),
+            dates_scene=(), dates_image=(), dates_gallery=()):
     """Add to the waiting list and make sure one background job is lined up.
 
     Stash runs hooks one after another and waits for each, so a batch edit
@@ -382,7 +389,8 @@ def enqueue(stash, plugin_dir, performers=(), galleries=(), images=(), tags=(), 
     with locked_queue(plugin_dir) as queue:
         last = queue.get("touched", 0)
         for key, ids in zip(QUEUE_KEYS, (performers, galleries, images, tags, ai_scenes, ai_images,
-                                         autotag_performers, autotag_studios, autotag_tags)):
+                                         autotag_performers, autotag_studios, autotag_tags,
+                                         dates_scene, dates_image, dates_gallery)):
             if ids:
                 queue[key] = sorted(set(queue.get(key, [])) | set(ids), key=int)
         queue["touched"] = time.time()
@@ -436,6 +444,17 @@ def run_queued(stash, plugin_dir):
             autotag_new(stash, plugin_dir, todo["autotag_performers"], todo["autotag_studios"], todo["autotag_tags"])
         except Exception as e:
             log("warning", f"Auto tagging for new performers/studios/tags skipped: {e}")
+
+    if cfg["dates_new"] and any(todo["dates_" + k] for k in ("scene", "image", "gallery")):
+        try:
+            filled = 0
+            for k in ("scene", "image", "gallery"):
+                if todo["dates_" + k]:
+                    filled += fill_dates(stash, [(k, x) for x in autotag_load(stash, k, todo["dates_" + k])], apply=True, quiet=True)
+            if filled:
+                log("info", f"Filled in the date of {filled} new item(s) from their file names")
+        except Exception as e:
+            log("warning", f"Dates for new items skipped: {e}")
 
     if (todo["ai_scenes"] or todo["ai_images"]) and cfg["ai"]["auto"]:
         try:
@@ -1174,17 +1193,137 @@ def autotag_index(stash, plugin_dir):
     return index
 
 
-def autotag_path(kind, item):
-    """The path Auto Tag looks at, without the file extension."""
+def item_path(kind, item):
+    """The item's file path (a gallery: its zip, else its folder)."""
     if kind == "gallery":
         f = (item.get("files") or [None])[0]
         path = f["path"] if f else ((item.get("folder") or {}).get("path") or "")
     else:
         files = item.get("visual_files") if kind == "image" else item.get("files")
         path = ((files or [None])[0] or {}).get("path") or ""
+    return path.replace("\\", "/")
+
+
+def autotag_path(kind, item):
+    """The path Auto Tag looks at, without the file extension."""
+    path = item_path(kind, item)
     if path and kind != "gallery" or path.lower().endswith(".zip"):
         path = os.path.splitext(path)[0]
-    return path.replace("\\", "/")
+    return path
+
+
+# --- dates from file names --------------------------------------------------
+# Only full dates count (a lone year like "1998_IMG_0004" or a month like
+# "01-January" doesn't). Looked for in the file name, then in its folder's.
+
+MONTHS = {m: i + 1 for i, m in enumerate(
+    ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"))}
+_MON = r"(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?(?![a-z])"
+_SEP = r"[\s\-_.,]+"
+DATE_PATTERNS = (
+    # 2023-05-19, 2023_05_19, 2023.05.19, 20230519
+    ("ymd", re.compile(r"(?<!\d)((?:19|20)\d\d)([-_. ]?)(\d\d)\2(\d\d)(?!\d)")),
+    # 6 Nov 2026, 17 may 2026, 6th November, 2026
+    ("dmy_name", re.compile(r"(?<![a-z\d])(\d{1,2})(?:st|nd|rd|th)?" + _SEP + _MON + _SEP + r"((?:19|20)\d\d)(?!\d)")),
+    # Nov 6 2026, November 6th, 2026
+    ("mdy_name", re.compile(r"(?<![a-z])" + _MON + _SEP + r"(\d{1,2})(?:st|nd|rd|th)?" + _SEP + r"((?:19|20)\d\d)(?!\d)")),
+    # 05-27-2014 / 27.05.2014 (only when it's clear which is the day)
+    ("nny", re.compile(r"(?<!\d)(\d\d)([-_.])(\d\d)\2((?:19|20)\d\d)(?!\d)")),
+    # scene releases: Studio.21.07.08.Name
+    ("yymmdd", re.compile(r"(?:^|[\s._\-\[(])(\d\d)\.(\d\d)\.(\d\d)(?=$|[\s._\-\])])")),
+)
+
+
+def _valid_date(y, m, d):
+    import datetime
+    try:
+        day = datetime.date(int(y), int(m), int(d))
+    except ValueError:
+        return None
+    if day.year < 1970 or day > datetime.date.today() + datetime.timedelta(days=1):
+        return None
+    return day.isoformat()
+
+
+def date_in_text(text):
+    """The first full date in a piece of text, as YYYY-MM-DD, else None."""
+    text = text.lower()
+    found = []
+    for kind, pat in DATE_PATTERNS:
+        for m in pat.finditer(text):
+            g = m.groups()
+            if kind == "ymd":
+                day = _valid_date(g[0], g[2], g[3])
+            elif kind == "dmy_name":
+                day = _valid_date(g[2], MONTHS[g[1][:3]], g[0])
+            elif kind == "mdy_name":
+                day = _valid_date(g[2], MONTHS[g[0][:3]], g[1])
+            elif kind == "nny":
+                a, b = int(g[0]), int(g[2])
+                if a > 12 and b <= 12:
+                    day = _valid_date(g[3], b, a)
+                elif b > 12 and a <= 12:
+                    day = _valid_date(g[3], a, b)
+                else:
+                    day = None  # 05-06-2014: May 6th or 5th June? can't tell
+            else:
+                day = _valid_date("20" + g[0], g[1], g[2])
+            if day:
+                found.append((m.start(), day))
+    return min(found)[1] if found else None
+
+
+def date_from_path(path):
+    """A date from the file name, else from the folder it's in."""
+    if not path:
+        return None
+    name = os.path.basename(path)
+    stem = os.path.splitext(name)[0] if "." in name else name
+    return date_in_text(stem) or date_in_text(os.path.basename(os.path.dirname(path)))
+
+
+def fill_dates(stash, work, apply, quiet=False):
+    """Give items without a date the one in their file name. `work`:
+    [(kind, item)]. Returns how many got (or would get) a date."""
+    by_date = defaultdict(list)
+    for kind, item in work:
+        if item.get("date"):
+            continue
+        day = date_from_path(item_path(kind, item))
+        if day:
+            by_date[(kind, day)].append(item)
+    if apply:
+        for (kind, day), items in by_date.items():
+            mutation, input_type = AUTOTAG_UPDATE[kind]
+            ids = [i["id"] for i in items]
+            for i in range(0, len(ids), BULK_BATCH):
+                stash.call(f"mutation($i: {input_type}!) {{ {mutation}(input: $i) {{ id }} }}",
+                           {"i": {"ids": ids[i:i + BULK_BATCH], "date": day}})
+    return sum(len(v) for v in by_date.values()) if quiet else by_date
+
+
+def run_dates(stash, preview):
+    """Task: fill in empty dates on scenes, images and galleries from their
+    file names (or `preview`: only log what it would do)."""
+    work = []
+    for kind in ("scene", "image", "gallery"):
+        query, field = {"scene": ("findScenes", "scenes"), "image": ("findImages", "images"),
+                        "gallery": ("findGalleries", "galleries")}[kind]
+        items = stash.call(f"{{ {query}(filter: {{per_page: -1}}) {{ {field} {{ {AUTOTAG_FIELDS[kind]} }} }} }}")[query][field]
+        work += [(kind, i) for i in items]
+    empty = sum(1 for _, i in work if not i.get("date"))
+    by_date = fill_dates(stash, work, apply=not preview)
+    counts = Counter(kind for (kind, _), items in by_date.items() for _ in items)
+    total = sum(counts.values())
+    examples = [f'{os.path.basename(item_path(k, i))} → {d}' for (k, d), items in sorted(by_date.items(), key=lambda x: x[0][1]) for i in items[:1]]
+    for line in examples[:40]:
+        log("info", ("Would set " if preview else "Set ") + line)
+    if len(examples) > 40:
+        log("info", f"... and {len(examples) - 40} more dates")
+    parts = ", ".join(f"{n} {k}{'s' if n != 1 and k != 'gallery' else ''}".replace("gallerys", "galleries") for k, n in counts.items())
+    verb = "would get" if preview else "got"
+    log("info", f"{'Preview: ' if preview else 'Done: '}{total} of {empty} items without a date {verb} one from the file name"
+        + (f" ({parts})" if parts else "") + (". Nothing was saved." if preview else "."))
 
 
 def autotag_match(index, path):
@@ -1209,10 +1348,10 @@ def autotag_match(index, path):
 
 
 AUTOTAG_FIELDS = {
-    "scene": "id title performers { id } studio { id } tags { id } files { path }",
-    "image": "id title performers { id } studio { id } tags { id } "
+    "scene": "id title date performers { id } studio { id } tags { id } files { path }",
+    "image": "id title date performers { id } studio { id } tags { id } "
              "visual_files { __typename ... on ImageFile { path } ... on VideoFile { path } }",
-    "gallery": "id title performers { id } studio { id } tags { id } files { path } folder { path }",
+    "gallery": "id title date performers { id } studio { id } tags { id } files { path } folder { path }",
 }
 AUTOTAG_UPDATE = {
     "scene": ("bulkSceneUpdate", "BulkSceneUpdateInput"),
@@ -1222,7 +1361,8 @@ AUTOTAG_UPDATE = {
 
 
 def autotag_item(stash, index, kind, item, apply):
-    """Match one item's path; add what it doesn't have yet (when `apply`).
+    """Match one item's path; add what it doesn't have yet (when `apply`),
+    and fill in an empty date from the file name.
     Returns (names added, ids of the tags added)."""
     path = autotag_path(kind, item)
     if not path:
@@ -1232,10 +1372,13 @@ def autotag_item(stash, index, kind, item, apply):
     tags -= {t["id"] for t in item.get("tags") or []}
     if item.get("studio"):
         studio = None  # Auto Tag never replaces a studio
-    if not (performers or studio or tags):
+    day = None if item.get("date") else date_from_path(item_path(kind, item))
+    if not (performers or studio or tags or day):
         return [], set()
     if apply:
         inp = {"ids": [item["id"]]}
+        if day:
+            inp["date"] = day
         if performers:
             inp["performer_ids"] = {"ids": sorted(performers), "mode": "ADD"}
         if tags:
@@ -1247,6 +1390,7 @@ def autotag_item(stash, index, kind, item, apply):
     added = [names[p] for p in sorted(performers, key=int)]
     added += [names["s" + studio]] if studio else []
     added += [names[t] for t in sorted(tags, key=int)]
+    added += [f"date {day}"] if day else []
     return added, tags
 
 
@@ -1275,7 +1419,8 @@ def run_autotag_items(stash, plugin_dir, kind, ids, with_images=False):
         names, _ = autotag_item(stash, index, k, item, apply=True)
         if names:
             changed += 1
-            added.update(names)
+            # many items: count dates together instead of listing each one
+            added.update(n if len(work) == 1 or not n.startswith("date ") else "a date" for n in names)
         progress((n + 1) / max(len(work), 1))
     summary = ", ".join(f"{name} ({c})" if c > 1 else name for name, c in added.most_common())
     if changed:
@@ -1394,9 +1539,9 @@ def ai_pictures(stash, kind, item):
 
 
 AI_ITEM_FIELDS = {
-    "image": "id title organized tags { id name } performers { id } studio { id } paths { thumbnail } "
+    "image": "id title date organized tags { id name } performers { id } studio { id } paths { thumbnail } "
              "visual_files { __typename ... on ImageFile { path } ... on VideoFile { path } }",
-    "scene": "id title organized tags { id name } performers { id } studio { id } files { path duration }",
+    "scene": "id title date organized tags { id name } performers { id } studio { id } files { path duration }",
 }
 
 
@@ -1684,6 +1829,8 @@ def main():
             print(json.dumps({"output": run_new_picture(stash, plugin_dir, args["tag_id"])}))
         elif args.get("mode") == "frame":
             print(json.dumps({"output": run_frame(stash, args)}))
+        elif args.get("mode") in ("dates", "dates_preview"):
+            run_dates(stash, preview=args["mode"] == "dates_preview")
         elif args.get("mode") == "autotag":
             ids = [i for i in str(args.get("ids") or "").split(",") if i]
             result = run_autotag_items(stash, plugin_dir, args["kind"], ids, bool(args.get("with_images")))

@@ -1,6 +1,6 @@
 name: Better Tagging Tools
-description: Tags each performer with the tags used most often in their scenes, images and galleries, shows those tags as one-click "Suggested tags" when editing tags, and adds "Bulk tag" buttons on performer pages (a performer's scenes, images and galleries) and gallery pages (a gallery's images). Can also tag every image in a gallery with the gallery's name, give tags without a picture one from your library, keep tag names consistently capitalised, auto tag from file names (new performers, studios and tags, or one item at a time), and tag scenes and images with a local AI model (Ollama).
-version: "1.2"
+description: Tags each performer with the tags used most often in their scenes, images and galleries, shows those tags as one-click "Suggested tags" when editing tags, and adds "Bulk tag" buttons on performer pages (a performer's scenes, images and galleries) and gallery pages (a gallery's images). Can also tag every image in a gallery with the gallery's name, give tags without a picture one from your library, keep tag names consistently capitalised, auto tag from file names (new performers, studios and tags, or one item at a time), fill in dates from file names, and tag scenes and images with a local AI model (Ollama).
+version: "1.3"
 url: https://github.com/OpenSourceLuffy/stash-plugins/tree/main/plugins/BetterTaggingTools
 exec:
   - python
@@ -21,7 +21,7 @@ hooks:
       - Image.Update.Post
       - Gallery.Update.Post
   - name: New galleries, scenes and images
-    description: When "Tag gallery images with the gallery's name" is on, new galleries and newly scanned images get their gallery-name tag; when "AI-tag new scenes and images" is on, new scenes and images are AI-tagged. They're queued and a background job does the work once the scan is done.
+    description: When "Tag gallery images with the gallery's name" is on, new galleries and newly scanned images get their gallery-name tag; when "AI-tag new scenes and images" is on, new scenes and images are AI-tagged; when "Fill in dates of new scenes, images and galleries" is on, they get the date from their file name. They're queued and a background job does the work once the scan is done.
     triggeredBy:
       - Gallery.Create.Post
       - Image.Create.Post
@@ -70,6 +70,14 @@ tasks:
     description: Uses the local AI model (Ollama) on every scene and image it hasn't looked at before, after auto tagging each one from its file path (only ever adds). Can take many hours on a big library; it can be stopped and run again, and carries on where it left off.
     defaultArgs:
       mode: ai_all
+  - name: Fill in dates from file names
+    description: Gives scenes, images and galleries that have no date the date in their file name (or their folder's name) - "2023-05-19_video", "Studio - 6 Nov 2026 - Title", "Studio.21.07.08.Name", "05-27-2014 17_26_15" and similar. Only full dates count, and dates you've already set are never changed.
+    defaultArgs:
+      mode: dates
+  - name: Preview dates from file names (no changes)
+    description: Writes what "Fill in dates from file names" would set to the log, without changing anything.
+    defaultArgs:
+      mode: dates_preview
   - name: Capitalise tag names
     description: Capitalises every tag name the same way - "dating app" becomes "Dating App", small words like "on", "to" and "and" stay lowercase in the middle ("Behind the Scenes"). Capitals already in a name are never lowered.
     defaultArgs:
@@ -123,6 +131,10 @@ settings:
   autoTagNew:
     displayName: Auto tag new performers, studios and tags
     description: When a performer, studio or tag is created (by hand, a scraper or another plugin), run Stash's Auto Tag for it, so files with its name in their path get it straight away. Ones set to "Ignore Auto Tag" are skipped.
+    type: BOOLEAN
+  datesNewItems:
+    displayName: Fill in dates of new scenes, images and galleries
+    description: When a scan adds a scene, image or gallery, set its date from the file name (see the "Fill in dates from file names" task). "Auto tag this" and AI tagging also fill in empty dates.
     type: BOOLEAN
   aiAuto:
     displayName: "AI: tag new scenes and images automatically"
