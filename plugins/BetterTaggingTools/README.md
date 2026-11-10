@@ -257,6 +257,12 @@ stay lowercase in the middle of a name (`behind the scenes` → `Behind the Scen
 
 Stash treats tag names that differ only in case as the same tag, so renaming never creates duplicates.
 
+## Tasks
+
+Under **Settings → Tasks → Plugin Tasks → Better Tagging Tools** the tasks are grouped into
+sections you can open and close: **Top tags**, **AI tagging**, **Titles**, **Dates**, **Tag pictures**
+and **Tidy up tags**. Each section starts with its preview task, which only writes to the log.
+
 ## Settings
 
 Under **Settings → Plugins → Better Tagging Tools**:

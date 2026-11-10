@@ -1300,4 +1300,84 @@
       });
     }, 150);
   }).observe(document.body, { childList: true, subtree: true });
+
+  // ---- Settings → Tasks: this plugin's tasks in sections --------------------
+  // Stash lists a plugin's tasks one after another. Put a heading above each
+  // group that shows / hides its tasks (closed to start with; the page
+  // remembers which you opened). The task rows themselves stay where Stash
+  // put them, only hidden or shown.
+  const TASK_GROUPS = [
+    ["toptags", "Top tags", "Tag performers, studios and galleries with their most used tags",
+      ["Preview top tags (no changes)", "Tag performers with their top tags", "Tag studios with their top tags",
+       "Tag galleries with their top tags"]],
+    ["ai", "AI tagging", "Tag scenes and images with the local AI model (Ollama)",
+      ["AI tagging: preview on 10 items (no changes)", "AI tagging: items with no tags", "AI tagging: everything not done yet"]],
+    ["titles", "Titles", "Titles from file names, or written by the AI",
+      ["Preview titles from file names (no changes)", "Fill in titles from file names", "Redo titles made from file names",
+       "AI titles: preview on 10 items (no changes)", "AI titles: scenes without a title", "AI titles: images without a title"]],
+    ["dates", "Dates", "Dates from file names",
+      ["Preview dates from file names (no changes)", "Fill in dates from file names"]],
+    ["pictures", "Tag pictures", "Give tags a picture from your library",
+      ["Give tags without a picture one from your library", "Give tags that share a picture their own",
+       "Give every tag a new picture (replaces existing ones)"]],
+    ["tidy", "Tidy up tags", "Capitalisation and gallery-name tags",
+      ["Preview tag name capitalisation (no changes)", "Capitalise tag names", "Tag gallery images with the gallery's name"]],
+  ];
+  const GROUP_OF = new Map();
+  TASK_GROUPS.forEach(([key], g) => TASK_GROUPS[g][3].forEach((name) => GROUP_OF.set(name, key)));
+  const OPEN_KEY = "bt-task-groups-open";
+
+  function openGroups() {
+    try {
+      return new Set(JSON.parse(localStorage.getItem(OPEN_KEY) || "[]"));
+    } catch (e) {
+      return new Set();
+    }
+  }
+
+  function groupTasks() {
+    if (!location.pathname.startsWith("/settings")) return;
+    const rows = [...document.querySelectorAll(".setting > div > h3")]
+      .filter((h3) => GROUP_OF.has(h3.textContent.trim()))
+      .map((h3) => h3.closest(".setting"));
+    if (rows.length < 2) return;
+    const section = rows[0].parentElement;
+    const open = openGroups();
+    for (const [key, title, blurb, names] of TASK_GROUPS) {
+      const mine = rows.filter((r) => r.parentElement === section && names.includes(r.querySelector("h3").textContent.trim()));
+      if (!mine.length) continue;
+      let head = section.querySelector(`.bt-task-group[data-group="${key}"]`);
+      if (!head) {
+        head = document.createElement("button");
+        head.type = "button";
+        head.className = "bt-task-group";
+        head.dataset.group = key;
+        head.innerHTML = '<span class="bt-tg-arrow" aria-hidden="true"></span><span class="bt-tg-title"></span>' +
+          '<span class="bt-tg-count"></span><span class="bt-tg-blurb"></span>';
+        head.querySelector(".bt-tg-title").textContent = title;
+        head.querySelector(".bt-tg-blurb").textContent = blurb;
+        head.addEventListener("click", () => {
+          const now = openGroups();
+          now.has(key) ? now.delete(key) : now.add(key);
+          try {
+            localStorage.setItem(OPEN_KEY, JSON.stringify([...now]));
+          } catch (e) {}
+          groupTasks();
+        });
+      }
+      // keep the heading just above the group's first task
+      if (head.nextElementSibling !== mine[0]) section.insertBefore(head, mine[0]);
+      const isOpen = open.has(key);
+      head.classList.toggle("open", isOpen);
+      head.setAttribute("aria-expanded", String(isOpen));
+      head.querySelector(".bt-tg-count").textContent = `${mine.length} task${mine.length > 1 ? "s" : ""}`;
+      mine.forEach((r) => r.classList.toggle("bt-task-hidden", !isOpen));
+    }
+  }
+
+  let groupTimer = null;
+  new MutationObserver(() => {
+    clearTimeout(groupTimer);
+    groupTimer = setTimeout(groupTasks, 100);
+  }).observe(document.body, { childList: true, subtree: true });
 })();

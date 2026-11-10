@@ -156,3 +156,51 @@ body > .react-select__menu-portal {
   content: "AI · ";
   opacity: 0.7;
 }
+
+/* Settings → Tasks: task sections */
+.bt-task-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  width: 100%;
+  margin: 10px 0 2px;
+  padding: 10px 12px;
+  border: 1px solid rgba(128, 128, 128, 0.35);
+  border-radius: 8px;
+  background: rgba(128, 128, 128, 0.08);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.bt-task-group:hover,
+.bt-task-group:focus-visible {
+  background: rgba(19, 124, 189, 0.15);
+  outline: none;
+}
+.bt-tg-arrow::before {
+  content: "▸";
+  display: inline-block;
+  width: 1em;
+  transition: transform 0.15s ease;
+}
+.bt-task-group.open .bt-tg-arrow::before {
+  transform: rotate(90deg);
+}
+.bt-tg-title {
+  font-weight: 600;
+  font-size: 1.05rem;
+}
+.bt-tg-count {
+  font-size: 0.8rem;
+  opacity: 0.6;
+}
+.bt-tg-blurb {
+  flex-basis: 100%;
+  padding-left: calc(1em + 10px);
+  font-size: 0.85rem;
+  opacity: 0.75;
+}
+.setting.bt-task-hidden {
+  display: none !important;
+}

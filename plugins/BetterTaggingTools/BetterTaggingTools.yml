@@ -34,6 +34,10 @@ hooks:
       - Studio.Create.Post
 
 tasks:
+  - name: Preview top tags (no changes)
+    description: Writes what the three "Tag ... with their top tags" tasks below would add and remove for performers, studios and galleries to the log, without changing anything.
+    defaultArgs:
+      mode: dryrun_all
   - name: Tag performers with their top tags
     description: Counts the tags on every performer's scenes, images and galleries and adds the most used ones to the performer. Tags this plugin added earlier that are no longer in the top list are taken off again; tags you added yourself are never removed.
     defaultArgs:
@@ -46,26 +50,6 @@ tasks:
     description: The same for galleries - counts the tags on each gallery's images and adds the most used ones to the gallery. Gallery-name tags never count.
     defaultArgs:
       mode: apply_galleries
-  - name: Preview top tags (no changes)
-    description: Writes what the three tasks above would add and remove for performers, studios and galleries to the log, without changing anything.
-    defaultArgs:
-      mode: dryrun_all
-  - name: Tag gallery images with the gallery's name
-    description: Gives every image in every gallery a tag named after its gallery (its title, or the zip or folder name), creating the tags as needed. Use it once to catch up existing galleries; the setting below keeps new ones tagged.
-    defaultArgs:
-      mode: gallerynames
-  - name: Give tags without a picture one from your library
-    description: Every tag that has no picture gets one from your library - the photo that's most "about" that tag (fewest other tags, then highest rated), else a scene screenshot, a marker screenshot or a gallery cover. Each tag gets a picture no other tag has where possible, if need be a different frame from one of its scenes. Tags that already have a picture are never changed.
-    defaultArgs:
-      mode: tagpictures
-  - name: Give tags that share a picture their own
-    description: Finds tags that have the same picture as another tag and gives each its own from your library where possible. In each group the rarest tag keeps the picture. Only tags that share a picture are changed.
-    defaultArgs:
-      mode: uniquepictures
-  - name: Give every tag a new picture (replaces existing ones)
-    description: Gives EVERY tag a different picture from the one it has now - including pictures you chose yourself - picked the same way (most "about" the tag, unique where possible, rarest tags first, video frames if need be). Tags with no other picture available keep theirs. Old pictures can't be brought back, so make a backup first.
-    defaultArgs:
-      mode: newpictures
   - name: "AI tagging: preview on 10 items (no changes)"
     description: Shows 10 random scenes/images to the local AI model (Ollama) and writes the tags it (and auto tagging from the file path) would add to the log, without changing anything. Try this first.
     defaultArgs:
@@ -78,14 +62,14 @@ tasks:
     description: Uses the local AI model (Ollama) on every scene and image it hasn't looked at before, after auto tagging each one from its file path (only ever adds). Can take many hours on a big library; it can be stopped and run again, and carries on where it left off.
     defaultArgs:
       mode: ai_all
+  - name: Preview titles from file names (no changes)
+    description: Writes the titles "Fill in titles from file names" (below) would give to the log, without changing anything.
+    defaultArgs:
+      mode: titles_preview
   - name: Fill in titles from file names
     description: Gives scenes, images and galleries without a title one made from the file name, cleaned up - no [ids] or [site names], dates, resolutions or codecs, and no performer or studio name as its own part (unless "Keep performer and studio names in titles" is on). Camera and app names (IMG_1234, screen recordings, FullSizeRender...) and random ids are left without a title. Titles you already have are never changed.
     defaultArgs:
       mode: titles
-  - name: Preview titles from file names (no changes)
-    description: Writes the titles the task above would give to the log, without changing anything.
-    defaultArgs:
-      mode: titles_preview
   - name: Redo titles made from file names
     description: Makes titles that came from file names again with the current settings, e.g. after turning "Keep performer and studio names in titles" on or off. Only titles that exactly match one this plugin makes are changed; titles you typed or scraped are left alone.
     defaultArgs:
@@ -102,22 +86,38 @@ tasks:
     description: The same for images (camera photos, screenshots...). Takes a few seconds per image, so a big library can take hours; you can cancel it under Settings → Tasks and run it again later to carry on.
     defaultArgs:
       mode: ai_titles_images
-  - name: Fill in dates from file names
-    description: Gives scenes, images and galleries that have no date the date in their file name (or their folder's name) - "2023-05-19_video", "Studio - 6 Nov 2026 - Title", "Studio.21.07.08.Name", "05-27-2014 17_26_15" and similar. Only full dates count, and dates you've already set are never changed.
-    defaultArgs:
-      mode: dates
   - name: Preview dates from file names (no changes)
     description: Writes what "Fill in dates from file names" would set to the log, without changing anything.
     defaultArgs:
       mode: dates_preview
-  - name: Capitalise tag names
-    description: Capitalises every tag name the same way - "dating app" becomes "Dating App", small words like "on", "to" and "and" stay lowercase in the middle ("Behind the Scenes"). Capitals already in a name are never lowered.
+  - name: Fill in dates from file names
+    description: Gives scenes, images and galleries that have no date the date in their file name (or their folder's name) - "2023-05-19_video", "Studio - 6 Nov 2026 - Title", "Studio.21.07.08.Name", "05-27-2014 17_26_15" and similar. Only full dates count, and dates you've already set are never changed.
     defaultArgs:
-      mode: titlecase
+      mode: dates
+  - name: Give tags without a picture one from your library
+    description: Every tag that has no picture gets one from your library - the photo that's most "about" that tag (fewest other tags, then highest rated), else a scene screenshot, a marker screenshot or a gallery cover. Each tag gets a picture no other tag has where possible, if need be a different frame from one of its scenes. Tags that already have a picture are never changed.
+    defaultArgs:
+      mode: tagpictures
+  - name: Give tags that share a picture their own
+    description: Finds tags that have the same picture as another tag and gives each its own from your library where possible. In each group the rarest tag keeps the picture. Only tags that share a picture are changed.
+    defaultArgs:
+      mode: uniquepictures
+  - name: Give every tag a new picture (replaces existing ones)
+    description: Gives EVERY tag a different picture from the one it has now - including pictures you chose yourself - picked the same way (most "about" the tag, unique where possible, rarest tags first, video frames if need be). Tags with no other picture available keep theirs. Old pictures can't be brought back, so make a backup first.
+    defaultArgs:
+      mode: newpictures
   - name: Preview tag name capitalisation (no changes)
     description: Writes what "Capitalise tag names" would rename to the log, without changing anything.
     defaultArgs:
       mode: titlecase_preview
+  - name: Capitalise tag names
+    description: Capitalises every tag name the same way - "dating app" becomes "Dating App", small words like "on", "to" and "and" stay lowercase in the middle ("Behind the Scenes"). Capitals already in a name are never lowered.
+    defaultArgs:
+      mode: titlecase
+  - name: Tag gallery images with the gallery's name
+    description: Gives every image in every gallery a tag named after its gallery (its title, or the zip or folder name), creating the tags as needed. Use it once to catch up existing galleries; the setting below keeps new ones tagged.
+    defaultArgs:
+      mode: gallerynames
 
 settings:
   topTagCount:
