@@ -90,6 +90,18 @@ tasks:
     description: Makes titles that came from file names again with the current settings, e.g. after turning "Keep performer and studio names in titles" on or off. Only titles that exactly match one this plugin makes are changed; titles you typed or scraped are left alone.
     defaultArgs:
       mode: retitles
+  - name: "AI titles: preview on 10 items (no changes)"
+    description: Picks 10 random scenes/images without a title and writes the title each would get to the log - from the file name when that makes a good one, else from the local AI model (Ollama) - without changing anything. Try this first.
+    defaultArgs:
+      mode: ai_titles_preview
+  - name: "AI titles: scenes without a title"
+    description: Gives every scene without a title one - from the file name when that makes a good one, else the local AI model's best idea after looking at a few frames (plus its performers, studio and tags). Titles you already have are never changed. Takes a few seconds per scene; skips organized scenes unless "AI - include organized items" is on.
+    defaultArgs:
+      mode: ai_titles_scenes
+  - name: "AI titles: images without a title"
+    description: The same for images (camera photos, screenshots...). Takes a few seconds per image, so a big library can take hours; you can cancel it under Settings → Tasks and run it again later to carry on.
+    defaultArgs:
+      mode: ai_titles_images
   - name: Fill in dates from file names
     description: Gives scenes, images and galleries that have no date the date in their file name (or their folder's name) - "2023-05-19_video", "Studio - 6 Nov 2026 - Title", "Studio.21.07.08.Name", "05-27-2014 17_26_15" and similar. Only full dates count, and dates you've already set are never changed.
     defaultArgs:

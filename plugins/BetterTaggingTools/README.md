@@ -208,6 +208,13 @@ titles. Click one to put it in the box, then edit it if you like and press **Sav
   video, plus its performers, studio, tags and file name, and suggests a few titles. They're marked
   *AI*. Ask again for different ones.
 
+To title everything at once, run **AI titles: scenes without a title** or **AI titles: images without
+a title** (try **AI titles: preview on 10 items** first). Each item without a title gets the one from
+its file name when that makes a good title, otherwise the AI's best idea. Titles you already have
+are never changed, and organized items are skipped unless **AI: include organized items** is on.
+It takes a few seconds per item, so you can cancel it under **Settings → Tasks** and run it again
+later to carry on. AI titles aren't touched by **Redo titles made from file names**.
+
 ## AI tagging (local, with Ollama)
 
 Tags scenes and images with a vision model running on your own computer through

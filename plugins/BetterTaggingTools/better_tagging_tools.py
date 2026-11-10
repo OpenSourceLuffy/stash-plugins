@@ -1550,9 +1550,11 @@ def locked_titles():
     return locked_json(os.path.join(_plugin_dir or os.path.dirname(os.path.abspath(__file__)), "auto_titles.json"))
 
 
-def set_title(stash, kind, item, title):
+def set_title(stash, kind, item, title, record=True):
     stash.call(f"mutation($i: {TITLE_INPUT[kind]}!) {{ {TITLE_UPDATE[kind]}(input: $i) {{ id }} }}",
                {"i": {"id": item["id"], "title": title}})
+    if not record:  # e.g. AI titles: not from the file name, so "Redo titles" leaves them alone
+        return
     try:
         with locked_titles() as rec:
             rec[f"{kind}:{item['id']}"] = title
@@ -2157,25 +2159,16 @@ def ollama_titles(cfg, pictures, context):
     return clean[:5]
 
 
-def run_title_ideas(stash, plugin_dir, kind, item_id, use_ai):
-    """Returns {"ideas": [...], "ai": [...]} for one scene, image or gallery."""
-    query = {"scene": "findScene", "image": "findImage", "gallery": "findGallery"}[kind]
-    item = stash.call(f"query($id: ID!) {{ {query}(id: $id) {{ {TITLE_ITEM_FIELDS[kind]} }} }}", {"id": str(item_id)})[query]
-    if not item:
-        raise RuntimeError(f"{kind} {item_id} not found")
-    if not use_ai:
-        return {"ideas": title_ideas_from_data(stash, plugin_dir, kind, item)}
-    cfg = settings(stash, plugin_dir)
-    ai_check(cfg)
+def ai_title_context(stash, cfg, plugin_dir, kind, item, excluded=None):
+    """The pictures to show the model and what's known about the item."""
     if kind == "gallery":
         cover = (item.get("paths") or {}).get("cover")
         data, ctype = stash.fetch(cover) if cover else (b"", "")
         pictures = [data] if ctype.startswith("image/") else []
     else:
         pictures = ai_pictures(stash, kind, item)
-    if not pictures:
-        raise RuntimeError("there's no picture to show the AI (a video clip stored as an image?)")
-    _, excluded = tag_lookup(stash, cfg, plugin_dir)
+    if excluded is None:
+        _, excluded = tag_lookup(stash, cfg, plugin_dir)
     bits = []
     performers = [p["name"] for p in item.get("performers") or []]
     if performers:
@@ -2188,7 +2181,87 @@ def run_title_ideas(stash, plugin_dir, kind, item_id, use_ai):
     from_file = title_from_path(item_path(kind, item), title_names(stash), cfg["spellings"], True)
     if from_file:
         bits.append("Its file name says: " + from_file)
-    return {"ai": ollama_titles(cfg, pictures, "\n".join(bits))}
+    return pictures, "\n".join(bits)
+
+
+def run_ai_titles(stash, plugin_dir, kinds, preview=False, limit=None):
+    """Task: give every scene / image without a title one - from the file
+    name when that makes a good one, else the local AI model's best idea.
+    `preview`: only log what it would set (on `limit` random items)."""
+    cfg = settings(stash, plugin_dir)
+    ai_check(cfg)
+    _, excluded = tag_lookup(stash, cfg, plugin_dir)
+    names = title_names(stash)
+    todo = []
+    for kind in kinds:
+        query, field, farg, ftype = {"scene": ("findScenes", "scenes", "scene_filter", "SceneFilterType"),
+                                     "image": ("findImages", "images", "image_filter", "ImageFilterType")}[kind]
+        f = {"title": {"value": "", "modifier": "IS_NULL"}}
+        if not cfg["ai"]["include_organized"]:
+            f["organized"] = False
+        page = 1
+        while True:
+            items = stash.call(
+                f"query($p: {ftype}, $f: FindFilterType) {{ {query}({farg}: $p, filter: $f) {{ {field} {{ {TITLE_ITEM_FIELDS[kind]} }} }} }}",
+                {"p": f, "f": {"page": page, "per_page": 500, "sort": "created_at", "direction": "DESC"}},
+            )[query][field]
+            todo += [(kind, i) for i in items if not (i.get("title") or "").strip()]
+            if len(items) < 500:
+                break
+            page += 1
+    if limit:
+        import random
+        todo = random.sample(todo, min(limit, len(todo)))
+    what = " and ".join(k + "s" for k in kinds)
+    log("info", f"{len(todo)} {what} without a title" + (" (preview, nothing is saved)" if preview else "")
+        + (f". The AI takes a few seconds each, so this can take a while; you can cancel it under Settings → Tasks."
+           if len(todo) > 50 else "."))
+    from_file = from_ai = failed = 0
+    for n, (kind, item) in enumerate(todo):
+        progress(n / max(len(todo), 1))
+        name = os.path.basename(item_path(kind, item)) or f"{kind} {item['id']}"
+        title = title_from_path(item_path(kind, item), names, cfg["spellings"], cfg["titles_keep_names"])
+        source = "file name"
+        if not title:
+            try:
+                pictures, context = ai_title_context(stash, cfg, plugin_dir, kind, item, excluded)
+                ideas = ollama_titles(cfg, pictures, context) if pictures else []
+            except Exception as e:
+                failed += 1
+                log("warning", f"{name}: AI failed ({e})")
+                continue
+            title, source = (ideas[0] if ideas else None), "AI"
+        if not title:
+            failed += 1
+            continue
+        if not preview:
+            set_title(stash, kind, item, title, record=source == "file name")
+        if source == "AI":
+            from_ai += 1
+        else:
+            from_file += 1
+        log("info", f'{"Would set" if preview else "Set"} {name} → "{title}" ({source})')
+    progress(1)
+    log("info", f"{'Preview: ' if preview else 'Done: '}{from_file + from_ai} of {len(todo)} {what} "
+        + ("would get" if preview else "got") + f" a title ({from_file} from the file name, {from_ai} from the AI)"
+        + (f"; {failed} had nothing to show the AI or failed" if failed else "")
+        + (". Nothing was saved." if preview else "."))
+
+
+def run_title_ideas(stash, plugin_dir, kind, item_id, use_ai):
+    """Returns {"ideas": [...], "ai": [...]} for one scene, image or gallery."""
+    query = {"scene": "findScene", "image": "findImage", "gallery": "findGallery"}[kind]
+    item = stash.call(f"query($id: ID!) {{ {query}(id: $id) {{ {TITLE_ITEM_FIELDS[kind]} }} }}", {"id": str(item_id)})[query]
+    if not item:
+        raise RuntimeError(f"{kind} {item_id} not found")
+    if not use_ai:
+        return {"ideas": title_ideas_from_data(stash, plugin_dir, kind, item)}
+    cfg = settings(stash, plugin_dir)
+    ai_check(cfg)
+    pictures, context = ai_title_context(stash, cfg, plugin_dir, kind, item)
+    if not pictures:
+        raise RuntimeError("there's no picture to show the AI (a video clip stored as an image?)")
+    return {"ai": ollama_titles(cfg, pictures, context)}
 
 
 BULK_MUTATIONS = {
@@ -2325,6 +2398,10 @@ def main():
             print(json.dumps({"output": run_new_picture(stash, plugin_dir, args["tag_id"])}))
         elif args.get("mode") == "frame":
             print(json.dumps({"output": run_frame(stash, args)}))
+        elif args.get("mode") in ("ai_titles_scenes", "ai_titles_images"):
+            run_ai_titles(stash, plugin_dir, [args["mode"].rsplit("_", 1)[1][:-1]])
+        elif args.get("mode") == "ai_titles_preview":
+            run_ai_titles(stash, plugin_dir, ["scene", "image"], preview=True, limit=10)
         elif args.get("mode") == "title_ideas":
             print(json.dumps({"output": run_title_ideas(stash, plugin_dir, args["kind"], args["id"],
                                                         bool(args.get("ai")))}))
