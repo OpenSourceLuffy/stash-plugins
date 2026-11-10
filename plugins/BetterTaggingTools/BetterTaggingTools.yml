@@ -1,6 +1,6 @@
 name: Better Tagging Tools
-description: Tags each performer with the tags used most often in their scenes, images and galleries, shows those tags as one-click "Suggested tags" when editing tags, and adds "Bulk tag" buttons on performer pages (a performer's scenes, images and galleries) and gallery pages (a gallery's images). Can also tag every image in a gallery with the gallery's name, give tags without a picture one from your library, keep tag names consistently capitalised, auto tag from file names (new performers, studios and tags, or one item at a time), fill in dates from file names, and tag scenes and images with a local AI model (Ollama).
-version: "1.3"
+description: Tags each performer with the tags used most often in their scenes, images and galleries, shows one-click "Suggested tags" when editing tags (tags that usually go with the ones already chosen, and the performers' top tags), and adds "Bulk tag" buttons on performer pages (a performer's scenes, images and galleries) and gallery pages (a gallery's images). Can also tag every image in a gallery with the gallery's name, give tags without a picture one from your library, keep tag names consistently capitalised, auto tag from file names (new performers, studios and tags, or one item at a time), fill in dates from file names, and tag scenes and images with a local AI model (Ollama).
+version: "1.4"
 url: https://github.com/OpenSourceLuffy/stash-plugins/tree/main/plugins/BetterTaggingTools
 exec:
   - python

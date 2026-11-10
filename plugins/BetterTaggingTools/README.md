@@ -17,12 +17,18 @@ Under the **Tags** box when you edit a scene, image or gallery:
 
 | The item has… | You see |
 | --- | --- |
+| Tags | **Goes with [tag]**: the tags most often found together with the ones it already has |
 | Performers | **[Name]'s top tags**: the tags on the performers you've picked |
-| A gallery | **Common in [gallery]**: the tags used most on that gallery's photos |
-| Neither | **Most used image tags** (or scene tags) across your library |
+| A gallery, but no tags yet | **Common in [gallery]**: the tags used most on that gallery's photos |
+| None of these | **Most used image tags** (or scene tags) across your library |
 
+- **Goes with** looks at every item of the same kind (scenes on a scene, images on an image, and so on)
+  that has *all* the tags already chosen, and suggests the other tags those items have most often.
+  With one tag it uses everything with that tag. If no other item has all of them, it uses items with
+  any of them instead (**Often with these tags**). Hover over a tag to see how many items it's on.
 - Click a tag to add it, or **Add all**. They go into the form like any other tag, so you still press **Save**.
-- The rows update as soon as you change the performers or galleries in the form.
+- The rows update as soon as you change the tags, performers or galleries in the form. Adding a
+  suggested tag narrows the next suggestions.
 - Tags already on the item aren't suggested.
 
 ## Performers' top tags
