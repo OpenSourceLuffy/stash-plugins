@@ -3,8 +3,8 @@
 // performers picked in the same form (the "Tag performers with their top
 // tags" task fills those in), and - while there are no tags - the tags most
 // used in the picked galleries, on the picked performers' items or on the
-// studio's, or else the library's most used tags. Also adds the bulk tag windows on performer and gallery
-// pages.
+// studio's, or else the library's most used tags. Also adds the bulk tag
+// windows on performer and gallery pages, and title ideas under the Title box.
 (function () {
   "use strict";
 
@@ -1198,4 +1198,106 @@
       return [Object.assign({}, props, { extraOperations: [...(props.extraOperations || []), op] }), ...args.slice(1)];
     });
   }
+
+  // ---- title ideas ----------------------------------------------------------
+  // Under the Title box of a scene, image or gallery's edit form: titles made
+  // from its performers, studio, tags, date and file name, and an "Ask AI"
+  // button for ones the local model writes. Clicking one puts it in the box
+  // (still unsaved, like any edit).
+  const TITLE_PAGE = /^\/(scenes|images|galleries)\/(\d+)/;
+  const KIND_OF = { scenes: "scene", images: "image", galleries: "gallery" };
+
+  function setInputValue(input, value) {
+    // React keeps its own copy of the value: go through the native setter
+    // and fire "input" so the form sees the change
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+    setter.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.focus();
+  }
+
+  function titleIdeas(kind, id, ai) {
+    return gql("mutation($p: ID!, $a: Map) { runPluginOperation(plugin_id: $p, args: $a) }", {
+      p: PLUGIN_ID,
+      a: { mode: "title_ideas", kind, id, ai: ai ? "1" : "" },
+    }).then((d) => d.runPluginOperation || {});
+  }
+
+  function mountTitleIdeas(input) {
+    const m = location.pathname.match(TITLE_PAGE);
+    if (!m) return;
+    const kind = KIND_OF[m[1]], id = m[2];
+    const row = document.createElement("div");
+    row.className = "pts-suggest bt-title-ideas";
+    row.dataset.item = kind + ":" + id;
+    const label = document.createElement("span");
+    label.className = "pts-label";
+    label.textContent = "Title ideas";
+    const chips = document.createElement("span");
+    chips.className = "bt-title-chips";
+    const note = document.createElement("span");
+    note.className = "pts-ai-note";
+    const ask = document.createElement("button");
+    ask.type = "button";
+    ask.className = "pts-chip pts-ai-ask";
+    ask.textContent = "Ask AI for titles";
+    ask.title = "Ask the local AI model (Ollama) to look at it and suggest titles";
+    row.append(label, chips, note, ask);
+    input.insertAdjacentElement("afterend", row);
+
+    const shown = new Set();
+    const add = (titles, fromAi) =>
+      titles.forEach((t) => {
+        if (!t || shown.has(t.toLowerCase())) return;
+        shown.add(t.toLowerCase());
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "pts-chip" + (fromAi ? " bt-title-ai" : "");
+        b.textContent = t;
+        b.title = fromAi ? "Suggested by the local AI model - click to use" : "Click to use this title";
+        b.addEventListener("click", () => setInputValue(input, t));
+        chips.appendChild(b);
+      });
+
+    note.textContent = "…";
+    titleIdeas(kind, id, false)
+      .then((r) => {
+        add(r.ideas || [], false);
+        note.textContent = (r.ideas || []).length ? "" : "No ideas from its details yet";
+      })
+      .catch((e) => (note.textContent = "Couldn't load ideas: " + e.message));
+
+    ask.addEventListener("click", () => {
+      ask.disabled = true;
+      ask.textContent = "Looking at it…";
+      titleIdeas(kind, id, true)
+        .then((r) => {
+          add(r.ai || [], true);
+          if ((r.ai || []).length && note.textContent.startsWith("No ideas")) note.textContent = "";
+          ask.textContent = "Ask AI again";
+        })
+        .catch((e) => {
+          note.textContent = "Couldn't ask the AI: " + e.message;
+          ask.textContent = "Try AI again";
+        })
+        .finally(() => (ask.disabled = false));
+    });
+  }
+
+  let titleTimer = null;
+  new MutationObserver(() => {
+    clearTimeout(titleTimer);
+    titleTimer = setTimeout(() => {
+      const m = location.pathname.match(TITLE_PAGE);
+      if (!m) return;
+      document.querySelectorAll("form input#title").forEach((input) => {
+        const next = input.nextElementSibling;
+        if (next && next.classList.contains("bt-title-ideas")) {
+          if (next.dataset.item === KIND_OF[m[1]] + ":" + m[2]) return;
+          next.remove(); // another item (moved on without leaving the form)
+        }
+        mountTitleIdeas(input);
+      });
+    }, 150);
+  }).observe(document.body, { childList: true, subtree: true });
 })();

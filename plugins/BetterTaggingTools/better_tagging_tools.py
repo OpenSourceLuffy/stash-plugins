@@ -2037,6 +2037,160 @@ def run_ai_suggest(stash, plugin_dir, kind, item_id):
     return [{"id": vocab[n.lower()], "name": n} for n in picked]
 
 
+# --- title ideas -------------------------------------------------------------
+# Asked by the edit page (runPluginOperation "title_ideas"): titles made from
+# the item's performers, studio, most telling tags, date and file name, and
+# (on request) ones the local AI model writes after looking at it. Nothing is
+# saved; clicking an idea puts it in the Title box.
+
+TITLE_ITEM_FIELDS = {
+    "scene": "id title date tags { id name scene_count image_count gallery_count } "
+             "performers { id name tags { id name scene_count image_count gallery_count } } "
+             "studio { id name } files { path duration }",
+    "image": "id title date tags { id name scene_count image_count gallery_count } "
+             "performers { id name tags { id name scene_count image_count gallery_count } } "
+             "studio { id name } paths { thumbnail } "
+             "visual_files { __typename ... on ImageFile { path } ... on VideoFile { path } }",
+    "gallery": "id title date tags { id name scene_count image_count gallery_count } "
+               "performers { id name tags { id name scene_count image_count gallery_count } } "
+               "studio { id name } files { path } folder { path } paths { cover }",
+}
+
+
+def _names_text(names):
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " & " + names[-1] if names else ""
+
+
+def title_ideas_from_data(stash, plugin_dir, kind, item):
+    """Titles put together from what's known about the item, best first."""
+    cfg = settings(stash, plugin_dir)
+    _, excluded = tag_lookup(stash, cfg, plugin_dir)
+    performers = [p["name"] for p in item.get("performers") or []][:3]
+    studio = (item.get("studio") or {}).get("name")
+    # the most telling tags: the rarest ones (used at least twice, so not one-offs)
+    tags = [t for t in item.get("tags") or [] if t["id"] not in excluded]
+    if not tags:  # none yet: the performers' top tags
+        tags = list({t["id"]: t for p in item.get("performers") or [] for t in p.get("tags") or []
+                     if t["id"] not in excluded}.values())
+    use = lambda t: t["scene_count"] + t["image_count"] + t["gallery_count"]
+    tags.sort(key=lambda t: (use(t) < 2, use(t)))
+    t = []
+    for x in tags:  # skip ones another already says ("Solo" next to "Solo Female")
+        low = x["name"].lower()
+        if not any(low in y.lower() or y.lower() in low for y in t):
+            t.append(x["name"])
+        if len(t) == 3:
+            break
+    who = _names_text(performers)
+    day = None
+    if item.get("date"):
+        import datetime
+        try:
+            day = datetime.date.fromisoformat(item["date"]).strftime("%-d %b %Y")
+        except ValueError:
+            pass
+    ideas = []
+    names = title_names(stash)
+    path = item_path(kind, item)
+    for keep in (cfg["titles_keep_names"], not cfg["titles_keep_names"]):
+        ideas.append(title_from_path(path, names, cfg["spellings"], keep))
+    if who and t:
+        ideas.append(f"{who} {' '.join(t[:2])}")
+        ideas.append(f"{who} - {_names_text(t)}")
+    if studio and who:
+        ideas.append(f"{studio} - {who}" + (f" {t[0]}" if t else ""))
+    if who and day:
+        ideas.append(f"{who} - {day}")
+    if not who and t:
+        ideas.append(_names_text(t))
+        if studio:
+            ideas.append(f"{studio} - {' '.join(t[:2])}")
+    out, seen = [], {_title_key(item.get("title") or "")}
+    for i in ideas:
+        if i and _title_key(i) not in seen:  # "A - B" and "A B" count as the same
+            seen.add(_title_key(i))
+            out.append(i)
+    return out[:6]
+
+
+def ollama_titles(cfg, pictures, context):
+    """Ask the model for a few short titles, given the pictures and what's
+    known about the item."""
+    ai = cfg["ai"]
+    prompt = (
+        "Suggest 4 different short titles (3 to 9 words each) for "
+        + ("this video (the pictures are frames from it)" if len(pictures) > 1 else "this picture")
+        + " in a private adult media library. Describe what actually happens or is shown, in a natural, "
+        "catchy way, like a video title on a website. Use Title Case. No quotes, no emojis, no hashtags, "
+        "no file names or numbers. Never make up names: only use a person's name if it's listed below as a "
+        "performer, otherwise describe them (e.g. 'Redhead', 'Blonde').\n" + context
+    )
+    body = {
+        "model": ai["model"], "stream": False, "keep_alive": "15m",
+        "options": {"temperature": 0.8},
+        "messages": [{"role": "user", "content": prompt,
+                      "images": [base64.b64encode(p).decode() for p in pictures]}],
+        "format": {"type": "object", "properties": {"titles": {"type": "array", "items": {"type": "string"}}},
+                   "required": ["titles"]},
+    }
+    for attempt in (1, 2):  # Ollama now and then answers 500 once
+        req = urllib.request.Request(ai["url"] + "/api/chat", data=json.dumps(body).encode(),
+                                     headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=300) as resp:
+                reply = json.loads(resp.read())
+            break
+        except urllib.error.HTTPError:
+            if attempt == 2:
+                raise
+            time.sleep(1)
+    try:
+        titles = json.loads((reply.get("message") or {}).get("content") or "{}").get("titles") or []
+    except ValueError:
+        titles = []
+    clean = []
+    for t in titles:
+        if isinstance(t, str):
+            t = re.sub(r"\s+", " ", t.strip().strip('"\'“”').rstrip("."))
+            if 2 < len(t) <= 100:
+                clean.append(t)
+    return clean[:5]
+
+
+def run_title_ideas(stash, plugin_dir, kind, item_id, use_ai):
+    """Returns {"ideas": [...], "ai": [...]} for one scene, image or gallery."""
+    query = {"scene": "findScene", "image": "findImage", "gallery": "findGallery"}[kind]
+    item = stash.call(f"query($id: ID!) {{ {query}(id: $id) {{ {TITLE_ITEM_FIELDS[kind]} }} }}", {"id": str(item_id)})[query]
+    if not item:
+        raise RuntimeError(f"{kind} {item_id} not found")
+    if not use_ai:
+        return {"ideas": title_ideas_from_data(stash, plugin_dir, kind, item)}
+    cfg = settings(stash, plugin_dir)
+    ai_check(cfg)
+    if kind == "gallery":
+        cover = (item.get("paths") or {}).get("cover")
+        data, ctype = stash.fetch(cover) if cover else (b"", "")
+        pictures = [data] if ctype.startswith("image/") else []
+    else:
+        pictures = ai_pictures(stash, kind, item)
+    if not pictures:
+        raise RuntimeError("there's no picture to show the AI (a video clip stored as an image?)")
+    _, excluded = tag_lookup(stash, cfg, plugin_dir)
+    bits = []
+    performers = [p["name"] for p in item.get("performers") or []]
+    if performers:
+        bits.append("Performers (you may use their names): " + ", ".join(performers))
+    if (item.get("studio") or {}).get("name"):
+        bits.append("Studio: " + item["studio"]["name"])
+    tags = [t["name"] for t in item.get("tags") or [] if t["id"] not in excluded]
+    if tags:
+        bits.append("Its tags: " + ", ".join(tags[:25]))
+    from_file = title_from_path(item_path(kind, item), title_names(stash), cfg["spellings"], True)
+    if from_file:
+        bits.append("Its file name says: " + from_file)
+    return {"ai": ollama_titles(cfg, pictures, "\n".join(bits))}
+
+
 BULK_MUTATIONS = {
     "scenes": ("bulkSceneUpdate", "BulkSceneUpdateInput"),
     "images": ("bulkImageUpdate", "BulkImageUpdateInput"),
@@ -2171,6 +2325,9 @@ def main():
             print(json.dumps({"output": run_new_picture(stash, plugin_dir, args["tag_id"])}))
         elif args.get("mode") == "frame":
             print(json.dumps({"output": run_frame(stash, args)}))
+        elif args.get("mode") == "title_ideas":
+            print(json.dumps({"output": run_title_ideas(stash, plugin_dir, args["kind"], args["id"],
+                                                        bool(args.get("ai")))}))
         elif args.get("mode") in ("retitles", "retitles_preview"):
             run_redo_titles(stash, preview=args["mode"] == "retitles_preview")
         elif args.get("mode") in ("titles", "titles_preview"):

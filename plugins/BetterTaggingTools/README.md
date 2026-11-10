@@ -4,7 +4,7 @@ Tags each performer and studio with the tags used most often on their scenes, im
 galleries (and each gallery with its photos' most used tags), then suggests tags while you edit. It also adds bulk tagging to performer and
 gallery pages, can tag a gallery's photos with the gallery's name, can give tags without
 a picture one from your library, keeps tag names consistently capitalised, auto tags from file
-names in more places than Stash does, fills in dates and titles from file names, and can tag scenes and images
+names in more places than Stash does, fills in dates and titles from file names, suggests title ideas, and can tag scenes and images
 with a local AI model.
 
 ![Suggested tags under the Tags box](../../docs/screenshots/Tag_Suggestions.png)
@@ -195,6 +195,18 @@ Scenes, images and galleries without a title can get one made from their file na
   titles**, makes the titles this plugin set again with the new setting. Titles you typed or scraped
   are left alone.
 - **Auto tag this / Auto tag selected** and AI tagging fill in empty titles too.
+
+## Title ideas
+
+When you edit a scene, image or gallery, a **Title ideas** row under the **Title** box suggests
+titles. Click one to put it in the box, then edit it if you like and press **Save**.
+
+- **From its details:** the title from its file name (with and without performer names), and
+  titles put together from its performers, studio, date and most telling tags (the rarest ones,
+  or the performers' top tags if it has none yet), e.g. `Jane Doe - Beach, Sunset & Picnic`.
+- **Ask AI for titles:** the local AI model (see below) looks at the picture, or a few frames of a
+  video, plus its performers, studio, tags and file name, and suggests a few titles. They're marked
+  *AI*. Ask again for different ones.
 
 ## AI tagging (local, with Ollama)
 

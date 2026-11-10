@@ -140,3 +140,19 @@ body > .react-select__menu-portal {
   font-size: 0.8rem;
   opacity: 0.75;
 }
+
+/* Title ideas under the Title box */
+.bt-title-ideas {
+  margin-top: 6px;
+}
+.bt-title-chips {
+  display: contents;
+}
+.bt-title-ideas .pts-chip {
+  white-space: normal;
+  text-align: left;
+}
+.bt-title-ideas .bt-title-ai::before {
+  content: "AI · ";
+  opacity: 0.7;
+}
