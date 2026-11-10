@@ -1,6 +1,6 @@
 name: Better Tagging Tools
-description: Tags each performer with the tags used most often in their scenes, images and galleries, shows those tags as one-click "Suggested tags" when editing tags, and adds "Bulk tag" buttons on performer pages (a performer's scenes, images and galleries) and gallery pages (a gallery's images). Can also tag every image in a gallery with the gallery's name, give tags without a picture one from your library, keep tag names consistently capitalised, and tag scenes and images with a local AI model (Ollama).
-version: "1.1"
+description: Tags each performer with the tags used most often in their scenes, images and galleries, shows those tags as one-click "Suggested tags" when editing tags, and adds "Bulk tag" buttons on performer pages (a performer's scenes, images and galleries) and gallery pages (a gallery's images). Can also tag every image in a gallery with the gallery's name, give tags without a picture one from your library, keep tag names consistently capitalised, auto tag from file names (new performers, studios and tags, or one item at a time), and tag scenes and images with a local AI model (Ollama).
+version: "1.2"
 url: https://github.com/OpenSourceLuffy/stash-plugins/tree/main/plugins/BetterTaggingTools
 exec:
   - python
@@ -26,10 +26,12 @@ hooks:
       - Gallery.Create.Post
       - Image.Create.Post
       - Scene.Create.Post
-  - name: Capitalise new tags
-    description: When "Capitalise new tags automatically" is on, capitalises a tag's name as soon as it's created.
+  - name: New tags, performers and studios
+    description: When "Capitalise new tags automatically" is on, capitalises a tag's name as soon as it's created. When "Auto tag new performers, studios and tags" is on, runs Stash's Auto Tag for each new one.
     triggeredBy:
       - Tag.Create.Post
+      - Performer.Create.Post
+      - Studio.Create.Post
 
 tasks:
   - name: Tag performers with their top tags
@@ -57,15 +59,15 @@ tasks:
     defaultArgs:
       mode: newpictures
   - name: "AI tagging: preview on 10 items (no changes)"
-    description: Shows 10 random scenes/images to the local AI model (Ollama) and writes the tags it would add to the log, without changing anything. Try this first.
+    description: Shows 10 random scenes/images to the local AI model (Ollama) and writes the tags it (and auto tagging from the file path) would add to the log, without changing anything. Try this first.
     defaultArgs:
       mode: ai_preview
   - name: "AI tagging: items with no tags"
-    description: Uses the local AI model (Ollama) to tag scenes and images that have no tags yet, choosing from your most used tags. Organized items are skipped unless you change that in the settings.
+    description: Uses the local AI model (Ollama) to tag scenes and images that have no tags yet, choosing from your most used tags. First adds the performers, studio and tags whose names are in each file's path (like Stash's Auto Tag). Organized items are skipped unless you change that in the settings.
     defaultArgs:
       mode: ai_untagged
   - name: "AI tagging: everything not done yet"
-    description: Uses the local AI model (Ollama) on every scene and image it hasn't looked at before (only ever adds tags). Can take many hours on a big library; it can be stopped and run again, and carries on where it left off.
+    description: Uses the local AI model (Ollama) on every scene and image it hasn't looked at before, after auto tagging each one from its file path (only ever adds). Can take many hours on a big library; it can be stopped and run again, and carries on where it left off.
     defaultArgs:
       mode: ai_all
   - name: Capitalise tag names
@@ -118,6 +120,10 @@ settings:
     displayName: Special spellings
     description: Comma-separated words or tag names to always write exactly like this when capitalising, for acronyms and odd capitals - for example "CNN, POV, HD, iPhone". Matched without caring about case.
     type: STRING
+  autoTagNew:
+    displayName: Auto tag new performers, studios and tags
+    description: When a performer, studio or tag is created (by hand, a scraper or another plugin), run Stash's Auto Tag for it, so files with its name in their path get it straight away. Ones set to "Ignore Auto Tag" are skipped.
+    type: BOOLEAN
   aiAuto:
     displayName: "AI: tag new scenes and images automatically"
     description: Have the local AI model tag scenes and images as they're added by a scan.
@@ -138,6 +144,10 @@ settings:
     displayName: "AI: most tags per item"
     description: The most tags the model adds to one scene or image. Default 6.
     type: NUMBER
+  aiNoAutoTag:
+    displayName: "AI: don't auto tag from file names first"
+    description: Before the AI looks at an item, the plugin normally adds the performers, studio and tags whose names are in its file path (the same matching as Stash's Auto Tag). Turn this on to skip that.
+    type: BOOLEAN
   aiIncludeOrganized:
     displayName: "AI: include organized items"
     description: Also AI-tag scenes and images you've marked as organized (they're skipped by default).

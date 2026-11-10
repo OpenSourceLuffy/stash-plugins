@@ -3,8 +3,8 @@
 Tags each performer with the tags used most often on their scenes, images and galleries, then
 uses those tags to suggest tags while you edit. It also adds bulk tagging to performer and
 gallery pages, can tag a gallery's photos with the gallery's name, can give tags without
-a picture one from your library, keeps tag names consistently capitalised, and can tag scenes
-and images with a local AI model.
+a picture one from your library, keeps tag names consistently capitalised, auto tags from file
+names in more places than Stash does, and can tag scenes and images with a local AI model.
 
 ![Suggested tags under the Tags box](../../docs/screenshots/Tag_Suggestions.png)
 
@@ -104,6 +104,29 @@ from the one it has now, picked the same way (unique, rarest tags first). This i
 you set yourself, and the old ones can't be brought back, so make a backup first
 (**Settings → Tasks → Backup**). A tag with no other picture available keeps the one it has.
 
+## Auto tag
+
+Stash's **Auto Tag** adds performers, studios and tags whose names appear in a file's path. This plugin
+uses it in three more places:
+
+- **New performers, studios and tags** (setting **Auto tag new performers, studios and tags**): when
+  one is created, by hand, by a scraper or by another plugin, Stash's Auto Tag runs for just that one
+  across your library. No need to remember to run the whole task.
+- **Auto tag this (from file name)** in the ⋮ menu of a scene, image or gallery page (a gallery: the
+  gallery and its images), and **Auto tag selected (from file names)** in the ••• menu of the scene, image
+  and gallery lists. Stash's own task can only be pointed at whole folders; these do exactly the items
+  you pick, and also work on organized items.
+- **Before AI tagging**: each item gets its file-name matches first, so the AI only adds what the
+  file name doesn't already say (turn off with **AI: don't auto tag from file names first**).
+
+The matching is the same as Stash's: the name, ignoring case, as a whole word anywhere in the path
+(folders included), with spaces in the name also matching `.`, `-`, `_` or nothing. Studios and tags
+also match by their aliases. A studio is only set when the item has none. Anything marked
+**Ignore Auto Tag** is skipped. So are the plugin's gallery-name tags.
+
+> Short, everyday tag names (like a tag called "Me") match a lot of file names. Turn on
+> **Ignore Auto Tag** on such tags (edit the tag) to keep them out.
+
 ## AI tagging (local, with Ollama)
 
 Tags scenes and images with a vision model running on your own computer through
@@ -161,7 +184,9 @@ Under **Settings → Plugins → Better Tagging Tools**:
 | Parent tag for gallery-name tags | Optional; files the gallery-name tags under one tag, e.g. `Galleries`. |
 | Give tags a picture automatically | See above. |
 | Capitalise new tags automatically | See "Tag names" above. |
+| Auto tag new performers, studios and tags | See "Auto tag" above. |
 | AI: tag new scenes and images automatically | See "AI tagging" above. |
+| AI: don't auto tag from file names first | Skip the file-name matching before the AI looks at an item. |
 | AI: Ollama address | Default `http://host.docker.internal:11434`. |
 | AI: model | Default `gemma3:4b`. |
 | AI: tags to choose from | How many of your most used tags the model picks from. Default 250. |

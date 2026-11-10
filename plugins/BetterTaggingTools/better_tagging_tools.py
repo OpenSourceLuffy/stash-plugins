@@ -124,6 +124,7 @@ def settings(stash, plugin_dir=None):
         "title_case_new": bool(s.get("titleCaseNewTags")),
         "spellings": {i.strip().lower(): i.strip() for i in (s.get("titleCaseSpellings") or "").split(",") if i.strip()},
         "ai": ai_settings(s),
+        "autotag_new": bool(s.get("autoTagNew")),
     }
 
 
@@ -312,9 +313,13 @@ def run_hook(stash, plugin_dir, hook):
     kind, _, action = (hook.get("type") or "").partition(".")
     action = action.split(".")[0]  # "Create" / "Update"
 
-    if kind == "Tag":
+    if kind in ("Tag", "Performer", "Studio"):
         if action == "Create":
-            title_case_new_tag(stash, plugin_dir, hook["id"])
+            if kind == "Tag":
+                title_case_new_tag(stash, plugin_dir, hook["id"])
+            if settings(stash, plugin_dir)["autotag_new"]:
+                key = {"Tag": "autotag_tags", "Performer": "autotag_performers", "Studio": "autotag_studios"}[kind]
+                enqueue(stash, plugin_dir, **{key: [str(hook["id"])]})
         return
 
     # Edits that touch tags or performers can change someone's top tags
@@ -362,10 +367,12 @@ def run_hook(stash, plugin_dir, hook):
 JOB_DESCRIPTION = "Better Tagging Tools: processing recent edits"
 QUIET_SECONDS = 4  # how long edits must stop before the batch counts as done
 MAX_WAIT_SECONDS = 600
-QUEUE_KEYS = ("performers", "galleries", "images", "tags", "ai_scenes", "ai_images")
+QUEUE_KEYS = ("performers", "galleries", "images", "tags", "ai_scenes", "ai_images",
+              "autotag_performers", "autotag_studios", "autotag_tags")
 
 
-def enqueue(stash, plugin_dir, performers=(), galleries=(), images=(), tags=(), ai_scenes=(), ai_images=()):
+def enqueue(stash, plugin_dir, performers=(), galleries=(), images=(), tags=(), ai_scenes=(), ai_images=(),
+            autotag_performers=(), autotag_studios=(), autotag_tags=()):
     """Add to the waiting list and make sure one background job is lined up.
 
     Stash runs hooks one after another and waits for each, so a batch edit
@@ -374,7 +381,8 @@ def enqueue(stash, plugin_dir, performers=(), galleries=(), images=(), tags=(), 
     """
     with locked_queue(plugin_dir) as queue:
         last = queue.get("touched", 0)
-        for key, ids in zip(QUEUE_KEYS, (performers, galleries, images, tags, ai_scenes, ai_images)):
+        for key, ids in zip(QUEUE_KEYS, (performers, galleries, images, tags, ai_scenes, ai_images,
+                                         autotag_performers, autotag_studios, autotag_tags)):
             if ids:
                 queue[key] = sorted(set(queue.get(key, [])) | set(ids), key=int)
         queue["touched"] = time.time()
@@ -422,6 +430,12 @@ def run_queued(stash, plugin_dir):
 
     if todo["tags"] and cfg["auto_pictures"]:
         give_pictures(stash, plugin_dir, todo["tags"])
+
+    if (todo["autotag_performers"] or todo["autotag_studios"] or todo["autotag_tags"]) and cfg["autotag_new"]:
+        try:
+            autotag_new(stash, plugin_dir, todo["autotag_performers"], todo["autotag_studios"], todo["autotag_tags"])
+        except Exception as e:
+            log("warning", f"Auto tagging for new performers/studios/tags skipped: {e}")
 
     if (todo["ai_scenes"] or todo["ai_images"]) and cfg["ai"]["auto"]:
         try:
@@ -1079,6 +1093,198 @@ def title_case_new_tag(stash, plugin_dir, tag_id):
         log("info", f'New tag "{tag["name"]}" renamed to "{new}"')
 
 
+# --- auto tag ---------------------------------------------------------------
+# Stash's Auto Tag finds performers, studios and tags whose names appear in a
+# file's path. Three ways this plugin uses it:
+# - new performers, studios and tags: Stash's own Auto Tag job is started for
+#   just those (the whole library is searched for their names)
+# - "Auto tag this" on a scene, image or gallery (and "Auto tag selected" in
+#   lists): the plugin matches that item's path itself, the same way Stash
+#   does, because Stash's Auto Tag can only be limited to folders, not files
+# - before AI tagging each item gets the same file-name matching first
+# The plugin's own gallery-name tags are left out (the gallery-name setting
+# handles them).
+
+AUTOTAG_SEP = r"[.\-_ ]*"
+
+
+def autotag_new(stash, plugin_dir, performer_ids, studio_ids, tag_ids):
+    """Queued job: start Stash's Auto Tag for newly created performers,
+    studios and tags (minus ones set to be ignored by Auto Tag)."""
+    skip_tags = gallery_name_tag_ids(plugin_dir)
+    chosen = {}
+    for key, query, ids in (("performers", "findPerformers", performer_ids),
+                            ("studios", "findStudios", studio_ids), ("tags", "findTags", tag_ids)):
+        if not ids:
+            continue
+        try:
+            found = stash.call(
+                f"query($ids: [ID!]) {{ {query}(ids: $ids, filter: {{per_page: -1}}) {{ {key} {{ id name ignore_auto_tag }} }} }}",
+                {"ids": ids},
+            )[query][key]
+        except RuntimeError:  # one was deleted again in the meantime
+            found = []
+            for i in ids:
+                try:
+                    found += stash.call(
+                        f"query($ids: [ID!]) {{ {query}(ids: $ids) {{ {key} {{ id name ignore_auto_tag }} }} }}", {"ids": [i]}
+                    )[query][key]
+                except RuntimeError:
+                    pass
+        found = [x for x in found if not x["ignore_auto_tag"] and not (key == "tags" and x["id"] in skip_tags)]
+        if found:
+            chosen[key] = found
+    if not chosen:
+        return
+    stash.call("mutation($i: AutoTagMetadataInput!) { metadataAutoTag(input: $i) }",
+               {"i": {k: [x["id"] for x in v] for k, v in chosen.items()}})
+    names = ", ".join(f'{k[:-1] if k != "studios" else "studio"} "{x["name"]}"' for k, v in chosen.items() for x in v)
+    log("info", f"Started Stash's Auto Tag for new {names}")
+
+
+def autotag_pattern(name):
+    """Stash's rule: the name, case ignored, with spaces also matching dots,
+    dashes, underscores or nothing, not inside a longer word."""
+    parts = [re.escape(w) for w in name.lower().split()]
+    if not parts:
+        return None
+    return re.compile(r"(?:^|[\W_])" + AUTOTAG_SEP.join(parts) + r"(?=$|[\W_])")
+
+
+def autotag_index(stash, plugin_dir):
+    """Everything Auto Tag can match: [(kind, id, name, first word, pattern)].
+    Performers match by name; studios and tags by name and aliases."""
+    data = stash.call(
+        "{ findPerformers(filter: {per_page: -1}) { performers { id name ignore_auto_tag } }"
+        " findStudios(filter: {per_page: -1}) { studios { id name aliases ignore_auto_tag } }"
+        " findTags(filter: {per_page: -1}) { tags { id name aliases ignore_auto_tag } } }"
+    )
+    skip_tags = gallery_name_tag_ids(plugin_dir)
+    index = []
+    for kind, items in (("performer", data["findPerformers"]["performers"]),
+                        ("studio", data["findStudios"]["studios"]),
+                        ("tag", data["findTags"]["tags"])):
+        for x in items:
+            if x["ignore_auto_tag"] or (kind == "tag" and x["id"] in skip_tags):
+                continue
+            for n in [x["name"]] + (x.get("aliases") or [] if kind != "performer" else []):
+                pat = autotag_pattern(n)
+                if pat:
+                    index.append((kind, x["id"], x["name"], n.lower().split()[0], pat))
+    return index
+
+
+def autotag_path(kind, item):
+    """The path Auto Tag looks at, without the file extension."""
+    if kind == "gallery":
+        f = (item.get("files") or [None])[0]
+        path = f["path"] if f else ((item.get("folder") or {}).get("path") or "")
+    else:
+        files = item.get("visual_files") if kind == "image" else item.get("files")
+        path = ((files or [None])[0] or {}).get("path") or ""
+    if path and kind != "gallery" or path.lower().endswith(".zip"):
+        path = os.path.splitext(path)[0]
+    return path.replace("\\", "/")
+
+
+def autotag_match(index, path):
+    """(performer ids, studio id or None, tag ids, {id: name}) found in a path."""
+    low = path.lower()
+    performers, tags, names = set(), set(), {}
+    studio, studio_at = None, -1
+    for kind, xid, name, first, pat in index:
+        if first not in low:
+            continue
+        found = [m.start() for m in pat.finditer(low)]
+        if not found:
+            continue
+        names[xid if kind != "studio" else "s" + xid] = name
+        if kind == "performer":
+            performers.add(xid)
+        elif kind == "tag":
+            tags.add(xid)
+        elif found[-1] > studio_at:  # several studios: the one deepest in the path
+            studio, studio_at = xid, found[-1]
+    return performers, studio, tags, names
+
+
+AUTOTAG_FIELDS = {
+    "scene": "id title performers { id } studio { id } tags { id } files { path }",
+    "image": "id title performers { id } studio { id } tags { id } "
+             "visual_files { __typename ... on ImageFile { path } ... on VideoFile { path } }",
+    "gallery": "id title performers { id } studio { id } tags { id } files { path } folder { path }",
+}
+AUTOTAG_UPDATE = {
+    "scene": ("bulkSceneUpdate", "BulkSceneUpdateInput"),
+    "image": ("bulkImageUpdate", "BulkImageUpdateInput"),
+    "gallery": ("bulkGalleryUpdate", "BulkGalleryUpdateInput"),
+}
+
+
+def autotag_item(stash, index, kind, item, apply):
+    """Match one item's path; add what it doesn't have yet (when `apply`).
+    Returns (names added, ids of the tags added)."""
+    path = autotag_path(kind, item)
+    if not path:
+        return [], set()
+    performers, studio, tags, names = autotag_match(index, path)
+    performers -= {p["id"] for p in item.get("performers") or []}
+    tags -= {t["id"] for t in item.get("tags") or []}
+    if item.get("studio"):
+        studio = None  # Auto Tag never replaces a studio
+    if not (performers or studio or tags):
+        return [], set()
+    if apply:
+        inp = {"ids": [item["id"]]}
+        if performers:
+            inp["performer_ids"] = {"ids": sorted(performers), "mode": "ADD"}
+        if tags:
+            inp["tag_ids"] = {"ids": sorted(tags), "mode": "ADD"}
+        if studio:
+            inp["studio_id"] = studio
+        mutation, input_type = AUTOTAG_UPDATE[kind]
+        stash.call(f"mutation($i: {input_type}!) {{ {mutation}(input: $i) {{ id }} }}", {"i": inp})
+    added = [names[p] for p in sorted(performers, key=int)]
+    added += [names["s" + studio]] if studio else []
+    added += [names[t] for t in sorted(tags, key=int)]
+    return added, tags
+
+
+def autotag_load(stash, kind, ids):
+    query, field = {"scene": ("findScenes", "scenes"), "image": ("findImages", "images"),
+                    "gallery": ("findGalleries", "galleries")}[kind]
+    out = []
+    for i in range(0, len(ids), PAGE_SIZE):
+        out += stash.call(
+            f"query($ids: [ID!]) {{ {query}(ids: $ids, filter: {{per_page: -1}}) {{ {field} {{ {AUTOTAG_FIELDS[kind]} }} }} }}",
+            {"ids": ids[i:i + PAGE_SIZE]},
+        )[query][field]
+    return out
+
+
+def run_autotag_items(stash, plugin_dir, kind, ids, with_images=False):
+    """"Auto tag this" / "Auto tag selected". For a gallery, `with_images`
+    also does the images in it. Returns {items, changed, added}."""
+    index = autotag_index(stash, plugin_dir)
+    work = [(kind, x) for x in autotag_load(stash, kind, ids)]
+    if kind == "gallery" and with_images:
+        image_ids = item_ids(stash, "images", {"galleries": {"value": ids, "modifier": "INCLUDES"}})
+        work += [("image", x) for x in autotag_load(stash, "image", image_ids)]
+    changed, added = 0, Counter()
+    for n, (k, item) in enumerate(work):
+        names, _ = autotag_item(stash, index, k, item, apply=True)
+        if names:
+            changed += 1
+            added.update(names)
+        progress((n + 1) / max(len(work), 1))
+    summary = ", ".join(f"{name} ({c})" if c > 1 else name for name, c in added.most_common())
+    if changed:
+        log("info", f"Auto tag: added {summary} on {changed} of {len(work)} item(s)")
+    else:
+        log("info", f"Auto tag: nothing new found in the file names of {len(work)} item(s)")
+    return {"items": len(work), "changed": changed, "added": [n for n, _ in added.most_common()]}
+
+
 # --- AI tagging (local, via Ollama) -----------------------------------------
 # Shows a vision model running in Ollama (on this computer or another one on
 # the network) a few frames of a scene, or an image, together with a list of
@@ -1116,6 +1322,7 @@ def ai_settings(s):
         "max_tags": num("aiMaxTags", 6, 1),
         "include_organized": bool(s.get("aiIncludeOrganized")),
         "auto": bool(s.get("aiAuto")),
+        "autotag_first": not s.get("aiNoAutoTag"),
     }
 
 
@@ -1187,18 +1394,19 @@ def ai_pictures(stash, kind, item):
 
 
 AI_ITEM_FIELDS = {
-    "image": "id title organized tags { id name } paths { thumbnail } visual_files { __typename }",
-    "scene": "id title organized tags { id name } files { path duration }",
+    "image": "id title organized tags { id name } performers { id } studio { id } paths { thumbnail } "
+             "visual_files { __typename ... on ImageFile { path } ... on VideoFile { path } }",
+    "scene": "id title organized tags { id name } performers { id } studio { id } files { path duration }",
 }
 
 
-def ai_tag_item(stash, cfg, vocab, names, kind, item, apply):
+def ai_tag_item(stash, cfg, vocab, names, kind, item, apply, have_too=()):
     """Returns the names of the tags the model picked that the item doesn't
-    have yet (added when `apply`)."""
+    have yet (added when `apply`). `have_too`: tag ids just added by Auto Tag."""
     pictures = ai_pictures(stash, kind, item)
     if not pictures:
         return None
-    have = {t["id"] for t in item.get("tags") or []}
+    have = {t["id"] for t in item.get("tags") or []} | set(have_too)
     picked, seen = [], set()
     for name in ollama_tags(cfg, pictures, names):
         tid = vocab.get(name.lower())
@@ -1273,12 +1481,23 @@ def run_ai(stash, plugin_dir, only_untagged=False, preview=False, targets=None):
             targets = random.sample(targets, min(10, len(targets)))
     what = "Preview" if preview else "AI tagging"
     log("info", f"{what}: {len(targets)} item(s), choosing from your {len(names)} most used tags with {cfg['ai']['model']}")
-    added = tagged = 0
+    index = autotag_index(stash, plugin_dir) if cfg["ai"]["autotag_first"] else None
+    added = tagged = from_names = 0
     started = time.time()
     for n, (kind, item) in enumerate(targets):
         label = f'{kind} {item["id"]}' + (f' "{item["title"]}"' if item.get("title") else "")
+        pre_tags = set()
+        if index is not None:
+            try:
+                pre, pre_tags = autotag_item(stash, index, kind, item, apply=not preview)
+            except Exception as e:
+                log("warning", f"{label}: auto tag failed: {e}")
+                pre = []
+            if pre:
+                from_names += 1
+                log("info", f"{label}: from the file name {'would add' if preview else '+'} {', '.join(pre)}")
         try:
-            picked = ai_tag_item(stash, cfg, vocab, names, kind, item, apply=not preview)
+            picked = ai_tag_item(stash, cfg, vocab, names, kind, item, apply=not preview, have_too=pre_tags)
         except Exception as e:
             log("warning", f"{label}: {e}")
             if "urlopen" in repr(e) or "Connection" in repr(e):
@@ -1298,10 +1517,11 @@ def run_ai(stash, plugin_dir, only_untagged=False, preview=False, targets=None):
         progress((n + 1) / max(len(targets), 1))
     took = time.time() - started
     per = f" ({took / max(len(targets), 1):.1f}s each)" if targets else ""
+    names_note = f" Auto tag (file names) {'would add' if preview else 'added'} to {from_names} item(s)." if index is not None else ""
     if preview:
-        log("info", f"Preview done{per}: {tagged} of {len(targets)} items would get new tags. Nothing was saved.")
+        log("info", f"Preview done{per}: {tagged} of {len(targets)} items would get new AI tags.{names_note} Nothing was saved.")
     else:
-        log("info", f"Done{per}: added {added} tag(s) to {tagged} of {len(targets)} item(s).")
+        log("info", f"Done{per}: AI added {added} tag(s) to {tagged} of {len(targets)} item(s).{names_note}")
 
 
 def run_ai_queued(stash, plugin_dir, scene_ids, image_ids):
@@ -1464,6 +1684,10 @@ def main():
             print(json.dumps({"output": run_new_picture(stash, plugin_dir, args["tag_id"])}))
         elif args.get("mode") == "frame":
             print(json.dumps({"output": run_frame(stash, args)}))
+        elif args.get("mode") == "autotag":
+            ids = [i for i in str(args.get("ids") or "").split(",") if i]
+            result = run_autotag_items(stash, plugin_dir, args["kind"], ids, bool(args.get("with_images")))
+            print(json.dumps({"output": result}))
         elif args.get("mode") == "gallerytagids":
             # Asked by the page (runPluginOperation): the plugin's
             # gallery-name tags, so suggestions can leave them out

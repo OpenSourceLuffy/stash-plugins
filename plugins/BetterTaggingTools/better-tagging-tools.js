@@ -920,4 +920,161 @@
     const result = args[args.length - 1];
     return h(React.Fragment, null, result, h(RepickHost));
   });
+
+  // ---- Auto tag this / Auto tag selected ------------------------------------
+  // Adds the performers, studio and tags whose names are in the file path
+  // (the same matching as Stash's Auto Tag, which itself can only be run on
+  // whole folders). "Auto tag this" goes in the ⋮ menu of scene, image and
+  // gallery pages (for a gallery: the gallery and its images); "Auto tag
+  // selected" in the ••• menu of the scene, image and gallery lists. Stash
+  // doesn't let plugins add to the page menus, so the item is put in whenever
+  // the menu appears. A small component in the nav bar shows the results.
+  const AUTOTAG_ITEM_TEXT = "Auto tag this (from file name)";
+  const LIST_LIMIT = 500; // more than this runs as a background task
+  const autotag = { request: null, listeners: new Set(), host: null };
+  const KIND_BY_PATH = { scenes: "scene", images: "image", galleries: "gallery" };
+
+  function requestAutotag(kind, ids) {
+    autotag.request = { kind, ids: ids.map(String) };
+    autotag.listeners.forEach((fn) => fn());
+  }
+
+  // The scenes list (unlike images and galleries) has no way for plugins to add
+  // to its ••• menu, so the item goes in when the menu opens with scenes selected.
+  function selectedSceneIds() {
+    const ids = new Set();
+    document.querySelectorAll(".scene-card .card-check:checked, table input[type=checkbox]:checked").forEach((box) => {
+      const holder = box.closest(".scene-card, tr");
+      const link = holder && holder.querySelector('a[href^="/scenes/"]');
+      const m = link && link.getAttribute("href").match(/^\/scenes\/(\d+)/);
+      if (m) ids.add(m[1]);
+    });
+    return [...ids];
+  }
+
+  function placeSceneListItem(toggle) {
+    {
+      // the menu may be rendered next to the button or at the end of the page
+      const menu = (toggle.parentElement && toggle.parentElement.querySelector(".dropdown-menu")) ||
+        document.querySelector('.dropdown-menu[aria-labelledby="more-menu"]');
+      if (!menu) return;
+      menu.querySelectorAll(".bt-autotag-list-item").forEach((el) => el.remove());
+      if ([...menu.querySelectorAll(".dropdown-item")].some((el) => /^Auto tag selected/.test(el.textContent))) return;
+      if (!selectedSceneIds().length) return;
+      const item = document.createElement("a");
+      item.href = "#";
+      item.setAttribute("role", "button");
+      item.className = "dropdown-item bg-secondary text-white bt-autotag-list-item";
+      item.textContent = "Auto tag selected (from file names)";
+      item.addEventListener("click", (e) => {
+        e.preventDefault();
+        const ids = selectedSceneIds();
+        toggle.click(); // close the menu
+        if (ids.length) requestAutotag("scene", ids);
+      });
+      menu.appendChild(item);
+    }
+  }
+
+  // when the ••• button is tapped (the menu appears a moment later)
+  document.addEventListener("click", (e) => {
+    const toggle = e.target.closest && e.target.closest("#more-menu");
+    if (toggle) [0, 60, 200].forEach((ms) => setTimeout(() => placeSceneListItem(toggle), ms));
+  }, true);
+
+  function placeAutotagItems() {
+    const m = location.pathname.match(/^\/(scenes|images|galleries)\/(\d+)(?:\/|$)/);
+    if (!m) return;
+    document.querySelectorAll("#operation-menu").forEach((toggle) => {
+      const menu = toggle.parentElement && toggle.parentElement.querySelector(".dropdown-menu");
+      if (!menu || menu.querySelector(".bt-autotag-item")) return;
+      const item = document.createElement("a");
+      item.href = "#";
+      item.setAttribute("role", "button");
+      item.className = "dropdown-item bg-secondary text-white bt-autotag-item";
+      item.textContent = AUTOTAG_ITEM_TEXT;
+      item.addEventListener("click", (e) => {
+        e.preventDefault();
+        toggle.click(); // close the menu
+        const now = location.pathname.match(/^\/(scenes|images|galleries)\/(\d+)/);
+        if (now) requestAutotag(KIND_BY_PATH[now[1]], [now[2]]);
+      });
+      // above Delete, which stays last
+      const del = [...menu.querySelectorAll(".dropdown-item")].find((el) => /^delete/i.test(el.textContent.trim()));
+      if (del) del.before(item);
+      else menu.appendChild(item);
+    });
+  }
+
+  function AutotagHost() {
+    const Toast = api.hooks.useToast();
+    const me = React.useRef({}).current;
+    React.useEffect(() => {
+      if (autotag.host) return; // only one host (the nav bar can render twice)
+      autotag.host = me;
+      placeAutotagItems();
+      const obs = new MutationObserver(placeAutotagItems);
+      obs.observe(document.body, { childList: true, subtree: true });
+
+      const run = async ({ kind, ids }) => {
+        const what = ids.length === 1
+          ? (kind === "gallery" ? "this gallery and its images" : `this ${kind}`)
+          : `${ids.length} ${kind === "gallery" ? "galleries and their images" : kind + "s"}`;
+        const args = { mode: "autotag", kind, ids: ids.join(","), with_images: kind === "gallery" ? "1" : "" };
+        try {
+          if (ids.length > LIST_LIMIT) {
+            await gql("mutation($p: ID!, $d: String, $a: Map) { runPluginTask(plugin_id: $p, description: $d, args_map: $a) }", {
+              p: PLUGIN_ID, d: `Better Tagging Tools: auto tag ${ids.length} ${kind}s`, a: args,
+            });
+            Toast.success(`Auto tagging ${what} in the background. You can follow it under Settings → Tasks.`);
+            return;
+          }
+          Toast.success(`Auto tagging ${what}…`);
+          const d = await gql("mutation($p: ID!, $a: Map) { runPluginOperation(plugin_id: $p, args: $a) }", { p: PLUGIN_ID, a: args });
+          const r = d.runPluginOperation || {};
+          if (!r.changed) {
+            Toast.success(`Auto tag: nothing new in the file name${r.items === 1 ? "" : "s"}`);
+            return;
+          }
+          const list = (r.added || []).slice(0, 8).join(", ") + ((r.added || []).length > 8 ? ", …" : "");
+          Toast.success(r.items === 1 ? `Auto tag added ${list}` : `Auto tag added ${list} on ${r.changed} of ${r.items} items`);
+          // show the new performers/tags without a reload
+          const client = api.utils && api.utils.StashService && api.utils.StashService.getClient && api.utils.StashService.getClient();
+          if (client && client.refetchQueries) client.refetchQueries({ include: "active" });
+        } catch (e) {
+          Toast.error(e);
+        }
+      };
+      const fn = () => {
+        const req = autotag.request;
+        autotag.request = null;
+        if (req && req.ids.length) run(req);
+      };
+      autotag.listeners.add(fn);
+      return () => {
+        obs.disconnect();
+        autotag.listeners.delete(fn);
+        autotag.host = null;
+        document.querySelectorAll(".bt-autotag-item, .bt-autotag-list-item").forEach((el) => el.remove());
+      };
+    }, []);
+    return null;
+  }
+
+  api.patch.after("MainNavBar.UtilityItems", function (...args) {
+    const result = args[args.length - 1];
+    return h(React.Fragment, null, result, h(AutotagHost));
+  });
+
+  for (const [component, kind] of [["FilteredImageList", "image"], ["FilteredGalleryList", "gallery"]]) {
+    api.patch.before(component, function (...args) {
+      const props = args[0] || {};
+      const op = {
+        text: "Auto tag selected (from file names)",
+        isDisplayed: (result, filter, selectedIds) => !!selectedIds && selectedIds.size > 0,
+        onClick: (result, filter, selectedIds) => requestAutotag(kind, [...(selectedIds || [])]),
+      };
+      return [Object.assign({}, props, { extraOperations: [...(props.extraOperations || []), op] }), ...args.slice(1)];
+    });
+  }
 })();
