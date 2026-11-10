@@ -56,6 +56,10 @@ settings:
     displayName: Disable mobile tweaks
     description: Turn off the phone layout changes.
     type: BOOLEAN
+  stayOnEditAfterSave:
+    displayName: Stay on Edit after saving
+    description: Saving a scene or image normally takes you back to its Details tab. Turn this on to stay on the Edit tab, like Stash does by default.
+    type: BOOLEAN
   disableImageSwipe:
     displayName: Disable swiping between images
     description: Turn off swipe left/right (and arrow keys) to move between images on an image's page.

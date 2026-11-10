@@ -28,6 +28,8 @@ A cleaner, app-like look for Stash, built to feel good on a phone as well as a c
   trackpad or two-finger pinch, or a double-click / double-tap, and drag to move around. Click
   outside the picture, press Esc or tap **Close** to go back. While zoomed out, swipe (or drag, or
   use the arrow keys) to the next or previous image without leaving full screen.
+- Saving an edited scene or image takes you back to its **Details** tab (if the save fails, you stay on
+  **Edit**).
 
 **Phones**
 - App-style tab bar at the bottom of the screen. Pick and reorder its tabs from **More → Edit tab bar**. Pages added by other plugins (e.g. stash-tv) can go on it too.
@@ -81,6 +83,7 @@ Under **Settings → Plugins → Modern UI**:
 | Image details beside the picture | Keep Stash's side panel on image pages on wide screens. |
 | Open gallery details panel by default | Start gallery pages with the details panel open. |
 | Disable mobile tweaks | Turn off the phone layout. |
+| Stay on Edit after saving | Don't go back to the Details tab after saving a scene or image. |
 | Disable swiping between images | Turn off swipe / arrow-key navigation on image pages. |
 | Disable bottom tab bar on phones | Turn off the tab bar. |
 | Bottom tab bar pages / More panel order | Set from the phone via **More → Edit tab bar**. |

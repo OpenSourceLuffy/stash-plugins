@@ -84,6 +84,7 @@
   setupLongPressSelect();
   setupGalleryTitle();
   setupTagIndex();
+  if (!cfg.stayOnEditAfterSave) setupBackToDetailsOnSave();
   if (!cfg.showGalleryDetails) setupGalleryPanelClosed();
 
   // the full-screen viewer swipes between images too, unless that's off
@@ -1242,6 +1243,53 @@
     window.addEventListener("popstate", () => {
       if (viewer && !IMAGE_PAGE.test(location.pathname)) viewer.shut();
     });
+  }
+
+  // ------------------------------------------------------------------
+  // Scene / image page: back to Details after saving an edit
+  // ------------------------------------------------------------------
+  // Stash stays on the Edit tab after Save. Once its "Updated scene/image"
+  // message shows (so the save went through), switch to the Details tab. If
+  // saving fails, Stash shows an error instead and you stay on Edit.
+
+  function setupBackToDetailsOnSave() {
+    const PAGE = /^\/(scenes|images)\/\d+\/?$/;
+    let pending = null; // { path, until }
+
+    document.addEventListener("click", (e) => {
+      const btn = e.target instanceof Element && e.target.closest("button.edit-button.btn-primary");
+      if (!btn || !PAGE.test(location.pathname) || btn.disabled) return;
+      if (!btn.closest(".tab-pane.active, [role=tabpanel]") || !/save/i.test(btn.textContent)) return;
+      pending = { path: location.pathname, until: Date.now() + 20000 };
+    }, true);
+
+    new MutationObserver((records) => {
+      if (!pending) return;
+      if (Date.now() > pending.until || location.pathname !== pending.path) {
+        pending = null;
+        return;
+      }
+      for (const r of records) {
+        for (const node of r.addedNodes) {
+          if (!(node instanceof Element)) continue;
+          const toast = node.matches(".toast") ? node : node.querySelector(".toast");
+          if (!toast) continue;
+          if (toast.classList.contains("success")) {
+            const kind = location.pathname.startsWith("/images") ? "image" : "scene";
+            const tab = document.querySelector(`.nav-link[data-rb-event-key="${kind}-details-panel"]`);
+            pending = null;
+            if (tab) {
+              tab.click();
+              const tabs = tab.closest(".nav");
+              if (tabs && tabs.getBoundingClientRect().top < 0) tabs.scrollIntoView({ block: "start" });
+            }
+            return;
+          }
+          pending = null; // an error: stay on Edit to fix it
+          return;
+        }
+      }
+    }).observe(document.body, { childList: true, subtree: true });
   }
 
   // ------------------------------------------------------------------
