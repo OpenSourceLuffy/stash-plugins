@@ -91,11 +91,11 @@ tasks:
     defaultArgs:
       mode: handle_studios_preview
   - name: "Studios from accounts: from file names and links only"
-    description: Gives scenes without a studio a studio for the account in their file name, title, details or URLs (e.g. "onlyfans.com/name"), creating it under a parent studio for the platform if needed. Fast; no AI.
+    description: Gives scenes without a studio a studio for the account in their file name, title, details or URLs (e.g. "onlyfans.com/name"), creating it under a parent studio for the platform if needed, and adds the performer whose name, alias or profile link matches the account. Fast; no AI.
     defaultArgs:
       mode: handle_studios_text
   - name: "Studios from accounts: also read watermarks with the AI"
-    description: The same, and the local AI model (Ollama) also reads watermarks and on-screen text in 6 frames of each scene. It only transcribes the text it sees (names are picked out of that), and a name only counts if it's read the same way in at least two frames. About 5-15 seconds per scene; scenes already checked are skipped next time. Scenes that have a studio are never changed.
+    description: The same, and the local AI model (Ollama) also reads watermarks and on-screen text in up to 6 frames of each scene - account names, and the names of studios you already have. Account names that match a performer's name, alias or profile link add that performer to the scene. It only transcribes the text it sees (names are picked out of that), and a name only counts if it's read the same way in at least two frames. About 5-15 seconds per scene; scenes already checked are skipped next time. Scenes that have a studio are never changed.
     defaultArgs:
       mode: handle_studios
   - name: Preview dates from file names (no changes)
@@ -199,6 +199,10 @@ settings:
   aiAuto:
     displayName: "AI: tag new scenes and images automatically"
     description: Have the local AI model tag scenes and images as they're added by a scan.
+    type: BOOLEAN
+  aiNewAll:
+    displayName: "AI: tag, title and find the studio of new scenes and images"
+    description: "When a scan adds a scene or image, the local AI model does all three: tags it (like \"AI: tag new scenes and images automatically\"), finds a scene's studio and performers from the accounts and studio watermarks it shows (like the \"Studios from accounts\" tasks), and gives it a title if it has none (from the file name, else the AI). Runs in the background once the scan is done; a few seconds to a minute per item."
     type: BOOLEAN
   aiOllamaUrl:
     displayName: "AI: Ollama address"

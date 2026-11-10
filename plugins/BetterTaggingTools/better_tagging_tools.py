@@ -433,7 +433,7 @@ def run_hook(stash, plugin_dir, hook):
         if image_event:
             images = [str(hook["id"])]  # its galleries are looked up by the job
     ai_scenes, ai_images = [], []
-    if new_item and cfg["ai"]["auto"]:
+    if new_item and (cfg["ai"]["auto"] or cfg["ai"]["new_all"]):
         (ai_scenes if kind == "Scene" else ai_images).append(str(hook["id"]))
     dates = {}
     if created and cfg["dates_new"]:
@@ -547,11 +547,24 @@ def run_queued(stash, plugin_dir):
         except Exception as e:
             log("warning", f"Titles for new items skipped: {e}")
 
-    if (todo["ai_scenes"] or todo["ai_images"]) and cfg["ai"]["auto"]:
+    if (todo["ai_scenes"] or todo["ai_images"]) and (cfg["ai"]["auto"] or cfg["ai"]["new_all"]):
         try:
             run_ai_queued(stash, plugin_dir, todo["ai_scenes"], todo["ai_images"])
         except Exception as e:
             log("warning", f"AI tagging of new items skipped: {e}")
+        if cfg["ai"]["new_all"]:
+            # then the studio and performers from accounts / watermarks, then
+            # a title (which can use the tags and performers just found)
+            if todo["ai_scenes"]:
+                try:
+                    run_accounts_items(stash, plugin_dir, todo["ai_scenes"])
+                except Exception as e:
+                    log("warning", f"Studios from accounts for new scenes skipped: {e}")
+            try:
+                run_ai_titles(stash, plugin_dir, ["scene", "image"],
+                              ids={"scene": todo["ai_scenes"], "image": todo["ai_images"]})
+            except Exception as e:
+                log("warning", f"AI titles for new items skipped: {e}")
 
     work = [(o, todo[k]) for o, k in (("performers", "performers"), ("studios", "top_studios"),
                                       ("galleries", "top_galleries")) if todo[k]]
@@ -1810,6 +1823,7 @@ def ai_settings(s):
         "max_tags": num("aiMaxTags", 6, 1),
         "include_organized": bool(s.get("aiIncludeOrganized")),
         "auto": bool(s.get("aiAuto")),
+        "new_all": bool(s.get("aiNewAll")),
         "autotag_first": not s.get("aiNoAutoTag"),
     }
 
@@ -2185,7 +2199,7 @@ def ai_title_context(stash, cfg, plugin_dir, kind, item, excluded=None):
     return pictures, "\n".join(bits)
 
 
-def run_ai_titles(stash, plugin_dir, kinds, preview=False, limit=None):
+def run_ai_titles(stash, plugin_dir, kinds, preview=False, limit=None, ids=None):
     """Task: give every scene / image without a title one - from the file
     name when that makes a good one, else the local AI model's best idea.
     `preview`: only log what it would set (on `limit` random items)."""
@@ -2198,10 +2212,18 @@ def run_ai_titles(stash, plugin_dir, kinds, preview=False, limit=None):
         query, field, farg, ftype = {"scene": ("findScenes", "scenes", "scene_filter", "SceneFilterType"),
                                      "image": ("findImages", "images", "image_filter", "ImageFilterType")}[kind]
         f = {"title": {"value": "", "modifier": "IS_NULL"}}
-        if not cfg["ai"]["include_organized"]:
+        if not cfg["ai"]["include_organized"] and ids is None:
             f["organized"] = False
         page = 1
         while True:
+            if ids is not None:  # just these (e.g. new from a scan)
+                if not ids.get(kind):
+                    break
+                items = stash.call(
+                    f"query($ids: [ID!]) {{ {query}(ids: $ids, filter: {{per_page: -1}}) {{ {field} {{ {TITLE_ITEM_FIELDS[kind]} }} }} }}",
+                    {"ids": ids[kind]})[query][field]
+                todo += [(kind, i) for i in items if not (i.get("title") or "").strip()]
+                break
             items = stash.call(
                 f"query($p: {ftype}, $f: FindFilterType) {{ {query}({farg}: $p, filter: $f) {{ {field} {{ {TITLE_ITEM_FIELDS[kind]} }} }} }}",
                 {"p": f, "f": {"page": page, "per_page": 500, "sort": "created_at", "direction": "DESC"}},
@@ -2286,7 +2308,7 @@ HANDLE_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.\-]{1,39}$")
 HANDLE_STOP = {"onlyfans", "fansly", "instagram", "tiktok", "com", "www", "http", "https", "profile", "me", "my",
                "username", "user", "handle", "link", "bio", "follow", "subscribe", "watermark"}
 HANDLE_FRAME_POINTS = (0.03, 0.2, 0.4, 0.6, 0.8, 0.97)
-HANDLE_SCENE_FIELDS = "id title details urls studio { id } files { path duration }"
+HANDLE_SCENE_FIELDS = "id title details urls studio { id } performers { id } files { path duration }"
 
 
 def clean_handle(h):
@@ -2332,10 +2354,10 @@ def handles_in_ocr(text):
     return out
 
 
-def ollama_handles(cfg, picture):
-    """The social media handles in one frame. The model only transcribes the
-    text it can see (asked for account names directly, small models tend to
-    make one up); the names are picked out of that here."""
+def ollama_frame_text(cfg, picture):
+    """The text the model can read in one frame ("" if none). It only
+    transcribes (asked for account names directly, small models tend to make
+    one up); names are picked out of the text here."""
     ai = cfg["ai"]
     body = {
         "model": ai["model"], "stream": False, "keep_alive": "15m", "options": {"temperature": 0},
@@ -2356,37 +2378,107 @@ def ollama_handles(cfg, picture):
                 raise
             time.sleep(1)
     text = ((reply.get("message") or {}).get("content") or "").strip()
-    return [] if text.upper().startswith("NONE") else handles_in_ocr(text)
+    return "" if text.upper().startswith("NONE") else text
 
 
-def scene_handles(stash, cfg, scene, use_ai=True):
-    """[(platform, handle, where)] for one scene, best first."""
+def _norm(text):
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).split())
+
+
+def name_patterns(name):
+    """Regexes for a name as it could be written in a watermark: as is, or
+    without its spaces (netvideogirls.com), symbols kept (PORN+ isn't "porn")."""
+    low = " ".join((name or "").lower().split())
+    variants = {low}
+    if " " in low:
+        variants.add(low.replace(" ", ""))
+    return [re.compile(r"(?<![a-z0-9])" + re.escape(v) + r"(?![a-z0-9])") for v in variants if v]
+
+
+def accounts_context(stash):
+    """What a scan matches against, loaded once per run: all studios, the
+    existing studios whose name could show up as a watermark, and the
+    performers by name / alias / profile link."""
+    studios = stash.call("{ findStudios(filter: {per_page: -1}) { studios { id name aliases urls } } }")["findStudios"]["studios"]
+    platform_names = {v[0].lower() for v in PLATFORMS.values()}
+    marks = []  # (pattern, studio)
+    for st in studios:
+        if st["name"].lower() in platform_names:
+            continue
+        for n in [st["name"]] + (st.get("aliases") or []):
+            if len(re.sub(r"[^a-z0-9]", "", n.lower())) >= 4:
+                marks += [(pat, st) for pat in name_patterns(n)]
+    perfs = stash.call("{ findPerformers(filter: {per_page: -1}) { performers { id name alias_list urls } } }")["findPerformers"]["performers"]
+    by_key, perf_marks = {}, []
+    for p in perfs:
+        for n in [p["name"]] + (p.get("alias_list") or []):
+            k = re.sub(r"[^a-z0-9]", "", (n or "").lower())
+            if len(k) >= 4:
+                by_key.setdefault(k, p)
+            # names worth looking for in a watermark: two words, or 6+ letters
+            if len(k) >= 6 or len([w for w in (n or "").split() if len(w) >= 2]) >= 2:
+                perf_marks += [(pat, p) for pat in name_patterns(n)]
+    return {"studios": studios, "marks": marks, "perf_keys": by_key, "perfs": perfs, "perf_marks": perf_marks}
+
+
+def performer_for_handle(ctx, platform, handle):
+    """A performer whose name or alias is the handle (ignoring spaces, dots,
+    case), or who has the account's profile link."""
+    p = ctx["perf_keys"].get(re.sub(r"[^a-z0-9]", "", handle.lower()))
+    if p:
+        return p
+    url = PLATFORMS[platform][1].format(handle).lower()
+    tail = url.split("://", 1)[1].replace("www.", "")
+    for p in ctx["perfs"]:
+        if any(tail == u.lower().rstrip("/").split("://", 1)[-1].replace("www.", "") for u in p.get("urls") or []):
+            return p
+    return None
+
+
+def scene_accounts(stash, cfg, ctx, scene, use_ai=True):
+    """What a scene shows: ([(platform, handle, where)] best first,
+    [(existing studio, frames)] whose name is in the watermark)."""
     text = " ".join([scene.get("title") or "", scene.get("details") or "", " ".join(scene.get("urls") or []),
                      item_path("scene", scene)])
     from_text = handles_in_text(text)
     seen = defaultdict(int)  # (platform or None, handle lower) -> frames
     spelled = {}
+    marks = defaultdict(int)  # studio id -> frames its name was read in
+    mark_studio = {}
+    pmarks = defaultdict(int)  # performer id -> frames their name was read in
+    mark_perf = {}
     f = (scene.get("files") or [None])[0]
     if use_ai and f and (f.get("duration") or 0) > 1:
         for i, at in enumerate(HANDLE_FRAME_POINTS):
             try:
                 pic = grab_frame(stash, f["path"], f["duration"] * at, width=1280)[0]
-                for plat, h in set(ollama_handles(cfg, pic)):
+                frame_text = ollama_frame_text(cfg, pic)
+                for plat, h in set(handles_in_ocr(frame_text)):
                     seen[(plat, h.lower())] += 1
                     spelled.setdefault(h.lower(), h)
+                low = " ".join(frame_text.lower().split())
+                hit = {st["id"]: st for pat, st in ctx["marks"] if pat.search(low)}
+                for st_id, st in hit.items():
+                    marks[st_id] += 1
+                    mark_studio[st_id] = st
+                phit = {p["id"]: p for pat, p in ctx["perf_marks"] if pat.search(low)}
+                for p_id, p in phit.items():
+                    pmarks[p_id] += 1
+                    mark_perf[p_id] = p
             except Exception as e:
                 log("debug", f"frame at {at:.0%}: {e}")
-            # stop early: two frames agree on a name (with its platform), or
-            # three frames show no account at all (watermarks don't come and go)
+            # stop early: two frames agree (on a name with its platform, or a
+            # studio), or three frames show nothing (watermarks don't come and go)
             agreed = defaultdict(int)
             for (plat, hl), n in seen.items():
                 agreed[hl] += n
-            if any(n >= 2 and any(p and h == hl for p, h in seen) for hl, n in agreed.items()):
+            if any(n >= 2 and any(p and h == hl for p, h in seen) for hl, n in agreed.items()) \
+                    or any(n >= 2 for n in marks.values()):
                 break
-            if i == 2 and not seen:
+            if i == 2 and not seen and not marks and not pmarks:
                 break
     # a handle read without its platform takes the platform it was read with
-    # elsewhere, or that the text names
+    # elsewhere
     by_handle = defaultdict(int)
     plat_of = {}
     for (plat, hl), n in seen.items():
@@ -2403,7 +2495,44 @@ def scene_handles(stash, cfg, scene, use_ai=True):
         if n >= 2 and plat:
             results.append((plat, spelled[hl], f"{n} frames"))
     results.sort(key=lambda r: (not r[2].startswith("text"), PLATFORM_ORDER.index(r[0])))
-    return results
+    studios = sorted(((mark_studio[i], n) for i, n in marks.items() if n >= 2), key=lambda x: -x[1])
+    performers = [mark_perf[i] for i, n in pmarks.items() if n >= 2]
+    return results, studios, performers
+
+
+def process_scene_accounts(stash, cfg, ctx, scene, apply, use_ai=True):
+    """Give one scene its studio (if it has none) and performers from the
+    accounts / studio watermarks it shows. Returns (a log line or None,
+    whether a new studio was made)."""
+    handles, mark_studios, mark_perfs = scene_accounts(stash, cfg, ctx, scene, use_ai)
+    name = os.path.basename(item_path("scene", scene)) or f"scene {scene['id']}"
+    parts, inp, new = [], {"id": scene["id"]}, False
+    if not scene.get("studio"):
+        if mark_studios:
+            st, n = mark_studios[0]
+            parts.append(f'studio "{st["name"]}" [its watermark, in {n} frames]')
+            inp["studio_id"] = st["id"]
+        elif handles:
+            plat, handle, where = handles[0]
+            st, new = studio_for_handle(stash, ctx["studios"], plat, handle, apply)
+            parts.append(f'studio "{st["name"]}"' + (f" (new, under {PLATFORMS[plat][0]})" if new else "")
+                         + f" [{PLATFORMS[plat][0]} @{handle}, from {where}]")
+            inp["studio_id"] = st["id"]
+    have = {p["id"] for p in scene.get("performers") or []}
+    add = []
+    for p in [performer_for_handle(ctx, plat, handle) for plat, handle, _ in handles] + mark_perfs:
+        if p and p["id"] not in have and p["id"] not in [x["id"] for x in add]:
+            add.append(p)
+    if add:
+        parts.append(("performers " if len(add) > 1 else "performer ") + ", ".join(f'"{p["name"]}"' for p in add)
+                     + " [account name / name in the watermark]")
+        inp["performer_ids"] = sorted(have | {p["id"] for p in add}, key=int)
+    if not parts:
+        return None, False
+    if apply and len(inp) > 1:
+        stash.call("mutation($i: SceneUpdateInput!) { sceneUpdate(input: $i) { id } }", {"i": inp})
+    others = ", ".join(f"{PLATFORMS[p][0]} @{h}" for p, h, _ in handles[1:])
+    return f'{"Would give" if not apply else "Gave"} {name} ' + " and ".join(parts) + (f"; also saw {others}" if others else ""), new
 
 
 def studio_for_handle(stash, studios, platform, handle, apply):
@@ -2428,6 +2557,22 @@ def studio_for_handle(stash, studios, platform, handle, apply):
                     {"i": {"name": handle, "urls": [url], "parent_id": parent["id"]}})["studioCreate"]
     studios.append(st)
     return st, True
+
+
+def run_accounts_items(stash, plugin_dir, scene_ids):
+    """New scenes from a scan: studio and performers from accounts."""
+    cfg = settings(stash, plugin_dir)
+    ai_check(cfg)
+    ctx = accounts_context(stash)
+    scenes = stash.call(f"query($ids: [ID!]) {{ findScenes(ids: $ids, filter: {{per_page: -1}}) {{ scenes {{ {HANDLE_SCENE_FIELDS} }} }} }}",
+                        {"ids": scene_ids})["findScenes"]["scenes"]
+    for sc in scenes:
+        try:
+            line, _ = process_scene_accounts(stash, cfg, ctx, sc, apply=True)
+            if line:
+                log("info", line)
+        except Exception as e:
+            log("warning", f"scene {sc['id']}: accounts skipped ({e})")
 
 
 def run_handle_studios(stash, plugin_dir, preview=False, limit=None, use_ai=True):
@@ -2458,8 +2603,8 @@ def run_handle_studios(stash, plugin_dir, preview=False, limit=None, use_ai=True
         scenes = random.sample(scenes, min(limit, len(scenes)))
     elif use_ai:  # the AI pass skips scenes it has already looked at
         scenes = [s_ for s_ in scenes if s_["id"] not in done]
-    studios = stash.call("{ findStudios(filter: {per_page: -1}) { studios { id name aliases urls } } }")["findStudios"]["studios"]
-    log("info", f"Looking for OnlyFans / Fansly / Instagram / TikTok accounts in {len(scenes)} scene(s) without a studio"
+    ctx = accounts_context(stash)
+    log("info", f"Looking for OnlyFans / Fansly / Instagram / TikTok accounts and studio watermarks in {len(scenes)} scene(s) without a studio"
         + (" (preview, nothing is saved)" if preview else "")
         + (". The AI reads up to 6 frames of each, so this takes a while; you can cancel it under Settings → Tasks and run it again to carry on."
            if use_ai and len(scenes) > 20 else "."))
@@ -2468,20 +2613,12 @@ def run_handle_studios(stash, plugin_dir, preview=False, limit=None, use_ai=True
         progress(n / max(len(scenes), 1))
         name = os.path.basename(item_path("scene", sc)) or f"scene {sc['id']}"
         try:
-            found = scene_handles(stash, cfg, sc, use_ai)
+            line, new = process_scene_accounts(stash, cfg, ctx, sc, apply=not preview, use_ai=use_ai)
         except Exception as e:
             log("warning", f"{name}: skipped ({e})")
             continue
-        if found:
-            plat, handle, where = found[0]
-            st, new = studio_for_handle(stash, studios, plat, handle, apply=not preview)
-            others = ", ".join(f"{p}/{h}" for p, h, _ in found[1:])
-            log("info", f'{"Would set" if preview else "Set"} {name} → studio "{st["name"]}"'
-                + (f" (new, under {PLATFORMS[plat][0]})" if new else "") + f" [{PLATFORMS[plat][0]} @{handle}, from {where}]"
-                + (f"; also saw {others}" if others else ""))
-            if not preview:
-                stash.call("mutation($i: SceneUpdateInput!) { sceneUpdate(input: $i) { id } }",
-                           {"i": {"id": sc["id"], "studio_id": st["id"]}})
+        if line:
+            log("info", line)
             assigned += 1
             created += new
         if not preview and not limit and use_ai:
@@ -2493,7 +2630,7 @@ def run_handle_studios(stash, plugin_dir, preview=False, limit=None, use_ai=True
                 os.replace(tmp, done_path)
     progress(1)
     log("info", f"{'Preview: ' if preview else 'Done: '}{assigned} of {len(scenes)} scene(s) "
-        + ("would get" if preview else "got") + f" a studio from an account name ({created} new studio(s))"
+        + ("would get" if preview else "got") + f" a studio and/or performers from an account or watermark ({created} new studio(s))"
         + (". Nothing was saved." if preview else "."))
 
 

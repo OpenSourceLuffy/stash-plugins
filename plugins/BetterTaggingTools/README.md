@@ -166,6 +166,15 @@ An existing studio with that name, alias or profile link is used; otherwise a ne
 with the profile link, under a parent studio for the platform (**OnlyFans**, **Fansly**,
 **Instagram** or **TikTok**, made if needed). A scene that already has a studio is never changed.
 
+- **Studio watermarks:** the AI pass also looks for the names (and aliases) of studios you already
+  have in the on-screen text, e.g. `studioname.com` for *Studio Name* (symbols count, so *PORN+*
+  needs the `+`). Read in two frames, that studio is used rather than making a new account studio.
+  Names shorter than 4 letters are skipped.
+- **Performers:** an account name that matches a performer's name or alias (ignoring case, spaces
+  and dots, so `janedoe` matches *Jane Doe*) or one of their profile links adds that performer to
+  the scene, and so does a performer's name read in the watermark in two frames (names of 6+
+  letters or two words). Performers are only ever added.
+
 ## Dates from file names
 
 Scenes, images and galleries without a date can get the one in their file name, or in the name of
@@ -251,6 +260,10 @@ Tags scenes and images with a vision model running on your own computer through
 - **AI tagging: items with no tags** and **AI tagging: everything not done yet**: add tags. They only ever *add* tags, skip organized items (unless you change that), and remember what's done, so you can stop a run and start it again later.
 - **Ask AI for tags**: a button under the Tags box when you edit a scene or image. Suggestions show up as one-click chips; nothing is added until you click them and save.
 - **AI: tag new scenes and images automatically**: AI-tags new items after a scan.
+- **AI: tag, title and find the studio of new scenes and images**: after a scan, each new item is
+  AI-tagged, then a new scene gets its studio and performers from accounts / studio watermarks (see
+  "Studios from accounts"), then anything still untitled gets a title (from the file name, else the
+  AI) - in that order, so the title can use what was just found.
 
 The model is shown a picture (or 3 frames from a scene) and your most used tags (250 by default),
 and can only answer with tags from that list, so it never invents new tags. Gemma 3 4B takes about
@@ -305,6 +318,7 @@ Under **Settings → Plugins → Better Tagging Tools**:
 | Fill in titles of new scenes, images and galleries | See "Titles from file names" above. |
 | Keep performer and studio names in titles | Leave names in titles made from file names. |
 | AI: tag new scenes and images automatically | See "AI tagging" above. |
+| AI: tag, title and find the studio of new scenes and images | All three AI steps for each new item after a scan. |
 | AI: don't auto tag from file names first | Skip the file-name matching before the AI looks at an item. |
 | AI: Ollama address | Default `http://host.docker.internal:11434`. |
 | AI: model | Default `gemma3:4b`. |
