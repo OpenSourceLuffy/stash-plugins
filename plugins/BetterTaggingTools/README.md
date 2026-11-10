@@ -146,6 +146,26 @@ also match by their aliases. A studio is only set when the item has none. Anythi
 > Short, everyday tag names (like a tag called "Me") match a lot of file names. Turn on
 > **Ignore Auto Tag** on such tags (edit the tag) to keep them out.
 
+## Studios from accounts
+
+Many downloaded clips carry the account they come from, as a watermark (`onlyfans.com/name`,
+`@name` next to a TikTok logo) or in the file name or link. These tasks give scenes **without a
+studio** a studio for that account:
+
+- **From file names and links only** looks for `onlyfans.com/…`, `fansly.com/…`, `instagram.com/…`
+  and `tiktok.com/@…` in the file name, title, details and URLs. Fast, no AI.
+- **Also read watermarks with the AI** has the local AI model (see below) transcribe the watermark
+  and on-screen text in up to 6 frames; account names are picked out of that text (asked for names
+  directly, small models tend to make one up). A name only counts if it's read the same way in at
+  least two frames (or in one frame and the text), so one-off misreads are ignored. It stops early
+  once two frames agree, or after three frames with no account. About 5–15 seconds per scene;
+  scenes already looked at are skipped next time, so you can cancel it and carry on later.
+- **Preview on 10 scenes** writes what it would do to the log without changing anything.
+
+An existing studio with that name, alias or profile link is used; otherwise a new one is made,
+with the profile link, under a parent studio for the platform (**OnlyFans**, **Fansly**,
+**Instagram** or **TikTok**, made if needed). A scene that already has a studio is never changed.
+
 ## Dates from file names
 
 Scenes, images and galleries without a date can get the one in their file name, or in the name of
@@ -260,7 +280,7 @@ Stash treats tag names that differ only in case as the same tag, so renaming nev
 ## Tasks
 
 Under **Settings → Tasks → Plugin Tasks → Better Tagging Tools** the tasks are grouped into
-sections you can open and close: **Top tags**, **AI tagging**, **Titles**, **Dates**, **Tag pictures**
+sections you can open and close: **Top tags**, **AI tagging**, **Titles**, **Studios from accounts**, **Dates**, **Tag pictures**
 and **Tidy up tags**. Each section starts with its preview task, which only writes to the log.
 
 ## Settings

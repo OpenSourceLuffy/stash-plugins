@@ -86,6 +86,18 @@ tasks:
     description: The same for images (camera photos, screenshots...). Takes a few seconds per image, so a big library can take hours; you can cancel it under Settings → Tasks and run it again later to carry on.
     defaultArgs:
       mode: ai_titles_images
+  - name: "Studios from accounts: preview on 10 scenes (no changes)"
+    description: Picks 10 random scenes without a studio and writes to the log which OnlyFans / Fansly / Instagram / TikTok account each comes from and the studio it would get, without changing anything. Try this first.
+    defaultArgs:
+      mode: handle_studios_preview
+  - name: "Studios from accounts: from file names and links only"
+    description: Gives scenes without a studio a studio for the account in their file name, title, details or URLs (e.g. "onlyfans.com/name"), creating it under a parent studio for the platform if needed. Fast; no AI.
+    defaultArgs:
+      mode: handle_studios_text
+  - name: "Studios from accounts: also read watermarks with the AI"
+    description: The same, and the local AI model (Ollama) also reads watermarks and on-screen text in 6 frames of each scene. It only transcribes the text it sees (names are picked out of that), and a name only counts if it's read the same way in at least two frames. About 5-15 seconds per scene; scenes already checked are skipped next time. Scenes that have a studio are never changed.
+    defaultArgs:
+      mode: handle_studios
   - name: Preview dates from file names (no changes)
     description: Writes what "Fill in dates from file names" would set to the log, without changing anything.
     defaultArgs:

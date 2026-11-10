@@ -842,7 +842,8 @@ def grab_frame(stash, video, at, width=640):
     """One frame of a video as a JPEG, `width` pixels wide (never enlarged)."""
     proc = subprocess.run(
         [ffmpeg_path(stash), "-loglevel", "error", "-ss", f"{at:.2f}", "-i", video,
-         "-frames:v", "1", "-vf", f"scale='min({width},iw)':-2", "-q:v", "3",
+         # yuvj420p: 10-bit / HDR phone videos can't go straight to JPEG
+         "-frames:v", "1", "-vf", f"scale='min({width},iw)':-2,format=yuvj420p", "-q:v", "3",
          "-f", "image2pipe", "-vcodec", "mjpeg", "-"],
         capture_output=True, timeout=60,
     )
@@ -2264,6 +2265,238 @@ def run_title_ideas(stash, plugin_dir, kind, item_id, use_ai):
     return {"ai": ollama_titles(cfg, pictures, context)}
 
 
+# --- studios from social media handles ----------------------------------------
+# Finds the OnlyFans / Fansly / Instagram / TikTok account a scene comes from -
+# in its file name, title, details or URLs (e.g. "onlyfans.com/name"), or in
+# the watermark / on-screen text the local AI model reads off a few frames -
+# and gives scenes without a studio a studio for it (made if needed, under a
+# parent studio for the platform). A handle the AI reads only counts if it's
+# in at least two frames (or in one frame and the text), as small models can
+# misread small text.
+
+PLATFORMS = {
+    # key: (parent studio name, profile URL, patterns in text)
+    "onlyfans": ("OnlyFans", "https://onlyfans.com/{}", [r"onlyfans\.com/([A-Za-z0-9_.\-]{2,40})"]),
+    "fansly": ("Fansly", "https://fansly.com/{}", [r"fansly\.com/([A-Za-z0-9_.\-]{2,40})"]),
+    "instagram": ("Instagram", "https://www.instagram.com/{}", [r"instagram\.com/([A-Za-z0-9_.]{2,30})"]),
+    "tiktok": ("TikTok", "https://www.tiktok.com/@{}", [r"tiktok\.com/@([A-Za-z0-9_.]{2,30})"]),
+}
+PLATFORM_ORDER = ("onlyfans", "fansly", "tiktok", "instagram")  # which one wins if there are several
+HANDLE_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.\-]{1,39}$")
+HANDLE_STOP = {"onlyfans", "fansly", "instagram", "tiktok", "com", "www", "http", "https", "profile", "me", "my",
+               "username", "user", "handle", "link", "bio", "follow", "subscribe", "watermark"}
+HANDLE_FRAME_POINTS = (0.03, 0.2, 0.4, 0.6, 0.8, 0.97)
+HANDLE_SCENE_FIELDS = "id title details urls studio { id } files { path duration }"
+
+
+def clean_handle(h):
+    h = (h or "").strip().lstrip("@").strip(" /.,:;!?\"'")
+    h = re.sub(r"^(?:https?://)?(?:www\.)?(?:onlyfans|fansly|instagram|tiktok)\.com/@?", "", h, flags=re.I)
+    h = h.split("/")[0].split("?")[0].rstrip(".")
+    return h if HANDLE_RE.match(h) and h.lower() not in HANDLE_STOP and not h.isdigit() else None
+
+
+def handles_in_text(text):
+    """{(platform, handle lowercased): handle as written} from links in text."""
+    found = {}
+    for plat, (_, _, pats) in PLATFORMS.items():
+        for pat in pats:
+            for m in re.finditer(pat, text or "", re.I):
+                h = clean_handle(m.group(1))
+                if h:
+                    found.setdefault((plat, h.lower()), h)
+    return found
+
+
+PLATFORM_WORDS = {
+    "tiktok": r"tik\s*tok", "instagram": r"instagram|\big\b|insta\b", "onlyfans": r"only\s*fans|\bof\b",
+    "fansly": r"fansly",
+}
+
+
+def handles_in_ocr(text):
+    """[(platform or None, handle)] in text the model transcribed off a frame:
+    profile links, or "@name" with the platform named next to it."""
+    out = [(plat, h) for (plat, _), h in handles_in_text(text).items()]
+    have = {h.lower() for _, h in out}
+    lines = [l.strip() for l in (text or "").splitlines() if l.strip()]
+    for i, line in enumerate(lines):
+        for m in re.finditer(r"@([A-Za-z0-9_][A-Za-z0-9_.]{1,39})", line):
+            h = clean_handle(m.group(1))
+            if not h or h.lower() in have:
+                continue
+            near = " ".join(lines[max(0, i - 1):i + 2]).lower()  # this line and its neighbours
+            plat = next((p for p, w in PLATFORM_WORDS.items() if re.search(w, near)), None)
+            out.append((plat, h))
+            have.add(h.lower())
+    return out
+
+
+def ollama_handles(cfg, picture):
+    """The social media handles in one frame. The model only transcribes the
+    text it can see (asked for account names directly, small models tend to
+    make one up); the names are picked out of that here."""
+    ai = cfg["ai"]
+    body = {
+        "model": ai["model"], "stream": False, "keep_alive": "15m", "options": {"temperature": 0},
+        "messages": [{"role": "user", "content": (
+            "Transcribe all text that is visible in this image (watermarks, captions, usernames, signs), "
+            "exactly as written, one item per line. If there is no readable text at all, answer exactly: NONE"),
+            "images": [base64.b64encode(picture).decode()]}],
+    }
+    for attempt in (1, 2):
+        req = urllib.request.Request(ai["url"] + "/api/chat", data=json.dumps(body).encode(),
+                                     headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=300) as resp:
+                reply = json.loads(resp.read())
+            break
+        except urllib.error.HTTPError:
+            if attempt == 2:
+                raise
+            time.sleep(1)
+    text = ((reply.get("message") or {}).get("content") or "").strip()
+    return [] if text.upper().startswith("NONE") else handles_in_ocr(text)
+
+
+def scene_handles(stash, cfg, scene, use_ai=True):
+    """[(platform, handle, where)] for one scene, best first."""
+    text = " ".join([scene.get("title") or "", scene.get("details") or "", " ".join(scene.get("urls") or []),
+                     item_path("scene", scene)])
+    from_text = handles_in_text(text)
+    seen = defaultdict(int)  # (platform or None, handle lower) -> frames
+    spelled = {}
+    f = (scene.get("files") or [None])[0]
+    if use_ai and f and (f.get("duration") or 0) > 1:
+        for i, at in enumerate(HANDLE_FRAME_POINTS):
+            try:
+                pic = grab_frame(stash, f["path"], f["duration"] * at, width=1280)[0]
+                for plat, h in set(ollama_handles(cfg, pic)):
+                    seen[(plat, h.lower())] += 1
+                    spelled.setdefault(h.lower(), h)
+            except Exception as e:
+                log("debug", f"frame at {at:.0%}: {e}")
+            # stop early: two frames agree on a name (with its platform), or
+            # three frames show no account at all (watermarks don't come and go)
+            agreed = defaultdict(int)
+            for (plat, hl), n in seen.items():
+                agreed[hl] += n
+            if any(n >= 2 and any(p and h == hl for p, h in seen) for hl, n in agreed.items()):
+                break
+            if i == 2 and not seen:
+                break
+    # a handle read without its platform takes the platform it was read with
+    # elsewhere, or that the text names
+    by_handle = defaultdict(int)
+    plat_of = {}
+    for (plat, hl), n in seen.items():
+        by_handle[hl] += n
+        if plat:
+            plat_of.setdefault(hl, plat)
+    results = []
+    for (plat, hl), h in from_text.items():
+        results.append((plat, h, "text" + (f" + {by_handle[hl]} frame(s)" if by_handle.get(hl) else "")))
+    for hl, n in by_handle.items():
+        if any(hl == r[1].lower() for r in results):
+            continue
+        plat = plat_of.get(hl)
+        if n >= 2 and plat:
+            results.append((plat, spelled[hl], f"{n} frames"))
+    results.sort(key=lambda r: (not r[2].startswith("text"), PLATFORM_ORDER.index(r[0])))
+    return results
+
+
+def studio_for_handle(stash, studios, platform, handle, apply):
+    """The studio for an account: an existing one with that name, alias or
+    profile URL, else a new one under the platform's studio. `studios` is
+    the list of all studios (kept up to date)."""
+    parent_name, url_fmt, _ = PLATFORMS[platform]
+    url = url_fmt.format(handle)
+    low = handle.lower()
+    for st in studios:
+        names = [st["name"].lower()] + [a.lower() for a in st.get("aliases") or []]
+        if low in names or any(u.rstrip("/").lower() == url.lower() for u in st.get("urls") or []):
+            return st, False
+    if not apply:
+        return {"id": None, "name": handle}, True
+    parent = next((st for st in studios if st["name"].lower() == parent_name.lower()), None)
+    if not parent:
+        parent = stash.call("mutation($i: StudioCreateInput!) { studioCreate(input: $i) { id name aliases urls } }",
+                            {"i": {"name": parent_name}})["studioCreate"]
+        studios.append(parent)
+    st = stash.call("mutation($i: StudioCreateInput!) { studioCreate(input: $i) { id name aliases urls } }",
+                    {"i": {"name": handle, "urls": [url], "parent_id": parent["id"]}})["studioCreate"]
+    studios.append(st)
+    return st, True
+
+
+def run_handle_studios(stash, plugin_dir, preview=False, limit=None, use_ai=True):
+    """Task: scenes without a studio get one for the account they come from."""
+    cfg = settings(stash, plugin_dir)
+    if use_ai:
+        ai_check(cfg)
+    scenes = []
+    page = 1
+    while True:
+        items = stash.call(
+            f"query($p: SceneFilterType, $f: FindFilterType) {{ findScenes(scene_filter: $p, filter: $f) {{ scenes {{ {HANDLE_SCENE_FIELDS} }} }} }}",
+            {"p": {"studios": {"value": [], "modifier": "IS_NULL"}},
+             "f": {"page": page, "per_page": 500, "sort": "created_at", "direction": "DESC"}},
+        )["findScenes"]["scenes"]
+        scenes += [s_ for s_ in items if not s_.get("studio")]
+        if len(items) < 500:
+            break
+        page += 1
+    done_path = os.path.join(plugin_dir, "handle_scan.json")
+    try:
+        with open(done_path) as fh:
+            done = set(json.load(fh).get("scenes", []))
+    except (OSError, ValueError):
+        done = set()
+    if limit:
+        import random
+        scenes = random.sample(scenes, min(limit, len(scenes)))
+    elif use_ai:  # the AI pass skips scenes it has already looked at
+        scenes = [s_ for s_ in scenes if s_["id"] not in done]
+    studios = stash.call("{ findStudios(filter: {per_page: -1}) { studios { id name aliases urls } } }")["findStudios"]["studios"]
+    log("info", f"Looking for OnlyFans / Fansly / Instagram / TikTok accounts in {len(scenes)} scene(s) without a studio"
+        + (" (preview, nothing is saved)" if preview else "")
+        + (". The AI reads up to 6 frames of each, so this takes a while; you can cancel it under Settings → Tasks and run it again to carry on."
+           if use_ai and len(scenes) > 20 else "."))
+    assigned = created = 0
+    for n, sc in enumerate(scenes):
+        progress(n / max(len(scenes), 1))
+        name = os.path.basename(item_path("scene", sc)) or f"scene {sc['id']}"
+        try:
+            found = scene_handles(stash, cfg, sc, use_ai)
+        except Exception as e:
+            log("warning", f"{name}: skipped ({e})")
+            continue
+        if found:
+            plat, handle, where = found[0]
+            st, new = studio_for_handle(stash, studios, plat, handle, apply=not preview)
+            others = ", ".join(f"{p}/{h}" for p, h, _ in found[1:])
+            log("info", f'{"Would set" if preview else "Set"} {name} → studio "{st["name"]}"'
+                + (f" (new, under {PLATFORMS[plat][0]})" if new else "") + f" [{PLATFORMS[plat][0]} @{handle}, from {where}]"
+                + (f"; also saw {others}" if others else ""))
+            if not preview:
+                stash.call("mutation($i: SceneUpdateInput!) { sceneUpdate(input: $i) { id } }",
+                           {"i": {"id": sc["id"], "studio_id": st["id"]}})
+            assigned += 1
+            created += new
+        if not preview and not limit and use_ai:
+            done.add(sc["id"])
+            if n % 10 == 9 or n == len(scenes) - 1:
+                tmp = done_path + ".tmp"
+                with open(tmp, "w") as fh:
+                    json.dump({"scenes": sorted(done, key=int)}, fh)
+                os.replace(tmp, done_path)
+    progress(1)
+    log("info", f"{'Preview: ' if preview else 'Done: '}{assigned} of {len(scenes)} scene(s) "
+        + ("would get" if preview else "got") + f" a studio from an account name ({created} new studio(s))"
+        + (". Nothing was saved." if preview else "."))
+
+
 BULK_MUTATIONS = {
     "scenes": ("bulkSceneUpdate", "BulkSceneUpdateInput"),
     "images": ("bulkImageUpdate", "BulkImageUpdateInput"),
@@ -2402,6 +2635,10 @@ def main():
             run_ai_titles(stash, plugin_dir, [args["mode"].rsplit("_", 1)[1][:-1]])
         elif args.get("mode") == "ai_titles_preview":
             run_ai_titles(stash, plugin_dir, ["scene", "image"], preview=True, limit=10)
+        elif args.get("mode") in ("handle_studios", "handle_studios_text"):
+            run_handle_studios(stash, plugin_dir, use_ai=args["mode"] == "handle_studios")
+        elif args.get("mode") == "handle_studios_preview":
+            run_handle_studios(stash, plugin_dir, preview=True, limit=10)
         elif args.get("mode") == "title_ideas":
             print(json.dumps({"output": run_title_ideas(stash, plugin_dir, args["kind"], args["id"],
                                                         bool(args.get("ai")))}))

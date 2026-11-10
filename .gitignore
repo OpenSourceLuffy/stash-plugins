@@ -6,6 +6,7 @@ _site/
 # Files plugins write while running (per-install data, never published)
 plugins/*/auto_tags.json
 plugins/*/auto_titles.json
+plugins/*/handle_scan.json
 plugins/*/gallery_tags.json
 plugins/*/queue.json
 plugins/*/settings_cache.json
