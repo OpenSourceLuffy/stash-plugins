@@ -182,7 +182,8 @@ Scenes, images and galleries without a title can get one made from their file na
 
 - Taken out: `[ids]` and `[site names]`, `(1)`, dates (they go in the date field), resolutions and
   codecs (`1080p`, `4K`, `HEVC`), download-site names, and a performer's or studio's name when
-  it's its own `-` part or starts the name.
+  it's its own `-` part or starts the name. Turn on **Keep performer and studio names in titles**
+  to keep names (`Jane Doe - Beach Day`); a name repeated as its own part is still only kept once.
 - Underscores and dots become spaces, and `CamelCaseNames` and `name12` are split up. All-lowercase
   or ALL-CAPS names are capitalised like tags (using **Special spellings**).
 - Names that are only a camera or app name (`IMG_…`, screen recordings, `FullSizeRender`), a random
@@ -190,6 +191,9 @@ Scenes, images and galleries without a title can get one made from their file na
   set is never changed.
 - **Fill in titles from file names** (task), with **Preview titles from file names** to check first.
 - **Fill in titles of new scenes, images and galleries** (setting): new items from a scan get a title.
+- **Redo titles made from file names** (task): after changing **Keep performer and studio names in
+  titles**, makes the titles this plugin set again with the new setting. Titles you typed or scraped
+  are left alone.
 - **Auto tag this / Auto tag selected** and AI tagging fill in empty titles too.
 
 ## AI tagging (local, with Ollama)
@@ -254,6 +258,7 @@ Under **Settings → Plugins → Better Tagging Tools**:
 | Auto tag new performers, studios and tags | See "Auto tag" above. |
 | Fill in dates of new scenes, images and galleries | See "Dates from file names" above. |
 | Fill in titles of new scenes, images and galleries | See "Titles from file names" above. |
+| Keep performer and studio names in titles | Leave names in titles made from file names. |
 | AI: tag new scenes and images automatically | See "AI tagging" above. |
 | AI: don't auto tag from file names first | Skip the file-name matching before the AI looks at an item. |
 | AI: Ollama address | Default `http://host.docker.internal:11434`. |

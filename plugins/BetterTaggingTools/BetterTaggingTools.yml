@@ -79,13 +79,17 @@ tasks:
     defaultArgs:
       mode: ai_all
   - name: Fill in titles from file names
-    description: Gives scenes, images and galleries without a title one made from the file name, cleaned up - no [ids] or [site names], dates, resolutions or codecs, and no performer or studio name as its own part. Camera and app names (IMG_1234, screen recordings, FullSizeRender...) and random ids are left without a title. Titles you already have are never changed.
+    description: Gives scenes, images and galleries without a title one made from the file name, cleaned up - no [ids] or [site names], dates, resolutions or codecs, and no performer or studio name as its own part (unless "Keep performer and studio names in titles" is on). Camera and app names (IMG_1234, screen recordings, FullSizeRender...) and random ids are left without a title. Titles you already have are never changed.
     defaultArgs:
       mode: titles
   - name: Preview titles from file names (no changes)
     description: Writes the titles the task above would give to the log, without changing anything.
     defaultArgs:
       mode: titles_preview
+  - name: Redo titles made from file names
+    description: Makes titles that came from file names again with the current settings, e.g. after turning "Keep performer and studio names in titles" on or off. Only titles that exactly match one this plugin makes are changed; titles you typed or scraped are left alone.
+    defaultArgs:
+      mode: retitles
   - name: Fill in dates from file names
     description: Gives scenes, images and galleries that have no date the date in their file name (or their folder's name) - "2023-05-19_video", "Studio - 6 Nov 2026 - Title", "Studio.21.07.08.Name", "05-27-2014 17_26_15" and similar. Only full dates count, and dates you've already set are never changed.
     defaultArgs:
@@ -163,6 +167,10 @@ settings:
   titlesNewItems:
     displayName: Fill in titles of new scenes, images and galleries
     description: When a scan adds a scene, image or gallery, give it a title from its file name (see the "Fill in titles from file names" task). "Auto tag this" and AI tagging also fill in empty titles.
+    type: BOOLEAN
+  titlesKeepNames:
+    displayName: Keep performer and studio names in titles
+    description: Titles from file names normally leave out performer and studio names (e.g. "Jane Doe - Beach Day" becomes "Beach Day"). Turn this on to keep them. A file named only after a performer still gets no title.
     type: BOOLEAN
   aiAuto:
     displayName: "AI: tag new scenes and images automatically"

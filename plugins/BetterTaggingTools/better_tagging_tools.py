@@ -131,6 +131,7 @@ def settings(stash, plugin_dir=None):
         "autotag_new": bool(s.get("autoTagNew")),
         "dates_new": bool(s.get("datesNewItems")),
         "titles_new": bool(s.get("titlesNewItems")),
+        "titles_keep_names": bool(s.get("titlesKeepNames")),
     }
 
 
@@ -1481,8 +1482,9 @@ def _junk_token(tok):
     return False
 
 
-def title_from_path(path, names, spellings=None):
-    """A title made from the file (or folder) name, or None if it's junk."""
+def title_from_path(path, names, spellings=None, keep_names=False):
+    """A title made from the file (or folder) name, or None if it's junk.
+    `keep_names`: leave performer / studio names in it."""
     if not path:
         return None
     name = os.path.basename(path.rstrip("/"))
@@ -1514,11 +1516,16 @@ def title_from_path(path, names, spellings=None):
     t = " ".join(words)
     # performer / studio names (and empty bits) as their own " - " part
     parts = [p.strip(" -_.,") for p in re.split(r"\s+[-–|]\s+", t)]
-    named = [p for p in parts if p and _title_key(p) not in names]
+    named = [p for p in parts if p and (keep_names or _title_key(p) not in names)]
+    seen_parts = set()
+    named = [p for p in named if not (_title_key(p) in seen_parts or seen_parts.add(_title_key(p)))]
+    if keep_names:  # a name part that's already in the rest of the title only once
+        named = [p for i, p in enumerate(named) if not (
+            _title_key(p) in names and any(f" {_title_key(p)} " in f" {_title_key(q)} " for j, q in enumerate(named) if j != i))]
     t = " - ".join(named if named else [p for p in parts if p])
     t = re.sub(r"\s+", " ", t).strip(" -_.,;:|")
     # a performer / studio name at the start, e.g. "Maimy Nyan Spit Roast"
-    ws = t.split()
+    ws = [] if keep_names else t.split()
     for n in (3, 2, 1):
         if len(ws) > n + 1 and _title_key(" ".join(ws[:n])) in names:
             t = " ".join(ws[n:]).lstrip(" -_.,;:|")
@@ -1534,24 +1541,92 @@ def title_from_path(path, names, spellings=None):
     return t[:1].upper() + t[1:]
 
 
+# Titles this plugin set, so "Redo titles" knows which are its own:
+# {"scene:12": "Title", ...} in auto_titles.json
+_plugin_dir = None
+
+
+def locked_titles():
+    return locked_json(os.path.join(_plugin_dir or os.path.dirname(os.path.abspath(__file__)), "auto_titles.json"))
+
+
+def set_title(stash, kind, item, title):
+    stash.call(f"mutation($i: {TITLE_INPUT[kind]}!) {{ {TITLE_UPDATE[kind]}(input: $i) {{ id }} }}",
+               {"i": {"id": item["id"], "title": title}})
+    try:
+        with locked_titles() as rec:
+            rec[f"{kind}:{item['id']}"] = title
+    except OSError:
+        pass
+
+
 TITLE_UPDATE = {"scene": "sceneUpdate", "image": "imageUpdate", "gallery": "galleryUpdate"}
 TITLE_INPUT = {"scene": "SceneUpdateInput", "image": "ImageUpdateInput", "gallery": "GalleryUpdateInput"}
 
 
-def fill_titles(stash, work, apply, spellings=None):
+def redo_titles(stash, work, apply, spellings=None):
+    """Titles this plugin made from a file name (they match what it makes,
+    names kept or left out) are made again with the current settings, e.g.
+    after turning "Keep performer and studio names in titles" on or off.
+    Titles typed in or scraped don't match, so they're left alone."""
+    names = title_names(stash)
+    keep = settings(stash)["titles_keep_names"]
+    try:
+        with open(os.path.join(_plugin_dir or os.path.dirname(os.path.abspath(__file__)), "auto_titles.json")) as f:
+            record = json.load(f)
+    except (OSError, ValueError):
+        record = {}
+    done = []
+    for kind, item in work:
+        old = (item.get("title") or "").strip()
+        if not old:
+            continue
+        path = item_path(kind, item)
+        # its own: recorded when set, or (titles set before the record
+        # existed, always without names) matching that
+        mine = record.get(f"{kind}:{item['id']}") == old or old == title_from_path(path, names, spellings, False)
+        new = title_from_path(path, names, spellings, keep)
+        if not mine or not new or new == old:
+            continue
+        if apply:
+            set_title(stash, kind, item, new)
+        done.append((kind, item, old, new))
+    return done
+
+
+def run_redo_titles(stash, preview):
+    spellings = settings(stash)["spellings"]
+    work = []
+    for kind in ("scene", "image", "gallery"):
+        query, field = {"scene": ("findScenes", "scenes"), "image": ("findImages", "images"),
+                        "gallery": ("findGalleries", "galleries")}[kind]
+        items = stash.call(f"{{ {query}(filter: {{per_page: -1}}) {{ {field} {{ {AUTOTAG_FIELDS[kind]} }} }} }}")[query][field]
+        work += [(kind, i) for i in items]
+    done = redo_titles(stash, work, apply=not preview, spellings=spellings)
+    for kind, item, old, new in done[:60]:
+        log("info", f'{"Would change" if preview else "Changed"} "{old}" → "{new}"')
+    if len(done) > 60:
+        log("info", f"... and {len(done) - 60} more titles")
+    log("info", f"{'Preview: ' if preview else 'Done: '}{len(done)} title(s) made from file names "
+        + ("would change" if preview else "changed") + " to match the current settings."
+        + (" Nothing was saved." if preview else ""))
+
+
+def fill_titles(stash, work, apply, spellings=None, keep_names=None):
     """Give items without a title one made from their file name. `work`:
     [(kind, item)]. Returns [(kind, item, title)] (given, or would be)."""
     names = title_names(stash)
+    if keep_names is None:
+        keep_names = settings(stash)["titles_keep_names"]
     done = []
     for kind, item in work:
         if (item.get("title") or "").strip():
             continue
-        title = title_from_path(item_path(kind, item), names, spellings)
+        title = title_from_path(item_path(kind, item), names, spellings, keep_names)
         if not title:
             continue
         if apply:
-            stash.call(f"mutation($i: {TITLE_INPUT[kind]}!) {{ {TITLE_UPDATE[kind]}(input: $i) {{ id }} }}",
-                       {"i": {"id": item["id"], "title": title}})
+            set_title(stash, kind, item, title)
         done.append((kind, item, title))
     return done
 
@@ -1632,12 +1707,12 @@ def autotag_item(stash, index, kind, item, apply):
     if item.get("studio"):
         studio = None  # Auto Tag never replaces a studio
     day = None if item.get("date") else date_from_path(item_path(kind, item))
-    title = None if (item.get("title") or "").strip() else title_from_path(item_path(kind, item), title_names(stash))
+    title = None if (item.get("title") or "").strip() else title_from_path(
+        item_path(kind, item), title_names(stash), keep_names=settings(stash)["titles_keep_names"])
     if not (performers or studio or tags or day or title):
         return [], set()
     if apply and title:
-        stash.call(f"mutation($i: {TITLE_INPUT[kind]}!) {{ {TITLE_UPDATE[kind]}(input: $i) {{ id }} }}",
-                   {"i": {"id": item["id"], "title": title}})
+        set_title(stash, kind, item, title)
     if apply and (performers or studio or tags or day):
         inp = {"ids": [item["id"]]}
         if day:
@@ -2062,6 +2137,8 @@ def main():
     stash = Stash(conn)
     args = payload.get("args", {})
     plugin_dir = conn.get("PluginDir") or os.path.dirname(os.path.abspath(__file__))
+    global _plugin_dir
+    _plugin_dir = plugin_dir
     try:
         hook = args.get("hookContext")
         if hook:
@@ -2094,6 +2171,8 @@ def main():
             print(json.dumps({"output": run_new_picture(stash, plugin_dir, args["tag_id"])}))
         elif args.get("mode") == "frame":
             print(json.dumps({"output": run_frame(stash, args)}))
+        elif args.get("mode") in ("retitles", "retitles_preview"):
+            run_redo_titles(stash, preview=args["mode"] == "retitles_preview")
         elif args.get("mode") in ("titles", "titles_preview"):
             run_titles(stash, preview=args["mode"] == "titles_preview")
         elif args.get("mode") in ("dates", "dates_preview"):
