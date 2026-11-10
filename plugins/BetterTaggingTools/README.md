@@ -4,7 +4,7 @@ Tags each performer and studio with the tags used most often on their scenes, im
 galleries (and each gallery with its photos' most used tags), then suggests tags while you edit. It also adds bulk tagging to performer and
 gallery pages, can tag a gallery's photos with the gallery's name, can give tags without
 a picture one from your library, keeps tag names consistently capitalised, auto tags from file
-names in more places than Stash does, fills in dates from file names, and can tag scenes and images
+names in more places than Stash does, fills in dates and titles from file names, and can tag scenes and images
 with a local AI model.
 
 ![Suggested tags under the Tags box](../../docs/screenshots/Tag_Suggestions.png)
@@ -167,6 +167,31 @@ A date you've already set is never changed.
 - **Fill in dates of new scenes, images and galleries** (setting): new items from a scan get their date.
 - **Auto tag this / Auto tag selected** and AI tagging fill in empty dates too.
 
+## Titles from file names
+
+Scenes, images and galleries without a title can get one made from their file name, cleaned up:
+
+| File name | Title |
+| --- | --- |
+| `Jane Doe - 6 Nov 2026 - Beach Day [11166].mp4` | Beach Day |
+| `the haunted house animation 4K.mp4` | The Haunted House Animation |
+| `Studio.21.07.08.Garden.Party.XXX.1080p.mp4` | Garden Party |
+| `SummerRoadTrip12_hd.png`, `it_s a trap.jpg` | Summer Road Trip 12, It's a Trap |
+| `IMG_3885.MP4`, `RPReplay_Final1571040512.mp4`, `FullSizeRender.MOV` | *(none)* |
+| `F61E88AC-CF2C-4A72-….mp4`, `v12044gd0000cj7f7….mp4`, `XplFXgK.jpg` | *(none)* |
+
+- Taken out: `[ids]` and `[site names]`, `(1)`, dates (they go in the date field), resolutions and
+  codecs (`1080p`, `4K`, `HEVC`), download-site names, and a performer's or studio's name when
+  it's its own `-` part or starts the name.
+- Underscores and dots become spaces, and `CamelCaseNames` and `name12` are split up. All-lowercase
+  or ALL-CAPS names are capitalised like tags (using **Special spellings**).
+- Names that are only a camera or app name (`IMG_…`, screen recordings, `FullSizeRender`), a random
+  id (UUIDs, hashes, TikTok-style ids) or a performer's name get no title. A title you've already
+  set is never changed.
+- **Fill in titles from file names** (task), with **Preview titles from file names** to check first.
+- **Fill in titles of new scenes, images and galleries** (setting): new items from a scan get a title.
+- **Auto tag this / Auto tag selected** and AI tagging fill in empty titles too.
+
 ## AI tagging (local, with Ollama)
 
 Tags scenes and images with a vision model running on your own computer through
@@ -228,6 +253,7 @@ Under **Settings → Plugins → Better Tagging Tools**:
 | Capitalise new tags automatically | See "Tag names" above. |
 | Auto tag new performers, studios and tags | See "Auto tag" above. |
 | Fill in dates of new scenes, images and galleries | See "Dates from file names" above. |
+| Fill in titles of new scenes, images and galleries | See "Titles from file names" above. |
 | AI: tag new scenes and images automatically | See "AI tagging" above. |
 | AI: don't auto tag from file names first | Skip the file-name matching before the AI looks at an item. |
 | AI: Ollama address | Default `http://host.docker.internal:11434`. |

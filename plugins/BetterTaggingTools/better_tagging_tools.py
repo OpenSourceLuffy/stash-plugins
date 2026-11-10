@@ -130,6 +130,7 @@ def settings(stash, plugin_dir=None):
         "ai": ai_settings(s),
         "autotag_new": bool(s.get("autoTagNew")),
         "dates_new": bool(s.get("datesNewItems")),
+        "titles_new": bool(s.get("titlesNewItems")),
     }
 
 
@@ -435,7 +436,9 @@ def run_hook(stash, plugin_dir, hook):
         (ai_scenes if kind == "Scene" else ai_images).append(str(hook["id"]))
     dates = {}
     if created and cfg["dates_new"]:
-        dates = {"dates_" + kind.lower(): [str(hook["id"])]}
+        dates["dates_" + kind.lower()] = [str(hook["id"])]
+    if created and cfg["titles_new"]:
+        dates["titles_" + kind.lower()] = [str(hook["id"])]
     if performers or galleries or images or tags or ai_scenes or ai_images or dates or top_studios or top_galleries:
         enqueue(stash, plugin_dir, performers, galleries, images, tags, ai_scenes, ai_images,
                 top_studios=top_studios, top_galleries=top_galleries, **dates)
@@ -446,12 +449,14 @@ QUIET_SECONDS = 4  # how long edits must stop before the batch counts as done
 MAX_WAIT_SECONDS = 600
 QUEUE_KEYS = ("performers", "galleries", "images", "tags", "ai_scenes", "ai_images",
               "autotag_performers", "autotag_studios", "autotag_tags",
-              "dates_scene", "dates_image", "dates_gallery", "top_studios", "top_galleries")
+              "dates_scene", "dates_image", "dates_gallery", "top_studios", "top_galleries",
+              "titles_scene", "titles_image", "titles_gallery")
 
 
 def enqueue(stash, plugin_dir, performers=(), galleries=(), images=(), tags=(), ai_scenes=(), ai_images=(),
             autotag_performers=(), autotag_studios=(), autotag_tags=(),
-            dates_scene=(), dates_image=(), dates_gallery=(), top_studios=(), top_galleries=()):
+            dates_scene=(), dates_image=(), dates_gallery=(), top_studios=(), top_galleries=(),
+            titles_scene=(), titles_image=(), titles_gallery=()):
     """Add to the waiting list and make sure one background job is lined up.
 
     Stash runs hooks one after another and waits for each, so a batch edit
@@ -462,7 +467,8 @@ def enqueue(stash, plugin_dir, performers=(), galleries=(), images=(), tags=(), 
         last = queue.get("touched", 0)
         for key, ids in zip(QUEUE_KEYS, (performers, galleries, images, tags, ai_scenes, ai_images,
                                          autotag_performers, autotag_studios, autotag_tags,
-                                         dates_scene, dates_image, dates_gallery, top_studios, top_galleries)):
+                                         dates_scene, dates_image, dates_gallery, top_studios, top_galleries,
+                                         titles_scene, titles_image, titles_gallery)):
             if ids:
                 queue[key] = sorted(set(queue.get(key, [])) | set(ids), key=int)
         queue["touched"] = time.time()
@@ -527,6 +533,18 @@ def run_queued(stash, plugin_dir):
                 log("info", f"Filled in the date of {filled} new item(s) from their file names")
         except Exception as e:
             log("warning", f"Dates for new items skipped: {e}")
+
+    if cfg["titles_new"] and any(todo["titles_" + k] for k in ("scene", "image", "gallery")):
+        try:
+            given = []
+            for k in ("scene", "image", "gallery"):
+                if todo["titles_" + k]:
+                    given += fill_titles(stash, [(k, x) for x in autotag_load(stash, k, todo["titles_" + k])],
+                                         apply=True, spellings=cfg["spellings"])
+            if given:
+                log("info", f"Gave {len(given)} new item(s) a title from their file names")
+        except Exception as e:
+            log("warning", f"Titles for new items skipped: {e}")
 
     if (todo["ai_scenes"] or todo["ai_images"]) and cfg["ai"]["auto"]:
         try:
@@ -1396,6 +1414,177 @@ def run_dates(stash, preview):
         + (f" ({parts})" if parts else "") + (". Nothing was saved." if preview else "."))
 
 
+# --- titles from file names ------------------------------------------------
+# A cleaned-up file name becomes the title of a scene, image or gallery that
+# has none: no [ids] or [sources], dates, resolutions or codecs, performer /
+# studio names as their own " - " part, camera or app names (IMG_1234,
+# RPReplay..., FullSizeRender) or random ids (UUIDs, hashes, TikTok ids).
+# Names that are nothing but junk get no title.
+
+TITLE_GENERIC = {
+    "img", "imgs", "image", "images", "vid", "vids", "video", "videos", "movie", "movies", "clip",
+    "clips", "photo", "photos", "pic", "pics", "picture", "pictures", "dsc", "dscn", "dscf", "dcim",
+    "pxl", "mvimg", "screenshot", "screenshots", "screen", "recording", "rpreplay", "final",
+    "fullsizerender", "full", "size", "render", "lp", "moments", "trim", "trimmed", "edit", "edited",
+    "copy", "untitled", "new", "file", "snapchat", "snap", "whatsapp", "telegram", "signal",
+    "original", "export", "exported", "camera", "cam", "download", "downloaded", "tmp", "temp",
+    "output", "sample", "preview", "thumb", "thumbnail", "part", "scene", "hd", "sd", "cm", "chat",
+    "media", "album", "albums", "upload", "uploads", "uploaded", "data",
+}
+# download sites and release groups that end up in file names
+TITLE_SITES = re.compile(r"(?i)^-?(?:erome\d*|thothub|viralxxxporn|xleech|hls|xvideos|pornhub|xhamster|"
+                         r"spankbang|eporner|redgifs|coomer|kemono|fapello|leakedzone|ytmp3)$")
+TITLE_QUALITY = re.compile(
+    r"(?i)(?<![a-z0-9])(?:\d{3,4}p|[2458]k|uhd|fhd|hd|sd|hq|x26[45]|h\.?26[45]|hevc|avc|aac|ac3|"
+    r"web[- ]?dl|webrip|web|bluray|brrip|hdtv|hdr|\d{2,3}fps|xxx|mp4|mov|m4v|wmv|avi|mkv|"
+    r"av1|vp9|internal|repack|proper|remastered)(?![a-z0-9])")
+_CAMEL = re.compile(r"(?<=[a-z])(?=[A-Z])")
+_title_names = None
+
+
+def title_names(stash):
+    """Performer and studio names (and aliases), lowercased with spaces only."""
+    global _title_names
+    if _title_names is None:
+        d = stash.call("{ findPerformers(filter: {per_page: -1}) { performers { name alias_list } }"
+                       " findStudios(filter: {per_page: -1}) { studios { name aliases } } }")
+        names = set()
+        for x in d["findPerformers"]["performers"]:
+            names.update([x["name"]] + (x.get("alias_list") or []))
+        for x in d["findStudios"]["studios"]:
+            names.update([x["name"]] + (x.get("aliases") or []))
+        _title_names = {_title_key(n) for n in names if n}
+    return _title_names
+
+
+def _title_key(text):
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", text.lower()).split())
+
+
+def _junk_token(tok):
+    """Random ids: hex runs, UUID parts, TikTok-style ids, long numbers."""
+    t = tok.strip("()[]{}.,;:!?'\"")
+    if not t:
+        return True
+    has_d, has_a = any(c.isdigit() for c in t), any(c.isalpha() for c in t)
+    if has_d and has_a and len(t) >= 4 and re.fullmatch(r"[0-9a-fA-F]+", t):
+        return True  # hex, e.g. 70773c89..., CD957061
+    if len(re.findall(r"[A-Za-z]+|\d+", t)) >= 4:
+        return True  # letters and digits mixed up, e.g. v12044gd0000cj7f7
+    if len(t) <= 12 and has_a and re.search(r"[a-z][A-Z]", t) and not re.fullmatch(
+            r"(?:[A-Z]{0,3}[a-z]+)(?:[A-Z][a-z]+)*\d*", t):
+        return True  # short random ids, e.g. hTJlutVr, XplFXgK, fhu3hYE (not CamelCase words)
+    if len(t) <= 12 and len(re.findall(r"[A-Za-z]+|\d+", t)) >= 3:
+        return True  # e.g. Tx9bqvdb, yjez7nq, QAZ3MVg
+    if TITLE_SITES.match(t):
+        return True
+    return False
+
+
+def title_from_path(path, names, spellings=None):
+    """A title made from the file (or folder) name, or None if it's junk."""
+    if not path:
+        return None
+    name = os.path.basename(path.rstrip("/"))
+    stem = os.path.splitext(name)[0] if re.search(r"\.[A-Za-z0-9]{2,4}$", name) else name
+    t = re.sub(r"\[[^\]]*\]|\{[^}]*\}", " ", stem)  # [11166], [OnlyFans]
+    t = re.sub(r"(?<=[A-Za-z0-9])_(?=[st](?:[\s_.\-]|$))", "'", t)  # it_s -> it's
+    t = re.sub(r"^(?:19|20)\d\d_", "", t)  # iPhone exports: 1998_IMG_0778
+    t = re.sub(r"\(\s*\d*\s*\)", " ", t)  # (1)
+    t = re.sub(r"\(([^)]*)\)", lambda m: " " if TITLE_QUALITY.fullmatch(m.group(1).strip()) else m.group(0), t)
+    release = not re.search(r"\s", t.strip())  # Studio.21.07.08.Scene.Name
+    low = t.lower()
+    for _, pat in DATE_PATTERNS:  # dates go in the date field
+        for m in pat.finditer(low):
+            t = t[:m.start()] + " " * (m.end() - m.start()) + t[m.end():]
+    if release:
+        t = re.sub(r"[._\-]+", " ", t)  # Some.Release_name-like-this
+    else:
+        t = re.sub(r"_+", " ", t)
+        t = re.sub(r"\.{2,}|…", " ", t)
+    t = TITLE_QUALITY.sub(" ", t)
+    words = []
+    for tok in t.split():
+        if _junk_token(tok):
+            continue
+        if len(_CAMEL.findall(tok)) >= 2:  # TiedToTwins -> Tied To Twins
+            tok = _CAMEL.sub(" ", tok)
+        tok = re.sub(r"(?<=[A-Za-z]{2})(?=\d)|(?<=\d)(?=[A-Za-z]{2})", " ", tok)  # Twins33 -> Twins 33
+        words += [w for w in tok.split() if not re.fullmatch(r"#?\d{5,}|[#;:,.]+", w)]
+    t = " ".join(words)
+    # performer / studio names (and empty bits) as their own " - " part
+    parts = [p.strip(" -_.,") for p in re.split(r"\s+[-–|]\s+", t)]
+    named = [p for p in parts if p and _title_key(p) not in names]
+    t = " - ".join(named if named else [p for p in parts if p])
+    t = re.sub(r"\s+", " ", t).strip(" -_.,;:|")
+    # a performer / studio name at the start, e.g. "Maimy Nyan Spit Roast"
+    ws = t.split()
+    for n in (3, 2, 1):
+        if len(ws) > n + 1 and _title_key(" ".join(ws[:n])) in names:
+            t = " ".join(ws[n:]).lstrip(" -_.,;:|")
+            break
+    if _title_key(t) in names:
+        return None  # just a performer's or studio's name
+    meaningful = [w for w in re.findall(r"[A-Za-z]+", t) if len(w) >= 2 and w.lower() not in TITLE_GENERIC]
+    if len(meaningful) < 2 or max(len(w) for w in meaningful) < 3:
+        return None
+    letters = [c for c in t if c.isalpha()]
+    if letters and (all(c.islower() for c in letters) or all(c.isupper() for c in letters)):
+        t = title_case(t.lower(), spellings or {})
+    return t[:1].upper() + t[1:]
+
+
+TITLE_UPDATE = {"scene": "sceneUpdate", "image": "imageUpdate", "gallery": "galleryUpdate"}
+TITLE_INPUT = {"scene": "SceneUpdateInput", "image": "ImageUpdateInput", "gallery": "GalleryUpdateInput"}
+
+
+def fill_titles(stash, work, apply, spellings=None):
+    """Give items without a title one made from their file name. `work`:
+    [(kind, item)]. Returns [(kind, item, title)] (given, or would be)."""
+    names = title_names(stash)
+    done = []
+    for kind, item in work:
+        if (item.get("title") or "").strip():
+            continue
+        title = title_from_path(item_path(kind, item), names, spellings)
+        if not title:
+            continue
+        if apply:
+            stash.call(f"mutation($i: {TITLE_INPUT[kind]}!) {{ {TITLE_UPDATE[kind]}(input: $i) {{ id }} }}",
+                       {"i": {"id": item["id"], "title": title}})
+        done.append((kind, item, title))
+    return done
+
+
+def run_titles(stash, preview):
+    """Task: fill in empty titles on scenes, images and galleries from their
+    file names (or `preview`: only log what it would do)."""
+    spellings = settings(stash)["spellings"]
+    work = []
+    for kind in ("scene", "image", "gallery"):
+        query, field = {"scene": ("findScenes", "scenes"), "image": ("findImages", "images"),
+                        "gallery": ("findGalleries", "galleries")}[kind]
+        items = stash.call(f"{{ {query}(filter: {{per_page: -1}}) {{ {field} {{ {AUTOTAG_FIELDS[kind]} }} }} }}")[query][field]
+        work += [(kind, i) for i in items]
+    empty = [(k, i) for k, i in work if not (i.get("title") or "").strip()]
+    done = []
+    for n in range(0, len(empty), 200):
+        done += fill_titles(stash, empty[n:n + 200], apply=not preview, spellings=spellings)
+        progress(min(n + 200, len(empty)) / max(len(empty), 1))
+    for kind, item, title in done[:60]:
+        log("info", f'{"Would set" if preview else "Set"} {os.path.basename(item_path(kind, item))} → "{title}"')
+    if len(done) > 60:
+        log("info", f"... and {len(done) - 60} more titles")
+    counts = Counter(k for k, _, _ in done)
+    parts = ", ".join(f"{n} {k}{'s' if n != 1 and k != 'gallery' else ''}".replace("gallerys", "galleries")
+                      for k, n in counts.items())
+    verb = "would get" if preview else "got"
+    log("info", f"{'Preview: ' if preview else 'Done: '}{len(done)} of {len(empty)} items without a title {verb} one "
+        f"from the file name" + (f" ({parts})" if parts else "")
+        + f"; {len(empty) - len(done)} had only a camera / app name or an id and were left alone"
+        + (". Nothing was saved." if preview else "."))
+
+
 def autotag_match(index, path):
     """(performer ids, studio id or None, tag ids, {id: name}) found in a path."""
     low = path.lower()
@@ -1443,9 +1632,13 @@ def autotag_item(stash, index, kind, item, apply):
     if item.get("studio"):
         studio = None  # Auto Tag never replaces a studio
     day = None if item.get("date") else date_from_path(item_path(kind, item))
-    if not (performers or studio or tags or day):
+    title = None if (item.get("title") or "").strip() else title_from_path(item_path(kind, item), title_names(stash))
+    if not (performers or studio or tags or day or title):
         return [], set()
-    if apply:
+    if apply and title:
+        stash.call(f"mutation($i: {TITLE_INPUT[kind]}!) {{ {TITLE_UPDATE[kind]}(input: $i) {{ id }} }}",
+                   {"i": {"id": item["id"], "title": title}})
+    if apply and (performers or studio or tags or day):
         inp = {"ids": [item["id"]]}
         if day:
             inp["date"] = day
@@ -1461,6 +1654,7 @@ def autotag_item(stash, index, kind, item, apply):
     added += [names["s" + studio]] if studio else []
     added += [names[t] for t in sorted(tags, key=int)]
     added += [f"date {day}"] if day else []
+    added += [f'title "{title}"'] if title else []
     return added, tags
 
 
@@ -1490,7 +1684,8 @@ def run_autotag_items(stash, plugin_dir, kind, ids, with_images=False):
         if names:
             changed += 1
             # many items: count dates together instead of listing each one
-            added.update(n if len(work) == 1 or not n.startswith("date ") else "a date" for n in names)
+            added.update(n if len(work) == 1 or not n.startswith(("date ", "title ")) else
+                         ("a date" if n.startswith("date ") else "a title") for n in names)
         progress((n + 1) / max(len(work), 1))
     summary = ", ".join(f"{name} ({c})" if c > 1 else name for name, c in added.most_common())
     if changed:
@@ -1899,6 +2094,8 @@ def main():
             print(json.dumps({"output": run_new_picture(stash, plugin_dir, args["tag_id"])}))
         elif args.get("mode") == "frame":
             print(json.dumps({"output": run_frame(stash, args)}))
+        elif args.get("mode") in ("titles", "titles_preview"):
+            run_titles(stash, preview=args["mode"] == "titles_preview")
         elif args.get("mode") in ("dates", "dates_preview"):
             run_dates(stash, preview=args["mode"] == "dates_preview")
         elif args.get("mode") == "autotag":
