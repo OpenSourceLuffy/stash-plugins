@@ -4,8 +4,11 @@ Tags each performer and studio with the tags used most often on their scenes, im
 galleries (and each gallery with its photos' most used tags), then suggests tags while you edit. It also adds bulk tagging to performer and
 gallery pages, can tag a gallery's photos with the gallery's name, can give tags without
 a picture one from your library, keeps tag names consistently capitalised, auto tags from file
-names in more places than Stash does, fills in dates and titles from file names, suggests title ideas, and can tag scenes and images
-with a local AI model.
+names in more places than Stash does, fills in dates and titles from file names, suggests title ideas,
+and gives scenes a studio from the account link in their file name.
+
+No AI is involved. For AI tags, AI titles and reading watermarks, add the
+[Better Tagging AI Add-on](../BetterTaggingAI): its buttons and tasks sit next to these.
 
 ![Suggested tags under the Tags box](../../docs/screenshots/Tag_Suggestions.png)
 
@@ -135,8 +138,8 @@ uses it in three more places:
   gallery and its images), and **Auto tag selected (from file names)** in the ••• menu of the scene, image
   and gallery lists. Stash's own task can only be pointed at whole folders; these do exactly the items
   you pick, and also work on organized items.
-- **Before AI tagging**: each item gets its file-name matches first, so the AI only adds what the
-  file name doesn't already say (turn off with **AI: don't auto tag from file names first**).
+- **With the [AI add-on](../BetterTaggingAI)**: before the AI looks at an item, it gets its file-name
+  matches first, so the AI only adds what the file name doesn't already say.
 
 The matching is the same as Stash's: the name, ignoring case, as a whole word anywhere in the path
 (folders included), with spaces in the name also matching `.`, `-`, `_` or nothing. Studios and tags
@@ -148,32 +151,18 @@ also match by their aliases. A studio is only set when the item has none. Anythi
 
 ## Studios from accounts
 
-Many downloaded clips carry the account they come from, as a watermark (`onlyfans.com/name`,
-`@name` next to a TikTok logo) or in the file name or link. These tasks give scenes **without a
-studio** a studio for that account:
+Many downloaded clips name the account they come from in the file name or link. **Studios from
+accounts: from file names and links only** gives scenes **without a studio** a studio for the
+`onlyfans.com/…`, `fansly.com/…`, `instagram.com/…` or `tiktok.com/@…` account in their file name,
+title, details or URLs:
 
-- **From file names and links only** looks for `onlyfans.com/…`, `fansly.com/…`, `instagram.com/…`
-  and `tiktok.com/@…` in the file name, title, details and URLs. Fast, no AI.
-- **Also read watermarks with the AI** has the local AI model (see below) transcribe the watermark
-  and on-screen text in up to 6 frames; account names are picked out of that text (asked for names
-  directly, small models tend to make one up). A name only counts if it's read the same way in at
-  least two frames (or in one frame and the text), so one-off misreads are ignored. It stops early
-  once two frames agree, or after three frames with no account. About 5–15 seconds per scene;
-  scenes already looked at are skipped next time, so you can cancel it and carry on later.
-- **Preview on 10 scenes** writes what it would do to the log without changing anything.
+- An existing studio with that name, alias or profile link is used; otherwise a new one is made,
+  with the profile link, under a parent studio for the platform (**OnlyFans**, **Fansly**,
+  **Instagram** or **TikTok**, made if needed). A scene that already has a studio is never changed.
+- An account name that matches a performer's name or alias (ignoring case, spaces and dots, so
+  `janedoe` matches *Jane Doe*) or one of their profile links adds that performer to the scene.
 
-An existing studio with that name, alias or profile link is used; otherwise a new one is made,
-with the profile link, under a parent studio for the platform (**OnlyFans**, **Fansly**,
-**Instagram** or **TikTok**, made if needed). A scene that already has a studio is never changed.
-
-- **Studio watermarks:** the AI pass also looks for the names (and aliases) of studios you already
-  have in the on-screen text, e.g. `studioname.com` for *Studio Name* (symbols count, so *PORN+*
-  needs the `+`). Read in two frames, that studio is used rather than making a new account studio.
-  Names shorter than 4 letters are skipped.
-- **Performers:** an account name that matches a performer's name or alias (ignoring case, spaces
-  and dots, so `janedoe` matches *Jane Doe*) or one of their profile links adds that performer to
-  the scene, and so does a performer's name read in the watermark in two frames (names of 6+
-  letters or two words). Performers are only ever added.
+The [AI add-on](../BetterTaggingAI) can also read the account from the watermark in the video.
 
 ## Dates from file names
 
@@ -194,7 +183,7 @@ A date you've already set is never changed.
 
 - **Fill in dates from file names** (task), with **Preview dates from file names** to check first.
 - **Fill in dates of new scenes, images and galleries** (setting): new items from a scan get their date.
-- **Auto tag this / Auto tag selected** and AI tagging fill in empty dates too.
+- **Auto tag this / Auto tag selected** (and the AI add-on) fill in empty dates too.
 
 ## Titles from file names
 
@@ -223,7 +212,7 @@ Scenes, images and galleries without a title can get one made from their file na
 - **Redo titles made from file names** (task): after changing **Keep performer and studio names in
   titles**, makes the titles this plugin set again with the new setting. Titles you typed or scraped
   are left alone.
-- **Auto tag this / Auto tag selected** and AI tagging fill in empty titles too.
+- **Auto tag this / Auto tag selected** (and the AI add-on) fill in empty titles too.
 
 ## Title ideas
 
@@ -233,42 +222,8 @@ titles. Click one to put it in the box, then edit it if you like and press **Sav
 - **From its details:** the title from its file name (with and without performer names), and
   titles put together from its performers, studio, date and most telling tags (the rarest ones,
   or the performers' top tags if it has none yet), e.g. `Jane Doe - Beach, Sunset & Picnic`.
-- **Ask AI for titles:** the local AI model (see below) looks at the picture, or a few frames of a
-  video, plus its performers, studio, tags and file name, and suggests a few titles. They're marked
-  *AI*. Ask again for different ones.
-
-To title everything at once, run **AI titles: scenes without a title** or **AI titles: images without
-a title** (try **AI titles: preview on 10 items** first). Each item without a title gets the one from
-its file name when that makes a good title, otherwise the AI's best idea. Titles you already have
-are never changed, and organized items are skipped unless **AI: include organized items** is on.
-It takes a few seconds per item, so you can cancel it under **Settings → Tasks** and run it again
-later to carry on. AI titles aren't touched by **Redo titles made from file names**.
-
-## AI tagging (local, with Ollama)
-
-Tags scenes and images with a vision model running on your own computer through
-[Ollama](https://ollama.com). Nothing is sent to the internet.
-
-**Setup**
-1. Install Ollama (on a Mac: `brew install ollama`, then `brew services start ollama`).
-2. Download the model: `ollama pull gemma3:4b` (about 3 GB).
-3. If Stash runs in Docker on the same computer, the default address
-   (`http://host.docker.internal:11434`) works as is. Otherwise set **AI: Ollama address**.
-
-**Using it**
-- **AI tagging: preview on 10 items**: writes what it would add to the log, without changing anything. Start here.
-- **AI tagging: items with no tags** and **AI tagging: everything not done yet**: add tags. They only ever *add* tags, skip organized items (unless you change that), and remember what's done, so you can stop a run and start it again later.
-- **Ask AI for tags**: a button under the Tags box when you edit a scene or image. Suggestions show up as one-click chips; nothing is added until you click them and save.
-- **AI: tag new scenes and images automatically**: AI-tags new items after a scan.
-- **AI: tag, title and find the studio of new scenes and images**: after a scan, each new item is
-  AI-tagged, then a new scene gets its studio and performers from accounts / studio watermarks (see
-  "Studios from accounts"), then anything still untitled gets a title (from the file name, else the
-  AI) - in that order, so the title can use what was just found.
-
-The model is shown a picture (or 3 frames from a scene) and your most used tags (250 by default),
-and can only answer with tags from that list, so it never invents new tags. Gemma 3 4B takes about
-5 seconds per picture on an Apple M4 (a scene about 15), so tagging thousands of items takes hours.
-It gets most things right but not all. Check the preview, and use **Ask AI** where accuracy matters.
+- With the [AI add-on](../BetterTaggingAI), an **AI titles** row below it has an **Ask AI for titles**
+  button.
 
 ## Tag names
 
@@ -293,7 +248,7 @@ Stash treats tag names that differ only in case as the same tag, so renaming nev
 ## Tasks
 
 Under **Settings → Tasks → Plugin Tasks → Better Tagging Tools** the tasks are grouped into
-sections you can open and close: **Top tags**, **AI tagging**, **Titles**, **Studios from accounts**, **Dates**, **Tag pictures**
+sections you can open and close: **Top tags**, **Titles**, **Studios from accounts**, **Dates**, **Tag pictures**
 and **Tidy up tags**. Each section starts with its preview task, which only writes to the log.
 
 ## Settings
@@ -317,21 +272,15 @@ Under **Settings → Plugins → Better Tagging Tools**:
 | Fill in dates of new scenes, images and galleries | See "Dates from file names" above. |
 | Fill in titles of new scenes, images and galleries | See "Titles from file names" above. |
 | Keep performer and studio names in titles | Leave names in titles made from file names. |
-| AI: tag new scenes and images automatically | See "AI tagging" above. |
-| AI: tag, title and find the studio of new scenes and images | All three AI steps for each new item after a scan. |
-| AI: don't auto tag from file names first | Skip the file-name matching before the AI looks at an item. |
-| AI: Ollama address | Default `http://host.docker.internal:11434`. |
-| AI: model | Default `gemma3:4b`. |
-| AI: tags to choose from | How many of your most used tags the model picks from. Default 250. |
-| AI: most tags per item | Default 6. |
-| AI: include organized items | Also AI-tag items marked as organized. |
 | Special spellings | Comma-separated words or tag names to always write exactly as given when capitalising, e.g. `CNN, POV, HD, iPhone`. |
 | Suggested tags to show | The most suggestions per row. Default 15. |
 
 ## Requirements and notes
 
 - Python 3 (standard library only). Tested with Stash v0.31.
-- ffmpeg, only for video frames (tag pictures and AI tagging of scenes).
-- Ollama, only for AI tagging. It uses the one Stash uses; the official Docker image includes it.
+- ffmpeg, only for video frames when giving tags a picture. It uses the one Stash uses; the official
+  Docker image includes it.
+- The code is in `btt_core.py`, which the AI add-on ships too (the same file), so each plugin works
+  on its own.
 - The plugin keeps a few small files in its own folder (which tags it added, a short work queue). Deleting them is safe; it just forgets which performer tags it added.
 - Works with any theme.

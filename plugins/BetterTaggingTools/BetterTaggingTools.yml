@@ -1,6 +1,6 @@
 name: Better Tagging Tools
-description: Tags each performer and studio with the tags used most often in their scenes, images and galleries, and each gallery with its images' most used tags, shows one-click "Suggested tags" when editing tags (tags that usually go with the ones already chosen, and the performers' top tags), and adds "Bulk tag" buttons on performer pages (a performer's scenes, images and galleries) and gallery pages (a gallery's images). Can also tag every image in a gallery with the gallery's name, give tags without a picture one from your library, keep tag names consistently capitalised, auto tag from file names (new performers, studios and tags, or one item at a time), fill in dates and titles from file names, suggest title ideas while editing (from performers, tags and the local AI), and tag scenes and images with a local AI model (Ollama).
-version: "1.4"
+description: Tags each performer and studio with the tags used most often in their scenes, images and galleries, and each gallery with its images' most used tags, shows one-click "Suggested tags" and "Title ideas" when editing, and adds "Bulk tag" buttons on performer and gallery pages. Can also tag every image in a gallery with the gallery's name, give tags without a picture one from your library, keep tag names consistently capitalised, auto tag from file names, fill in dates and titles from file names, and give scenes a studio from the account link in their file name. No AI - for that, add Better Tagging AI (works with or without this plugin).
+version: "2.0"
 url: https://github.com/OpenSourceLuffy/stash-plugins/tree/main/plugins/BetterTaggingTools
 exec:
   - python
@@ -21,7 +21,7 @@ hooks:
       - Image.Update.Post
       - Gallery.Update.Post
   - name: New galleries, scenes and images
-    description: When "Tag gallery images with the gallery's name" is on, new galleries and newly scanned images get their gallery-name tag; when "AI-tag new scenes and images" is on, new scenes and images are AI-tagged; when "Fill in dates of new scenes, images and galleries" or "Fill in titles of new scenes, images and galleries" is on, they get the date or title from their file name. They're queued and a background job does the work once the scan is done.
+    description: When "Tag gallery images with the gallery's name" is on, new galleries and newly scanned images get their gallery-name tag; when "Fill in dates of new scenes, images and galleries" or "Fill in titles of new scenes, images and galleries" is on, they get the date or title from their file name. They're queued and a background job does the work once the scan is done.
     triggeredBy:
       - Gallery.Create.Post
       - Image.Create.Post
@@ -50,18 +50,6 @@ tasks:
     description: The same for galleries - counts the tags on each gallery's images and adds the most used ones to the gallery. Gallery-name tags never count.
     defaultArgs:
       mode: apply_galleries
-  - name: "AI tagging: preview on 10 items (no changes)"
-    description: Shows 10 random scenes/images to the local AI model (Ollama) and writes the tags it (and auto tagging from the file path) would add to the log, without changing anything. Try this first.
-    defaultArgs:
-      mode: ai_preview
-  - name: "AI tagging: items with no tags"
-    description: Uses the local AI model (Ollama) to tag scenes and images that have no tags yet, choosing from your most used tags. First adds the performers, studio and tags whose names are in each file's path (like Stash's Auto Tag). Organized items are skipped unless you change that in the settings.
-    defaultArgs:
-      mode: ai_untagged
-  - name: "AI tagging: everything not done yet"
-    description: Uses the local AI model (Ollama) on every scene and image it hasn't looked at before, after auto tagging each one from its file path (only ever adds). Can take many hours on a big library; it can be stopped and run again, and carries on where it left off.
-    defaultArgs:
-      mode: ai_all
   - name: Preview titles from file names (no changes)
     description: Writes the titles "Fill in titles from file names" (below) would give to the log, without changing anything.
     defaultArgs:
@@ -74,30 +62,10 @@ tasks:
     description: Makes titles that came from file names again with the current settings, e.g. after turning "Keep performer and studio names in titles" on or off. Only titles that exactly match one this plugin makes are changed; titles you typed or scraped are left alone.
     defaultArgs:
       mode: retitles
-  - name: "AI titles: preview on 10 items (no changes)"
-    description: Picks 10 random scenes/images without a title and writes the title each would get to the log - from the file name when that makes a good one, else from the local AI model (Ollama) - without changing anything. Try this first.
-    defaultArgs:
-      mode: ai_titles_preview
-  - name: "AI titles: scenes without a title"
-    description: Gives every scene without a title one - from the file name when that makes a good one, else the local AI model's best idea after looking at a few frames (plus its performers, studio and tags). Titles you already have are never changed. Takes a few seconds per scene; skips organized scenes unless "AI - include organized items" is on.
-    defaultArgs:
-      mode: ai_titles_scenes
-  - name: "AI titles: images without a title"
-    description: The same for images (camera photos, screenshots...). Takes a few seconds per image, so a big library can take hours; you can cancel it under Settings → Tasks and run it again later to carry on.
-    defaultArgs:
-      mode: ai_titles_images
-  - name: "Studios from accounts: preview on 10 scenes (no changes)"
-    description: Picks 10 random scenes without a studio and writes to the log which OnlyFans / Fansly / Instagram / TikTok account each comes from and the studio it would get, without changing anything. Try this first.
-    defaultArgs:
-      mode: handle_studios_preview
   - name: "Studios from accounts: from file names and links only"
-    description: Gives scenes without a studio a studio for the account in their file name, title, details or URLs (e.g. "onlyfans.com/name"), creating it under a parent studio for the platform if needed, and adds the performer whose name, alias or profile link matches the account. Fast; no AI.
+    description: Gives scenes without a studio a studio for the account in their file name, title, details or URLs (e.g. "onlyfans.com/name"), creating it under a parent studio for the platform if needed, and adds the performer whose name, alias or profile link matches the account. Fast; no AI (Better Tagging AI can also read watermarks).
     defaultArgs:
       mode: handle_studios_text
-  - name: "Studios from accounts: also read watermarks with the AI"
-    description: The same, and the local AI model (Ollama) also reads watermarks and on-screen text in up to 6 frames of each scene - account names, and the names of studios you already have. Account names that match a performer's name, alias or profile link add that performer to the scene. It only transcribes the text it sees (names are picked out of that), and a name only counts if it's read the same way in at least two frames. About 5-15 seconds per scene; scenes already checked are skipped next time. Scenes that have a studio are never changed.
-    defaultArgs:
-      mode: handle_studios
   - name: Preview dates from file names (no changes)
     description: Writes what "Fill in dates from file names" would set to the log, without changing anything.
     defaultArgs:
@@ -186,47 +154,15 @@ settings:
     type: BOOLEAN
   datesNewItems:
     displayName: Fill in dates of new scenes, images and galleries
-    description: When a scan adds a scene, image or gallery, set its date from the file name (see the "Fill in dates from file names" task). "Auto tag this" and AI tagging also fill in empty dates.
+    description: When a scan adds a scene, image or gallery, set its date from the file name (see the "Fill in dates from file names" task). "Auto tag this" (and Better Tagging AI, if installed) also fill in empty dates.
     type: BOOLEAN
   titlesNewItems:
     displayName: Fill in titles of new scenes, images and galleries
-    description: When a scan adds a scene, image or gallery, give it a title from its file name (see the "Fill in titles from file names" task). "Auto tag this" and AI tagging also fill in empty titles.
+    description: When a scan adds a scene, image or gallery, give it a title from its file name (see the "Fill in titles from file names" task). "Auto tag this" (and Better Tagging AI, if installed) also fill in empty titles.
     type: BOOLEAN
   titlesKeepNames:
     displayName: Keep performer and studio names in titles
     description: Titles from file names normally leave out performer and studio names (e.g. "Jane Doe - Beach Day" becomes "Beach Day"). Turn this on to keep them. A file named only after a performer still gets no title.
-    type: BOOLEAN
-  aiAuto:
-    displayName: "AI: tag new scenes and images automatically"
-    description: Have the local AI model tag scenes and images as they're added by a scan.
-    type: BOOLEAN
-  aiNewAll:
-    displayName: "AI: tag, title and find the studio of new scenes and images"
-    description: "When a scan adds a scene or image, the local AI model does all three: tags it (like \"AI: tag new scenes and images automatically\"), finds a scene's studio and performers from the accounts and studio watermarks it shows (like the \"Studios from accounts\" tasks), and gives it a title if it has none (from the file name, else the AI). Runs in the background once the scan is done; a few seconds to a minute per item."
-    type: BOOLEAN
-  aiOllamaUrl:
-    displayName: "AI: Ollama address"
-    description: Where Ollama runs, as seen from Stash. Default http://host.docker.internal:11434 (Ollama on the same computer as Stash's Docker container); use http://localhost:11434 if Stash isn't in Docker.
-    type: STRING
-  aiModel:
-    displayName: "AI: model"
-    description: An Ollama vision model. Default gemma3:4b (install it with "ollama pull gemma3:4b") - about 5 seconds a picture on an Apple M4. Bigger models (e.g. qwen2.5vl:7b) can be more detailed but are much slower.
-    type: STRING
-  aiTagCount:
-    displayName: "AI: tags to choose from"
-    description: The model picks only from your most used tags - this many of them. Default 250.
-    type: NUMBER
-  aiMaxTags:
-    displayName: "AI: most tags per item"
-    description: The most tags the model adds to one scene or image. Default 6.
-    type: NUMBER
-  aiNoAutoTag:
-    displayName: "AI: don't auto tag from file names first"
-    description: Before the AI looks at an item, the plugin normally adds the performers, studio and tags whose names are in its file path (the same matching as Stash's Auto Tag). Turn this on to skip that.
-    type: BOOLEAN
-  aiIncludeOrganized:
-    displayName: "AI: include organized items"
-    description: Also AI-tag scenes and images you've marked as organized (they're skipped by default).
     type: BOOLEAN
   maxSuggestions:
     displayName: Suggested tags to show

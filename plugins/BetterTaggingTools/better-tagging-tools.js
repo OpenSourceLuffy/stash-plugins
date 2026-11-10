@@ -238,9 +238,6 @@
     const galleries = fixed ? [] : state.galleries;
     const studios = fixed ? [] : state.studios;
     const [rows, setRows] = React.useState([]);
-    // "Ask AI" (local model via Ollama), on a scene or image's own page
-    const [ai, setAi] = React.useState({ state: "idle" });
-    const pageItem = fixed ? null : (location.pathname.match(/^\/(scenes|images)\/(\d+)/) || null);
 
     React.useEffect(() => {
       if (fixed) return;
@@ -368,23 +365,8 @@
       };
     }, [pSig, gSig, sSig, tSig, fixed ? "fixed" : location.pathname]);
 
-    async function askAi() {
-      setAi({ state: "loading" });
-      try {
-        const d = await gql("mutation($p: ID!, $a: Map) { runPluginOperation(plugin_id: $p, args: $a) }", {
-          p: PLUGIN_ID,
-          a: { mode: "ai_suggest", kind: pageItem[1] === "scenes" ? "scene" : "image", id: pageItem[2] },
-        });
-        const tags = (d.runPluginOperation || []).map((t) => ({ id: String(t.id), name: t.name, aliases: [] }));
-        setAi({ state: "done", tags });
-      } catch (e) {
-        setAi({ state: "error", message: e.message });
-      }
-    }
-
     // Leave out tags already chosen, and repeats from an earlier row
     const seen = new Set((values || []).map((t) => String(t.id)));
-    const aiTags = ai.state === "done" ? ai.tags.filter((t) => !seen.has(String(t.id))) : [];
     const shown = rows
       .map((row) => {
         const items = row.items.filter((e) => !seen.has(String(e.tag.id))).slice(0, maxSuggestions);
@@ -392,33 +374,13 @@
         return { ...row, items };
       })
       .filter((row) => row.items.length);
-    if (!shown.length && !pageItem) return null;
+    if (!shown.length) return null;
 
     const add = (tags) => onSelect([...(values || []), ...tags]);
-
-    const aiRow =
-      pageItem &&
-      h(
-        "div",
-        { className: "pts-suggest pts-ai", key: "ai" },
-        h("span", { className: "pts-label" }, "AI"),
-        ai.state === "idle" &&
-          h("button", { type: "button", className: "pts-chip pts-ai-ask", onClick: askAi, title: "Ask the local AI model (Ollama) which of your tags fit" }, "Ask AI for tags"),
-        ai.state === "loading" && h("span", { className: "pts-ai-note" }, "Looking at it…"),
-        ai.state === "error" &&
-          h("span", { className: "pts-ai-note" }, "Couldn't ask the AI: " + ai.message + " ",
-            h("button", { type: "button", className: "pts-chip", onClick: askAi }, "Try again")),
-        ai.state === "done" && !aiTags.length && h("span", { className: "pts-ai-note" }, ai.tags.length ? "All its suggestions are already added" : "No suggestions"),
-        aiTags.map((t) =>
-          h("button", { key: t.id, type: "button", className: "pts-chip", title: "Suggested by the local AI model", onClick: () => add([t]) }, "+ " + t.name)
-        ),
-        aiTags.length > 1 && h("button", { type: "button", className: "pts-chip pts-all", onClick: () => add(aiTags) }, "Add all")
-      );
 
     return h(
       "div",
       { className: "pts-suggest-rows" },
-      aiRow,
       shown.map((row) =>
         h(
           "div",
@@ -1201,8 +1163,8 @@
 
   // ---- title ideas ----------------------------------------------------------
   // Under the Title box of a scene, image or gallery's edit form: titles made
-  // from its performers, studio, tags, date and file name, and an "Ask AI"
-  // button for ones the local model writes. Clicking one puts it in the box
+  // from its performers, studio, tags, date and file name (Better Tagging AI
+  // adds AI-written ones in a row of its own). Clicking one puts it in the box
   // (still unsaved, like any edit).
   const TITLE_PAGE = /^\/(scenes|images|galleries)\/(\d+)/;
   const KIND_OF = { scenes: "scene", images: "image", galleries: "gallery" };
@@ -1216,10 +1178,10 @@
     input.focus();
   }
 
-  function titleIdeas(kind, id, ai) {
+  function titleIdeas(kind, id) {
     return gql("mutation($p: ID!, $a: Map) { runPluginOperation(plugin_id: $p, args: $a) }", {
       p: PLUGIN_ID,
-      a: { mode: "title_ideas", kind, id, ai: ai ? "1" : "" },
+      a: { mode: "title_ideas", kind, id },
     }).then((d) => d.runPluginOperation || {});
   }
 
@@ -1237,51 +1199,30 @@
     chips.className = "bt-title-chips";
     const note = document.createElement("span");
     note.className = "pts-ai-note";
-    const ask = document.createElement("button");
-    ask.type = "button";
-    ask.className = "pts-chip pts-ai-ask";
-    ask.textContent = "Ask AI for titles";
-    ask.title = "Ask the local AI model (Ollama) to look at it and suggest titles";
-    row.append(label, chips, note, ask);
+    row.append(label, chips, note);
     input.insertAdjacentElement("afterend", row);
 
     const shown = new Set();
-    const add = (titles, fromAi) =>
+    const add = (titles) =>
       titles.forEach((t) => {
         if (!t || shown.has(t.toLowerCase())) return;
         shown.add(t.toLowerCase());
         const b = document.createElement("button");
         b.type = "button";
-        b.className = "pts-chip" + (fromAi ? " bt-title-ai" : "");
+        b.className = "pts-chip";
         b.textContent = t;
-        b.title = fromAi ? "Suggested by the local AI model - click to use" : "Click to use this title";
+        b.title = "Click to use this title";
         b.addEventListener("click", () => setInputValue(input, t));
         chips.appendChild(b);
       });
 
     note.textContent = "…";
-    titleIdeas(kind, id, false)
+    titleIdeas(kind, id)
       .then((r) => {
-        add(r.ideas || [], false);
+        add(r.ideas || []);
         note.textContent = (r.ideas || []).length ? "" : "No ideas from its details yet";
       })
       .catch((e) => (note.textContent = "Couldn't load ideas: " + e.message));
-
-    ask.addEventListener("click", () => {
-      ask.disabled = true;
-      ask.textContent = "Looking at it…";
-      titleIdeas(kind, id, true)
-        .then((r) => {
-          add(r.ai || [], true);
-          if ((r.ai || []).length && note.textContent.startsWith("No ideas")) note.textContent = "";
-          ask.textContent = "Ask AI again";
-        })
-        .catch((e) => {
-          note.textContent = "Couldn't ask the AI: " + e.message;
-          ask.textContent = "Try AI again";
-        })
-        .finally(() => (ask.disabled = false));
-    });
   }
 
   let titleTimer = null;
@@ -1310,14 +1251,10 @@
     ["toptags", "Top tags", "Tag performers, studios and galleries with their most used tags",
       ["Preview top tags (no changes)", "Tag performers with their top tags", "Tag studios with their top tags",
        "Tag galleries with their top tags"]],
-    ["ai", "AI tagging", "Tag scenes and images with the local AI model (Ollama)",
-      ["AI tagging: preview on 10 items (no changes)", "AI tagging: items with no tags", "AI tagging: everything not done yet"]],
-    ["titles", "Titles", "Titles from file names, or written by the AI",
-      ["Preview titles from file names (no changes)", "Fill in titles from file names", "Redo titles made from file names",
-       "AI titles: preview on 10 items (no changes)", "AI titles: scenes without a title", "AI titles: images without a title"]],
-    ["studios", "Studios from accounts", "Studios for the OnlyFans / Fansly / Instagram / TikTok account a scene comes from",
-      ["Studios from accounts: preview on 10 scenes (no changes)", "Studios from accounts: from file names and links only",
-       "Studios from accounts: also read watermarks with the AI"]],
+    ["titles", "Titles", "Titles from file names",
+      ["Preview titles from file names (no changes)", "Fill in titles from file names", "Redo titles made from file names"]],
+    ["studios", "Studios from accounts", "Studios for the OnlyFans / Fansly / Instagram / TikTok account in a scene's file name or links",
+      ["Studios from accounts: from file names and links only"]],
     ["dates", "Dates", "Dates from file names",
       ["Preview dates from file names (no changes)", "Fill in dates from file names"]],
     ["pictures", "Tag pictures", "Give tags a picture from your library",
@@ -1373,7 +1310,11 @@
       const isOpen = open.has(key);
       head.classList.toggle("open", isOpen);
       head.setAttribute("aria-expanded", String(isOpen));
-      head.querySelector(".bt-tg-count").textContent = `${mine.length} task${mine.length > 1 ? "s" : ""}`;
+      // only when it changes: writing it counts as a page change, which
+      // would run this again (and again)
+      const count = `${mine.length} task${mine.length > 1 ? "s" : ""}`;
+      const countEl = head.querySelector(".bt-tg-count");
+      if (countEl.textContent !== count) countEl.textContent = count;
       mine.forEach((r) => r.classList.toggle("bt-task-hidden", !isOpen));
     }
   }

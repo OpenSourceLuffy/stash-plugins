@@ -1,0 +1,111 @@
+/* Better Tagging AI Add-on. The chip and task-section styles are the same as
+   Better Tagging Tools' (so the rows look alike whether or not it's installed). */
+.pts-suggest {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.pts-label {
+  font-size: 0.8rem;
+  opacity: 0.7;
+  margin-right: 2px;
+}
+
+.pts-chip {
+  /* mid-grey, so the outline shows on light and dark themes alike */
+  border: 1px dashed rgba(128, 128, 128, 0.6);
+  background: transparent;
+  color: inherit;
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.pts-chip:hover,
+.pts-chip:focus-visible {
+  background: rgba(19, 124, 189, 0.25);
+  border-style: solid;
+  outline: none;
+}
+
+.pts-chip.pts-all {
+  border-style: solid;
+  opacity: 0.8;
+}
+
+.pts-ai-ask {
+  border-style: solid;
+}
+
+.pts-ai-note {
+  font-size: 0.8rem;
+  opacity: 0.75;
+}
+
+.bta-titles {
+  margin-top: 6px;
+}
+.bta-chips {
+  display: contents;
+}
+.bta-titles .bta-title {
+  white-space: normal;
+  text-align: left;
+}
+.bta-titles .bta-title::before {
+  content: "AI · ";
+  opacity: 0.7;
+}
+
+/* Settings → Tasks: task sections */
+.bt-task-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  width: 100%;
+  margin: 10px 0 2px;
+  padding: 10px 12px;
+  border: 1px solid rgba(128, 128, 128, 0.35);
+  border-radius: 8px;
+  background: rgba(128, 128, 128, 0.08);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.bt-task-group:hover,
+.bt-task-group:focus-visible {
+  background: rgba(19, 124, 189, 0.15);
+  outline: none;
+}
+.bt-tg-arrow::before {
+  content: "▸";
+  display: inline-block;
+  width: 1em;
+  transition: transform 0.15s ease;
+}
+.bt-task-group.open .bt-tg-arrow::before {
+  transform: rotate(90deg);
+}
+.bt-tg-title {
+  font-weight: 600;
+  font-size: 1.05rem;
+}
+.bt-tg-count {
+  font-size: 0.8rem;
+  opacity: 0.6;
+}
+.bt-tg-blurb {
+  flex-basis: 100%;
+  padding-left: calc(1em + 10px);
+  font-size: 0.85rem;
+  opacity: 0.75;
+}
+.setting.bt-task-hidden {
+  display: none !important;
+}

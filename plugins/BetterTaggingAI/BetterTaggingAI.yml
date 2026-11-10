@@ -1,0 +1,89 @@
+name: Better Tagging AI Add-on
+description: An add-on for Better Tagging Tools that tags scenes and images, writes titles, and finds a scene's studio and performers from the accounts and studio watermarks it shows - all with a local AI model (Ollama), on your own computer. Adds "Ask AI" buttons for tags and titles while editing, and can do all of it for new items after a scan. Install it next to Better Tagging Tools - it then uses that plugin's "Tags to ignore", special spellings and gallery-name tags, and its rows sit under Better Tagging Tools' suggestions. (It also works on its own.)
+version: "1.0"
+url: https://github.com/OpenSourceLuffy/stash-plugins/tree/main/plugins/BetterTaggingAI
+exec:
+  - python
+  - "{pluginDir}/better_tagging_ai.py"
+interface: raw
+
+ui:
+  javascript:
+    - better-tagging-ai.js
+  css:
+    - better-tagging-ai.css
+
+hooks:
+  - name: New scenes and images
+    description: 'When "AI: tag new scenes and images automatically" or "AI: tag, title and find the studio of new scenes and images" is on, new scenes and images are queued and a background job does them once the scan is done.'
+    triggeredBy:
+      - Scene.Create.Post
+      - Image.Create.Post
+
+tasks:
+  - name: "AI tagging: preview on 10 items (no changes)"
+    description: Shows 10 random scenes/images to the local AI model (Ollama) and writes the tags it (and auto tagging from the file path) would add to the log, without changing anything. Try this first.
+    defaultArgs:
+      mode: ai_preview
+  - name: "AI tagging: items with no tags"
+    description: Uses the local AI model (Ollama) to tag scenes and images that have no tags yet, choosing from your most used tags. First adds the performers, studio and tags whose names are in each file's path (like Stash's Auto Tag). Organized items are skipped unless you change that in the settings.
+    defaultArgs:
+      mode: ai_untagged
+  - name: "AI tagging: everything not done yet"
+    description: Uses the local AI model (Ollama) on every scene and image it hasn't looked at before, after auto tagging each one from its file path (only ever adds). Can take many hours on a big library; it can be stopped and run again, and carries on where it left off.
+    defaultArgs:
+      mode: ai_all
+  - name: "AI titles: preview on 10 items (no changes)"
+    description: Picks 10 random scenes/images without a title and writes the title each would get to the log - from the file name when that makes a good one, else from the local AI model (Ollama) - without changing anything. Try this first.
+    defaultArgs:
+      mode: ai_titles_preview
+  - name: "AI titles: scenes without a title"
+    description: Gives every scene without a title one - from the file name when that makes a good one, else the local AI model's best idea after looking at a few frames (plus its performers, studio and tags). Titles you already have are never changed. Takes a few seconds per scene; skips organized scenes unless "AI - include organized items" is on.
+    defaultArgs:
+      mode: ai_titles_scenes
+  - name: "AI titles: images without a title"
+    description: The same for images (camera photos, screenshots...). Takes a few seconds per image, so a big library can take hours; you can cancel it under Settings → Tasks and run it again later to carry on.
+    defaultArgs:
+      mode: ai_titles_images
+  - name: "Studios from accounts: preview on 10 scenes (no changes)"
+    description: Picks 10 random scenes without a studio and writes to the log which OnlyFans / Fansly / Instagram / TikTok account each comes from and the studio it would get, without changing anything. Try this first.
+    defaultArgs:
+      mode: handle_studios_preview
+  - name: "Studios from accounts: also read watermarks with the AI"
+    description: Gives scenes without a studio a studio for the OnlyFans / Fansly / Instagram / TikTok account they come from - from links in the file name, title, details or URLs, and from the watermark and on-screen text the local AI model (Ollama) reads in up to 6 frames (it only counts if two frames agree). Existing studios whose name is in the watermark are used first; otherwise a studio is made for the account, under a parent studio for the platform. Account names (and names in the watermark) that match a performer add that performer. About 5-15 seconds per scene; scenes already checked are skipped next time. Scenes that have a studio never get a different one.
+    defaultArgs:
+      mode: handle_studios
+
+settings:
+  aiAuto:
+    displayName: "AI: tag new scenes and images automatically"
+    description: Have the local AI model tag scenes and images as they're added by a scan.
+    type: BOOLEAN
+  aiNewAll:
+    displayName: "AI: tag, title and find the studio of new scenes and images"
+    description: "When a scan adds a scene or image, the local AI model does all three: tags it (like \"AI: tag new scenes and images automatically\"), finds a scene's studio and performers from the accounts and studio watermarks it shows (like the \"Studios from accounts\" tasks), and gives it a title if it has none (from the file name, else the AI). Runs in the background once the scan is done; a few seconds to a minute per item."
+    type: BOOLEAN
+  aiOllamaUrl:
+    displayName: "AI: Ollama address"
+    description: Where Ollama runs, as seen from Stash. Default http://host.docker.internal:11434 (Ollama on the same computer as Stash's Docker container); use http://localhost:11434 if Stash isn't in Docker.
+    type: STRING
+  aiModel:
+    displayName: "AI: model"
+    description: An Ollama vision model. Default gemma3:4b (install it with "ollama pull gemma3:4b") - about 5 seconds a picture on an Apple M4. Bigger models (e.g. qwen2.5vl:7b) can be more detailed but are much slower.
+    type: STRING
+  aiTagCount:
+    displayName: "AI: tags to choose from"
+    description: The model picks only from your most used tags - this many of them. Default 250.
+    type: NUMBER
+  aiMaxTags:
+    displayName: "AI: most tags per item"
+    description: The most tags the model adds to one scene or image. Default 6.
+    type: NUMBER
+  aiNoAutoTag:
+    displayName: "AI: don't auto tag from file names first"
+    description: Before the AI looks at an item, the plugin normally adds the performers, studio and tags whose names are in its file path (the same matching as Stash's Auto Tag). Turn this on to skip that.
+    type: BOOLEAN
+  aiIncludeOrganized:
+    displayName: "AI: include organized items"
+    description: Also AI-tag scenes and images you've marked as organized (they're skipped by default).
+    type: BOOLEAN
