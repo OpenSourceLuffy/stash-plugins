@@ -28,6 +28,9 @@ A cleaner, app-like look for Stash, built to feel good on a phone as well as a c
   trackpad or two-finger pinch, or a double-click / double-tap, and drag to move around. Click
   outside the picture, press Esc or tap **Close** to go back. While zoomed out, swipe (or drag, or
   use the arrow keys) to the next or previous image without leaving full screen.
+- Vertical videos whose cover is several frames side by side (e.g. from
+  [Vertical Stitcher](../VerticalStitcher)) show just the middle frame in the tall phone player
+  before you press play, instead of a thin strip.
 - Saving an edited scene or image takes you back to its **Details** tab (if the save fails, you stay on
   **Edit**).
 

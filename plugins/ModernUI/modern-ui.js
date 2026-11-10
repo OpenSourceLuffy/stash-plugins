@@ -85,6 +85,7 @@
   setupGalleryTitle();
   setupTagIndex();
   if (!cfg.stayOnEditAfterSave) setupBackToDetailsOnSave();
+  setupVerticalPoster();
   if (!cfg.showGalleryDetails) setupGalleryPanelClosed();
 
   // the full-screen viewer swipes between images too, unless that's off
@@ -1290,6 +1291,131 @@
         }
       }
     }).observe(document.body, { childList: true, subtree: true });
+  }
+
+  // ------------------------------------------------------------------
+  // Scene page: vertical videos with a stitched (wide) cover
+  // ------------------------------------------------------------------
+  // VerticalStitcher gives vertical videos a wide cover of a few frames side
+  // by side, so it fits landscape cards. In the scene's own (tall) player
+  // that cover would be a thin strip with black above and below. Until the
+  // video plays, show just the middle frame of it, where the video will be.
+
+  function setupVerticalPoster() {
+    const PAGE = /^\/scenes\/(\d+)/;
+    const sceneDims = new Map(); // id -> Promise<{w, h}>
+    const imgDims = new Map(); // url -> Promise<{w, h}>
+    let frameCount = null;
+
+    function gqlQuery(query, variables) {
+      return fetch("/graphql", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query, variables }),
+      }).then((r) => r.json());
+    }
+    function getFrameCount() {
+      if (!frameCount) {
+        frameCount = gqlQuery("{ configuration { plugins } }")
+          .then((j) => {
+            const n = Number(((j.data.configuration.plugins || {}).vertical_stitcher || {}).frameCount);
+            return n >= 2 && n <= 4 ? n : 3;
+          })
+          .catch(() => 3);
+      }
+      return frameCount;
+    }
+    function getScene(id) {
+      if (!sceneDims.has(id)) {
+        sceneDims.set(id, gqlQuery("query($id: ID!) { findScene(id: $id) { files { width height } } }", { id })
+          .then((j) => {
+            const f = ((j.data.findScene || {}).files || [])[0] || {};
+            return { w: f.width || 0, h: f.height || 0 };
+          }));
+      }
+      return sceneDims.get(id);
+    }
+    function getImage(url) {
+      if (!imgDims.has(url)) {
+        imgDims.set(url, new Promise((done) => {
+          const im = new Image();
+          im.onload = () => done({ w: im.naturalWidth, h: im.naturalHeight });
+          im.onerror = () => done({ w: 0, h: 0 });
+          im.src = url;
+        }));
+      }
+      return imgDims.get(url);
+    }
+
+    function clear(poster) {
+      ["backgroundSize", "backgroundPosition", "backgroundRepeat", "backgroundColor"].forEach((k) => (poster.style[k] = ""));
+      if (poster.dataset.muiUrl) poster.style.backgroundImage = `url("${poster.dataset.muiUrl}")`;
+      delete poster.dataset.muiFit;
+      delete poster.dataset.muiUrl;
+    }
+
+    async function fit(player) {
+      const m = location.pathname.match(PAGE);
+      const poster = player.querySelector(".vjs-poster");
+      if (!m || !poster) return;
+      // the cover's address (the last url() once we've added our layers)
+      const urls = [...poster.style.backgroundImage.matchAll(/url\(["']?(.*?)["']?\)/g)].map((x) => x[1]);
+      const url = urls[urls.length - 1];
+      if (!url) return;
+      const W = player.clientWidth, H = player.clientHeight;
+      const key = [url, W, H].join("|");
+      if (poster.dataset.muiFit === key && poster.style.backgroundImage.startsWith("linear-gradient")) return;
+      const [scene, cover, count] = await Promise.all([getScene(m[1]), getImage(url), getFrameCount()]);
+      // only vertical videos with a wide cover, in a tall player (in a wide
+      // one, e.g. on a computer, the whole cover fits nicely as it is)
+      if (!(scene.h > scene.w && scene.w && cover.w > cover.h && cover.h && H > W)) {
+        if (poster.dataset.muiFit) clear(poster);
+        return;
+      }
+      // where the frames sit in the cover: each as tall as the cover, side
+      // by side and centred (shrunk to fit if they're too wide together)
+      const a = scene.w / scene.h;
+      let fh = cover.h, fw = cover.h * a;
+      if (fw * count > cover.w) {
+        const k = cover.w / (fw * count);
+        fw *= k;
+        fh *= k;
+      }
+      const x0 = (cover.w - fw * count) / 2 + fw * Math.floor(count / 2);
+      const y0 = (cover.h - fh) / 2;
+      // where the video will show in the player ("contain")
+      let dw = W, dh = W / a;
+      if (dh > H) {
+        dh = H;
+        dw = H * a;
+      }
+      const s = dh / fh;
+      const left = (W - dw) / 2, top = (H - dh) / 2;
+      // black bars over the frames beside it (they also cover the video's own
+      // poster underneath), then the cover
+      const bar = "linear-gradient(#000, #000)";
+      const L = Math.ceil(left) + 1, T = Math.ceil(top) + 1;
+      poster.style.backgroundImage = `${bar}, ${bar}, ${bar}, ${bar}, url("${url}")`;
+      poster.style.backgroundRepeat = "no-repeat";
+      poster.style.backgroundColor = "#000";
+      poster.style.backgroundSize = `${L}px 100%, ${L}px 100%, 100% ${T}px, 100% ${T}px, ${cover.w * s}px ${cover.h * s}px`;
+      poster.style.backgroundPosition = `left top, right top, left top, left bottom, ${left - x0 * s}px ${top - y0 * s}px`;
+      poster.dataset.muiUrl = url;
+      poster.dataset.muiFit = key;
+    }
+
+    let timer = null;
+    const check = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        if (!PAGE.test(location.pathname)) return;
+        document.querySelectorAll(".video-js").forEach((pl) => fit(pl).catch(() => {}));
+      }, 100);
+    };
+    new MutationObserver(check).observe(document.body, {
+      childList: true, subtree: true, attributes: true, attributeFilter: ["style"],
+    });
+    window.addEventListener("resize", check);
   }
 
   // ------------------------------------------------------------------
