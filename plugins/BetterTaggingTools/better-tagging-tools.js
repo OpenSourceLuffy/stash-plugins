@@ -1,9 +1,11 @@
 // Better Tagging Tools - shows suggested tags under tag boxes: the tags
 // most often found together with the tags already chosen, the top tags of the
 // performers picked in the same form (the "Tag performers with their top
-// tags" task fills those in), the tags most used in the picked galleries
-// (until there are tags), or the library's most used image/scene tags. Also adds the bulk
-// tag windows on performer and gallery pages.
+// tags" task fills those in) and - while there are no tags or galleries -
+// the tags most used on those performers' items, the tags most used in the
+// picked galleries (until there are tags), or the library's most used
+// image/scene tags. Also adds the bulk tag windows on performer and gallery
+// pages.
 (function () {
   "use strict";
 
@@ -165,23 +167,24 @@
   // Tags -> the other tags most often found together with them: every item
   // of that kind that has all of them (or, if none has, any of them) counts
   // the rest of its tags. [{ tag, uses }], total, all
-  const tagsCommon = cached(15000, async (kind, tids) => {
+  // by: "tags" or "performers" - the filter the ids go into
+  const tagsCommon = cached(15000, async (kind, ids, by = "tags") => {
     const [query, arg, type, field] = KINDS[kind];
     const items = async (modifier) => {
       const d = await gql(
         `query($f: ${type}) { ${query}(${arg}, filter: {per_page: -1}) { count ${field} { id tags { id } } } }`,
-        { f: { tags: { value: tids, modifier } } }
+        { f: { [by]: { value: ids, modifier } } }
       );
       return d[query];
     };
     const skip = await galleryNameTagIds();
     let all = true;
     let found = await items("INCLUDES_ALL");
-    if (found.count < 2 && tids.length > 1) {
+    if (found.count < 2 && ids.length > 1) {
       all = false;
       found = await items("INCLUDES");
     }
-    const own = new Set(tids);
+    const own = new Set(by === "tags" ? ids : []);
     const counts = new Map();
     found[field].forEach((it) =>
       it.tags.forEach((t) => {
@@ -271,6 +274,25 @@
               tag: e.tag,
               title: `On ${e.uses} of the ${common.total} ${noun} with ${common.all ? (names.length > 1 ? "all these tags" : names[0]) : "any of these tags"}`,
             })),
+          });
+        }
+        // No tags and no galleries yet: the tags most used on the picked
+        // performers' other scenes / images / galleries
+        const pKind = editingKind();
+        if (performers.length && !fixed && !chosen.length && !galleries.length && ["scenes", "images", "galleries"].includes(pKind)) {
+          const ids = performers.map((p) => p.id).sort();
+          const common = await tagsCommon(pKind + ":p:" + pSig, pKind, ids, "performers");
+          const names = performers.map((p) => p.name);
+          const noun = KINDS[pKind][common.total === 1 ? 4 : 3];
+          const who = !common.all ? "any of these performers" : names.length === 1 ? names[0] : names.length === 2 ? names.join(" & ") : "all these performers";
+          out.push({
+            key: "perfcommon",
+            label: !common.all
+              ? `Common on these performers' ${KINDS[pKind][3]}`
+              : names.length <= 2
+              ? `Common on ${names.join(" & ")}'s ${KINDS[pKind][3]}`
+              : `Common on their ${KINDS[pKind][3]} together`,
+            items: common.items.map((e) => ({ tag: e.tag, title: `On ${e.uses} of the ${common.total} ${noun} with ${who}` })),
           });
         }
         if (performers.length) {
