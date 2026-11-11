@@ -639,7 +639,7 @@ def run_queued(stash, plugin_dir):
 # remembers, per gallery, which tag that is and whether this plugin created
 # it, so a renamed gallery can swap its tag.
 
-GALLERY_FIELDS = "id title files { basename } folder { path }"
+GALLERY_FIELDS = "id title files { basename } folder { path } studio { name aliases }"
 
 
 def locked_gallery_record(plugin_dir):
@@ -656,15 +656,38 @@ def gallery_name_tag_ids(plugin_dir):
     return {v["tag"] for v in record.values() if v.get("created")}
 
 
+def without_studio(name, studio):
+    """A gallery's name without its studio's name (or aliases) in it -
+    "[Studio] Beach Day" or "Studio - Beach Day" becomes "Beach Day". A name
+    that is only the studio stays as it is."""
+    if not name or not studio:
+        return name
+    out = name
+    for n in sorted([studio.get("name") or ""] + (studio.get("aliases") or []), key=len, reverse=True):
+        words = re.findall(r"[^\W_]+", n)
+        if not words:
+            continue
+        core = r"[\s_.\-]*".join(re.escape(w) for w in words)
+        # the name, with any brackets round it, as whole words
+        out = re.sub(r"[\[(\{]\s*" + core + r"\s*[\])\}]|(?<![^\W_])" + core + r"(?![^\W_])", " ", out, flags=re.I)
+    out = re.sub(r"\s+", " ", out)
+    out = re.sub(r"(\s*[-|:~,]\s*){2,}", " - ", out)  # "A -  - B" left where the name was
+    out = re.sub(r"^[\s\-_|:~,.]+|[\s\-_|:~,]+$", "", out)
+    out = re.sub(r"(?i)\s+by$", "", out)  # "Beach Day by Studio"
+    return out if re.search(r"[^\W_]", out) else name
+
+
 def gallery_name(g):
-    """The gallery's title, else its zip's name (no extension), else its folder's."""
+    """The gallery's title, else its zip's name (no extension), else its
+    folder's - without its studio's name, unless that's all there is."""
+    name = ""
     if (g.get("title") or "").strip():
-        return g["title"].strip()
-    if g.get("files"):
-        return os.path.splitext(g["files"][0]["basename"])[0].strip()
-    if g.get("folder") and g["folder"].get("path"):
-        return re.split(r"[\\/]", g["folder"]["path"].rstrip("\\/"))[-1].strip()
-    return ""
+        name = g["title"].strip()
+    elif g.get("files"):
+        name = os.path.splitext(g["files"][0]["basename"])[0].strip()
+    elif g.get("folder") and g["folder"].get("path"):
+        name = re.split(r"[\\/]", g["folder"]["path"].rstrip("\\/"))[-1].strip()
+    return without_studio(name, g.get("studio"))
 
 
 def galleries_of_images(stash, image_ids):
@@ -1739,12 +1762,12 @@ ARCHIVE_EXT = re.compile(r"\.(zip|cbz|cbr|rar|7z)$", re.I)
 
 def gallery_display_name(g):
     """A gallery's name for image titles: its title, else its zip / folder
-    name, without an archive extension."""
+    name, without an archive extension or its studio's name."""
     name = (g.get("title") or "").strip()
     if not name:
         path = ((g.get("files") or [{}])[0].get("path") or (g.get("folder") or {}).get("path") or "")
         name = os.path.basename(path.rstrip("/"))
-    return ARCHIVE_EXT.sub("", name).strip() or None
+    return without_studio(ARCHIVE_EXT.sub("", name).strip(), g.get("studio")) or None
 
 
 class GalleryTitles:
@@ -1767,7 +1790,7 @@ class GalleryTitles:
         need = {g["id"] for r in rows for g in r["galleries"]} - set(self.galleries)
         if need:
             for g in self.stash.call("query($ids: [ID!]) { findGalleries(ids: $ids, filter: {per_page: -1}) "
-                                     "{ galleries { id title image_count files { path } folder { path } } } }",
+                                     "{ galleries { id title image_count files { path } folder { path } studio { name aliases } } } }",
                                      {"ids": sorted(need, key=int)})["findGalleries"]["galleries"]:
                 self.galleries[g["id"]] = g
         out = {}

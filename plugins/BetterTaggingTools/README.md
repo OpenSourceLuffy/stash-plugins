@@ -74,6 +74,7 @@ photos and photos you move into a gallery are kept up to date. Run the **Tag gal
 the gallery's name** task once for the galleries you already have.
 
 - An existing tag with the same name is reused.
+- The gallery's studio is left out of the name ("[Studio] Beach Day" → "Beach Day"), unless the name is only the studio. Image titles made from gallery names do the same.
 - Renaming a gallery swaps its photos over to the new name's tag.
 - These tags never count towards performers' top tags or "most used" suggestions.
 - Photos added from a gallery's **Add** tab don't trigger anything in Stash, so re-run the task to pick those up.

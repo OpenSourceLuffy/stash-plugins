@@ -138,7 +138,7 @@ settings:
     type: BOOLEAN
   galleryNameTags:
     displayName: Tag gallery images with the gallery's name
-    description: Automatically tag images in a gallery with a tag named after the gallery (its title, or the zip or folder name). Runs for new and renamed galleries, newly scanned images and images moved into a gallery. Images added with a gallery's "Add" tab are picked up by the task. These tags never count towards performers' top tags.
+    description: Automatically tag images in a gallery with a tag named after the gallery (its title, or the zip or folder name, without the gallery's studio in it unless that's the whole name). Runs for new and renamed galleries, newly scanned images and images moved into a gallery. Images added with a gallery's "Add" tab are picked up by the task. These tags never count towards performers' top tags.
     type: BOOLEAN
   galleryTagParent:
     displayName: Parent tag for gallery-name tags
