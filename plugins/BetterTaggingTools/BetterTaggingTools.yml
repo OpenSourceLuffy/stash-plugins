@@ -1,6 +1,6 @@
 name: Better Tagging Tools
 description: Tags each performer and studio with the tags used most often in their scenes, images and galleries, and each gallery with its images' most used tags, shows one-click "Suggested tags" and "Title ideas" when editing, and adds "Bulk tag" buttons on performer and gallery pages. Can also tag every image in a gallery with the gallery's name, give tags without a picture one from your library, keep tag names consistently capitalised, auto tag from file names, fill in dates and titles from file names, and give scenes a studio from the account link in their file name. No AI - for that, add Better Tagging AI (works with or without this plugin).
-version: "2.0.1"
+version: "2.0.2"
 url: https://github.com/OpenSourceLuffy/stash-plugins/tree/main/plugins/BetterTaggingTools
 exec:
   - python

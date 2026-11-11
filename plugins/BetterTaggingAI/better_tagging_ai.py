@@ -1,6 +1,7 @@
 """Better Tagging AI - the tagging helpers that ask a local AI model
-(Ollama): AI tags, AI titles, studios and performers from watermarks, and
-all of it for new items after a scan. The work is in btt_core.py, which
+(Ollama) or the face helper: AI tags (checked against look-alikes you've
+tagged), AI titles, studios and performers from watermarks, faces, and all
+of it for new items after a scan. The work is in btt_core.py, which
 Better Tagging Tools ships too; this script only picks what to run.
 """
 import json
@@ -59,6 +60,14 @@ def main():
             c.run_handle_studios(stash, plugin_dir, use_ai=True)
         elif mode == "handle_studios_preview":
             c.run_handle_studios(stash, plugin_dir, preview=True, limit=10)
+        elif mode == "looks_scan":
+            c.run_look_scan(stash, plugin_dir)
+        elif mode == "looks_preview":
+            c.run_looks(stash, plugin_dir, preview=True, limit=10)
+        elif mode == "looks_untagged":
+            c.run_looks(stash, plugin_dir)
+        elif mode == "look_suggest":
+            print(json.dumps({"output": c.run_look_suggest(stash, plugin_dir, args["kind"], args["id"])}))
         elif mode == "faces_learn":
             c.update_face_index(stash, c.settings(stash, plugin_dir), plugin_dir)
         elif mode == "faces_preview":

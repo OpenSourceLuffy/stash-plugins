@@ -110,7 +110,8 @@
   display: none !important;
 }
 
-.bta-faces .bta-sure {
+.bta-faces .bta-sure,
+.bta-tags .bta-sure {
   border-style: solid;
 }
 .bta-details {

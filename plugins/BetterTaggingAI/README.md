@@ -2,8 +2,8 @@
 
 An add-on for [Better Tagging Tools](../BetterTaggingTools) that does the work a local AI model is
 good at: tagging scenes and images, writing titles, finding a scene's studio and performers from
-the accounts and studio watermarks it shows, recognising your performers' faces, and filling in
-performers' hair and eye colour. The model runs on your own computer through
+the accounts and studio watermarks it shows, recognising your performers' faces, learning tags
+from the scenes and images you've already tagged, and filling in performers' hair and eye colour. The model runs on your own computer through
 [Ollama](https://ollama.com); nothing is sent to the internet.
 
 Install it next to Better Tagging Tools. It then uses that plugin's **Tags to ignore**, **Special
@@ -16,15 +16,19 @@ works on its own.
 2. Download the model: `ollama pull gemma3:4b` (about 3 GB).
 3. If Stash runs in Docker on the same computer, the default address
    (`http://host.docker.internal:11434`) works as is. Otherwise set **AI: Ollama address**.
-4. For **Faces** only: run `sh face-helper/setup.sh` from this plugin's folder. It installs a small
-   face-recognition helper (Python with OpenCV and two small models from the OpenCV model zoo,
-   about 150 MB) that starts at login and only listens on your own computer (port 11535). Faces
-   are compared on your computer; nothing is sent anywhere.
+4. For **Faces** and **Look-alike tags**: run `sh face-helper/setup.sh` from this plugin's folder.
+   It installs a small helper (Python with OpenCV, two small face models from the OpenCV model zoo
+   and OpenAI's CLIP ViT-B/32 picture model, about 550 MB in all) that starts at login and only
+   listens on your own computer (port 11535). Pictures are compared on your computer; nothing is
+   sent anywhere. If you installed it before look-alike tags existed, run it again.
 
 ## While editing
 
 - **AI** row under the **Tags** box (scenes and images): **Ask AI for tags** shows the model's picks
-  as one-click chips. Nothing is added until you click them and save.
+  as one-click chips, checked against look-alikes (✓ = look-alikes back it up). **Tags from
+  look-alikes** (quick, no AI model) shows the tags of the scenes and images you've tagged that look
+  most like it, with how many of them have it, e.g. `+ Outdoors 72% ✓`. Nothing is added until you
+  click them and save.
 - **Faces** row under the **Performers** box (scenes and images): **Find performers by face** compares
   the faces in it (6 frames of a scene, or the image) with your performers' and shows the closest as
   one-click chips with their picture and how alike they are, e.g. `+ Jane Doe 56% ✓`. ✓ marks a confident match;
@@ -56,6 +60,22 @@ close. Each section starts with a preview that only writes to the log.
   and can only answer with tags from that list, so it never invents tags. Before that, each item
   gets the performers, studio and tags whose names are in its file path (the same matching as
   Stash's Auto Tag).
+
+**Look-alike tags** (learning from what you've tagged)
+- **Scan scenes and images** makes a picture fingerprint of every scene (its cover and 4 frames
+  from its preview sprite) and image, once. Well under a second each; cancel and rerun to carry on.
+- After that, an item's tags are guessed from the 20 most alike items you've tagged: a tag scores by
+  how many of them have it, the closest counting most. It uses your own tags the way you use them,
+  including ones the AI model has never heard of, and it keeps learning as you tag.
+- **AI tagging** then keeps only the AI's picks that look-alikes back up, and adds the tags
+  look-alikes are sure of (50% or more). On a test of 64 tagged items, the AI on its own matched the
+  tags you'd given 8–20% of the time; checked against look-alikes, 70–78%.
+- **Items with no tags** adds only the tags look-alikes are sure of (no AI model needed).
+- **Corrections**: tags the add-on adds are remembered (`machine_tags.json`) and never learned from,
+  so its guesses don't reinforce themselves. A tag you've removed from most of the items it was
+  added to (at least 4) isn't added any more; the tasks list such tags in the log.
+- Accuracy depends on how consistently you tag: items in a folder or gallery you've already tagged
+  get the best results; a completely new kind of picture gets fewer, less sure tags.
 
 **AI titles**
 - **Scenes without a title** / **images without a title**: each gets the title from its file name

@@ -37,39 +37,75 @@
   function AiTags({ values, onSelect }) {
     const m = location.pathname.match(ITEM_PAGE);
     const [ai, setAi] = React.useState({ state: "idle" });
+    const [look, setLook] = React.useState({ state: "idle" });
     const key = m ? m[1] + m[2] : "";
-    React.useEffect(() => setAi({ state: "idle" }), [key]);
+    React.useEffect(() => {
+      setAi({ state: "idle" });
+      setLook({ state: "idle" });
+    }, [key]);
     if (!m) return null;
+    const kind = m[1] === "scenes" ? "scene" : "image";
 
     async function go() {
       setAi({ state: "loading" });
       try {
-        const out = await ask({ mode: "ai_suggest", kind: m[1] === "scenes" ? "scene" : "image", id: m[2] });
-        setAi({ state: "done", tags: (out || []).map((t) => ({ id: String(t.id), name: t.name, aliases: [] })) });
+        const out = await ask({ mode: "ai_suggest", kind, id: m[2] });
+        setAi({ state: "done", tags: (out || []).map((t) => ({ id: String(t.id), name: t.name, aliases: [], source: t.source || "ai" })) });
       } catch (e) {
         setAi({ state: "error", message: e.message });
       }
     }
 
+    async function goLook() {
+      setLook({ state: "loading" });
+      try {
+        const out = await ask({ mode: "look_suggest", kind, id: m[2] });
+        setLook({ state: "done", tags: (out || []).map((t) => ({ id: String(t.id), name: t.name, aliases: [], score: t.score, sure: t.sure })) });
+      } catch (e) {
+        setLook({ state: "error", message: e.message });
+      }
+    }
+
     const have = new Set((values || []).map((t) => String(t.id)));
-    const tags = ai.state === "done" ? ai.tags.filter((t) => !have.has(t.id)) : [];
-    const add = (list) => onSelect([...(values || []), ...list]);
+    const aiTags = ai.state === "done" ? ai.tags.filter((t) => !have.has(t.id)) : [];
+    const shown = new Set(aiTags.map((t) => t.id));
+    const lookTags = look.state === "done" ? look.tags.filter((t) => !have.has(t.id) && !shown.has(t.id)) : [];
+    const strip = (t) => ({ id: t.id, name: t.name, aliases: [] });
+    const add = (list) => onSelect([...(values || []), ...list.map(strip)]);
+    const all = [...aiTags, ...lookTags];
+    const SOURCE = {
+      both: "Picked by the AI and backed up by look-alikes you've tagged",
+      looks: "Most look-alikes you've tagged have it",
+      ai: "Picked by the AI model (look-alikes not scanned yet)",
+    };
+    const busy = (st) => st.state === "loading";
     return h(
       "div",
       { className: "pts-suggest pts-ai bta-tags" },
       h("span", { className: "pts-label" }, "AI"),
       ai.state === "idle" &&
-        h("button", { type: "button", className: "pts-chip pts-ai-ask", onClick: go, title: "Ask the local AI model (Ollama) which of your tags fit" }, "Ask AI for tags"),
-      ai.state === "loading" && h("span", { className: "pts-ai-note" }, "Looking at it…"),
+        h("button", { type: "button", className: "pts-chip pts-ai-ask", onClick: go, title: "Ask the local AI model (Ollama) which of your tags fit, checked against look-alikes" }, "Ask AI for tags"),
+      look.state === "idle" &&
+        h("button", { type: "button", className: "pts-chip pts-ai-ask", onClick: goLook, title: "Tags of the scenes and images you've tagged that look most like this one (quick, no AI model)" }, "Tags from look-alikes"),
+      (busy(ai) || busy(look)) && h("span", { className: "pts-ai-note" }, "Looking at it…"),
       ai.state === "error" &&
         h("span", { className: "pts-ai-note" }, "Couldn't ask the AI: " + ai.message + " ",
           h("button", { type: "button", className: "pts-chip", onClick: go }, "Try again")),
-      ai.state === "done" && !tags.length &&
-        h("span", { className: "pts-ai-note" }, ai.tags.length ? "All its suggestions are already added" : "No suggestions"),
-      tags.map((t) =>
-        h("button", { key: t.id, type: "button", className: "pts-chip", title: "Suggested by the local AI model", onClick: () => add([t]) }, "+ " + t.name)
+      look.state === "error" &&
+        h("span", { className: "pts-ai-note" }, "Look-alikes: " + look.message + " ",
+          h("button", { type: "button", className: "pts-chip", onClick: goLook }, "Try again")),
+      (ai.state === "done" || look.state === "done") && !busy(ai) && !busy(look) && !all.length &&
+        h("span", { className: "pts-ai-note" }, (ai.tags || []).length + (look.tags || []).length ? "All suggestions are already added" : "No suggestions"),
+      aiTags.map((t) =>
+        h("button", { key: "a" + t.id, type: "button", className: "pts-chip" + (t.source !== "ai" ? " bta-sure" : ""), title: SOURCE[t.source] || SOURCE.ai, onClick: () => add([t]) },
+          "+ " + t.name + (t.source !== "ai" ? " ✓" : ""))
       ),
-      tags.length > 1 && h("button", { type: "button", className: "pts-chip pts-all", onClick: () => add(tags) }, "Add all")
+      lookTags.map((t) =>
+        h("button", { key: "l" + t.id, type: "button", className: "pts-chip" + (t.sure ? " bta-sure" : ""),
+          title: Math.round(t.score * 100) + "% of the closest look-alikes you've tagged have it" + (t.sure ? " (sure)" : ""), onClick: () => add([t]) },
+          "+ " + t.name + " " + Math.round(t.score * 100) + "%" + (t.sure ? " ✓" : ""))
+      ),
+      all.length > 1 && h("button", { type: "button", className: "pts-chip pts-all", onClick: () => add(all) }, "Add all")
     );
   }
 

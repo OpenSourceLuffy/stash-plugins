@@ -16,7 +16,9 @@ import base64
 import contextlib
 import fcntl
 import hashlib
+import heapq
 import json
+import math
 import operator
 import os
 import re
@@ -1949,13 +1951,32 @@ def ai_pictures(stash, kind, item):
 AI_ITEM_FIELDS = {
     "image": "id title date organized tags { id name } performers { id } studio { id } paths { thumbnail } "
              "visual_files { __typename ... on ImageFile { path } ... on VideoFile { path } }",
-    "scene": "id title date organized tags { id name } performers { id } studio { id } files { path duration }",
+    "scene": "id title date organized tags { id name } performers { id } studio { id } files { path duration } "
+             "paths { screenshot sprite vtt }",
 }
 
 
-def ai_tag_item(stash, cfg, vocab, names, kind, item, apply, have_too=()):
-    """Returns the names of the tags the model picked that the item doesn't
-    have yet (added when `apply`). `have_too`: tag ids just added by Auto Tag."""
+def combine_picks(ai_picked, scores, have, looks, limit):
+    """The AI's picks checked against the look-alikes: [(tag id, name,
+    "both" | "looks" | "ai")]. With look-alike scores, an AI pick is kept
+    only if the look-alikes back it a little (the AI alone is often wrong
+    about your tags), and tags the look-alikes are sure of are added. Without
+    them (not scanned / no helper), the AI's picks as they are."""
+    if scores is None:
+        return [(t, n, "ai") for t, n in ai_picked][:limit]
+    out = [(t, n, "both") for t, n in ai_picked if scores.get(t, 0) >= LOOK_SUPPORT and t not in looks.rejected]
+    seen = {t for t, _, _ in out} | set(have)
+    for t in look_picks(scores, seen, looks.names, limit):
+        out.append((t, looks.names[t], "looks"))
+    out.sort(key=lambda x: -scores.get(x[0], 0))
+    return out[:limit]
+
+
+def ai_tag_item(stash, cfg, vocab, names, kind, item, apply, have_too=(), looks=None, plugin_dir=None, details=False):
+    """Returns the names of the tags picked that the item doesn't have yet
+    (added when `apply`). `have_too`: tag ids just added by Auto Tag.
+    `looks`: a LookIndex to check the AI against (see combine_picks).
+    `details`: return [(id, name, source)] instead of names."""
     pictures = ai_pictures(stash, kind, item)
     if not pictures:
         return None
@@ -1966,13 +1987,24 @@ def ai_tag_item(stash, cfg, vocab, names, kind, item, apply, have_too=()):
         if tid and tid not in have and tid not in seen:
             seen.add(tid)
             picked.append((tid, name))
-    picked = picked[: cfg["ai"]["max_tags"]]
+    scores = None
+    if looks:
+        try:
+            scores = looks.for_item(stash, kind, item)
+        except RuntimeError:
+            raise
+        except Exception as e:
+            log("debug", f"{kind} {item['id']}: look-alikes skipped ({e})")
+    full = combine_picks(picked, scores, have, looks, cfg["ai"]["max_tags"])
+    picked = [(t, n) for t, n, _ in full]
     if apply and picked:
         mutation = "bulkImageUpdate(input: $i) { id }" if kind == "image" else "bulkSceneUpdate(input: $i) { id }"
         input_type = "BulkImageUpdateInput" if kind == "image" else "BulkSceneUpdateInput"
         stash.call(f"mutation($i: {input_type}!) {{ {mutation} }}",
                    {"i": {"ids": [item["id"]], "tag_ids": {"ids": [t for t, _ in picked], "mode": "ADD"}}})
-    return [n for _, n in picked]
+        if plugin_dir:
+            record_machine_tags(plugin_dir, kind, item["id"], [t for t, _ in picked])
+    return full if details else [n for _, n in picked]
 
 
 def locked_ai_done(plugin_dir):
@@ -2034,6 +2066,13 @@ def run_ai(stash, plugin_dir, only_untagged=False, preview=False, targets=None):
             targets = random.sample(targets, min(10, len(targets)))
     what = "Preview" if preview else "AI tagging"
     log("info", f"{what}: {len(targets)} item(s), choosing from your {len(names)} most used tags with {cfg['ai']['model']}")
+    _, excluded = tag_lookup(stash, cfg, plugin_dir)
+    looks = load_look_index(stash, cfg, plugin_dir, excluded)
+    if looks:
+        log("info", f"Checking the AI's picks against look-alikes among {len(looks.rows)} item(s) you've tagged")
+        if looks.rejected:
+            log("info", "Not added any more (you removed them from most items they were added to): "
+                + ", ".join(f"{looks.names.get(t, t)} (kept {k} of {n})" for t, (n, k) in looks.rejected.items()))
     index = autotag_index(stash, plugin_dir) if cfg["ai"]["autotag_first"] else None
     added = tagged = from_names = 0
     started = time.time()
@@ -2050,7 +2089,8 @@ def run_ai(stash, plugin_dir, only_untagged=False, preview=False, targets=None):
                 from_names += 1
                 log("info", f"{label}: from the file name {'would add' if preview else '+'} {', '.join(pre)}")
         try:
-            picked = ai_tag_item(stash, cfg, vocab, names, kind, item, apply=not preview, have_too=pre_tags)
+            picked = ai_tag_item(stash, cfg, vocab, names, kind, item, apply=not preview, have_too=pre_tags,
+                                 looks=looks, plugin_dir=plugin_dir)
         except Exception as e:
             log("warning", f"{label}: {e}")
             if "urlopen" in repr(e) or "Connection" in repr(e):
@@ -2068,6 +2108,8 @@ def run_ai(stash, plugin_dir, only_untagged=False, preview=False, targets=None):
             with locked_ai_done(plugin_dir) as done:
                 done.setdefault(kind + "s", []).append(item["id"])
         progress((n + 1) / max(len(targets), 1))
+    if looks:
+        looks.cache.save()
     took = time.time() - started
     per = f" ({took / max(len(targets), 1):.1f}s each)" if targets else ""
     names_note = f" Auto tag (file names) {'would add' if preview else 'added'} to {from_names} item(s)." if index is not None else ""
@@ -2101,8 +2143,397 @@ def run_ai_suggest(stash, plugin_dir, kind, item_id):
     item = stash.call(f"query($id: ID!) {{ {query}(id: $id) {{ {AI_ITEM_FIELDS[kind]} }} }}", {"id": str(item_id)})[query]
     if not item:
         raise RuntimeError(f"{kind} {item_id} not found")
-    picked = ai_tag_item(stash, cfg, vocab, names, kind, item, apply=False) or []
-    return [{"id": vocab[n.lower()], "name": n} for n in picked]
+    _, excluded = tag_lookup(stash, cfg, plugin_dir)
+    looks = load_look_index(stash, cfg, plugin_dir, excluded, quiet=True)
+    picked = ai_tag_item(stash, cfg, vocab, names, kind, item, apply=False, looks=looks, details=True) or []
+    if looks:
+        looks.cache.save()
+    return [{"id": t, "name": n, "source": src} for t, n, src in picked]
+
+
+# --- tags from look-alikes ---------------------------------------------------
+# Every scene (its cover and 4 frames from its preview sprite) and image gets
+# a picture fingerprint (CLIP, from the face helper), kept in
+# look_items.json. An item's tags are then guessed from the 20 most alike
+# items you've tagged: a tag scores by how many of them have it, the closest
+# counting most (score 0-1). So it learns from your own tagging - tags the AI
+# model has never heard of included - and from what you change later.
+#
+# Tags the add-on added itself (machine_tags.json) aren't learned from, so
+# its own guesses don't reinforce themselves; and a tag you've removed from
+# most of the items it was added to isn't added any more ("corrections").
+
+LOOK_TILE_POINTS = (0.2, 0.4, 0.6, 0.8)
+LOOK_K = 20
+LOOK_TEMP = 0.02
+LOOK_SUGGEST = 0.3   # shown as a suggestion
+LOOK_SURE = 0.5      # added by the tasks; AI picks need LOOK_SUPPORT
+LOOK_SUPPORT = 0.15  # an AI pick is kept if the look-alikes give it this much
+LOOK_MIN_ITEMS = 100  # tagged, fingerprinted items needed before it's used
+REJECT_MIN = 4       # a tag added this often ...
+REJECT_KEPT = 0.5    # ... and kept on fewer than half: not added any more
+
+LOOK_ITEM_FIELDS = {
+    "scene": "id title organized tags { id name } files { path duration } paths { screenshot sprite vtt }",
+    "image": "id title organized tags { id name } paths { thumbnail } "
+             "visual_files { __typename ... on ImageFile { path } ... on VideoFile { path } }",
+}
+
+
+def picture_helper(cfg, pictures, boxes=None):
+    """Picture fingerprints from the helper: one per picture, or with
+    `boxes`, a list per picture (one per box cut out of it)."""
+    body = {"images": [base64.b64encode(p).decode() for p in pictures]}
+    if boxes:
+        body["boxes"] = boxes
+    data = json.dumps(body).encode()
+    for attempt in range(4):
+        req = urllib.request.Request(cfg["ai"]["face_url"] + "/embed", data=data, headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                return json.loads(resp.read())["results"]
+        except urllib.error.HTTPError as e:
+            detail = ""
+            with contextlib.suppress(Exception):
+                detail = json.loads(e.read()).get("error", "")
+            if "isn't installed" in detail:
+                raise RuntimeError("the face helper doesn't have the picture model yet: run face-helper/setup.sh again")
+            if e.code == 404:
+                raise RuntimeError("the face helper is out of date: run face-helper/setup.sh again")
+            raise ValueError(f"the helper couldn't read it ({e.code} {detail})")
+        except urllib.error.URLError as e:
+            reason = getattr(e, "reason", e)
+            if isinstance(reason, (BrokenPipeError, ConnectionResetError)):
+                raise ValueError(f"the helper dropped it ({reason})")
+            if attempt < 3:
+                time.sleep(2 + attempt * 2)
+                continue
+            raise RuntimeError(f"can't reach the face helper at {cfg['ai']['face_url']} ({reason}). "
+                               "Is it running? See the add-on's README.")
+
+
+def look_fingerprint(stash, cfg, kind, item):
+    """One picture fingerprint for the item (the average over a scene's
+    pictures), or None if there's nothing to look at."""
+    pictures, boxes = [], []
+    if kind == "image":
+        if not all(f["__typename"] == "ImageFile" for f in item.get("visual_files") or []):
+            return None
+        data, ctype = stash.fetch(item["paths"]["thumbnail"])
+        if ctype.startswith("image/"):
+            pictures.append(data)
+            boxes.append(None)
+    else:
+        paths = item.get("paths") or {}
+        with contextlib.suppress(Exception):
+            data, ctype = stash.fetch(paths["screenshot"])
+            if ctype.startswith("image/"):
+                pictures.append(data)
+                boxes.append(None)
+        tiles = []
+        with contextlib.suppress(Exception):  # the preview sprite: frames all through it
+            vtt = stash.fetch(paths["vtt"])[0].decode("utf-8", "replace")
+            spots = [[int(v) for v in m] for m in re.findall(r"#xywh=(\d+),(\d+),(\d+),(\d+)", vtt)]
+            if spots:
+                sprite, ctype = stash.fetch(paths["sprite"])
+                if ctype.startswith("image/"):
+                    tiles = [spots[min(int(len(spots) * p), len(spots) - 1)] for p in LOOK_TILE_POINTS]
+                    pictures.append(sprite)
+                    boxes.append(tiles)
+        if not tiles:  # no sprite generated: take frames from the video
+            f = (item.get("files") or [None])[0]
+            if f and (f.get("duration") or 0) > 1:
+                for p in LOOK_TILE_POINTS:
+                    with contextlib.suppress(Exception):
+                        pictures.append(grab_frame(stash, f["path"], f["duration"] * p, width=448)[0])
+                        boxes.append(None)
+    if not pictures:
+        return None
+    embs = []
+    for r in picture_helper(cfg, pictures, boxes if any(boxes) else None):
+        if r and isinstance(r[0], list):
+            embs += r
+        elif r:
+            embs.append(r)
+    if not embs:
+        return None
+    mean = [sum(col) / len(embs) for col in zip(*embs)]
+    norm = math.sqrt(sum(v * v for v in mean)) or 1.0
+    return [v / norm for v in mean]
+
+
+def _ints(s):
+    return [b - 256 if b > 127 else b for b in base64.b64decode(s)]
+
+
+class LookCache:
+    """look_items.json: each item's picture fingerprint (or None when there
+    was nothing to look at), merged back in batches."""
+
+    def __init__(self, plugin_dir):
+        self.path = os.path.join(plugin_dir, "look_items.json")
+        try:
+            with open(self.path) as f:
+                self.data = json.load(f)
+        except (OSError, ValueError):
+            self.data = {}
+        self.new = {}
+
+    def has(self, kind, item):
+        hit = self.new.get(f"{kind}:{item['id']}") or self.data.get(f"{kind}:{item['id']}")
+        return bool(hit) and hit.get("p") == item_path(kind, item)
+
+    def vector(self, stash, cfg, kind, item, compute=True):
+        """The fingerprint as whole numbers (-127..127), or None."""
+        key, sig = f"{kind}:{item['id']}", item_path(kind, item)
+        hit = self.new.get(key) or self.data.get(key)
+        if hit and hit.get("p") == sig:
+            return _ints(hit["e"]) if hit.get("e") else None
+        if not compute:
+            return None
+        emb = look_fingerprint(stash, cfg, kind, item)
+        self.new[key] = {"p": sig, "e": q8(emb) if emb else None}
+        if len(self.new) >= 50:
+            self.save()
+        return _ints(self.new[key]["e"]) if emb else None
+
+    def save(self):
+        if not self.new:
+            return
+        with locked_json(self.path) as data:
+            data.update(self.new)
+            self.data = dict(data)
+        self.new = {}
+
+
+def locked_machine_tags(plugin_dir):
+    """Which tags the add-on added to which item (machine_tags.json)."""
+    return locked_json(os.path.join(plugin_dir, "machine_tags.json"))
+
+
+def record_machine_tags(plugin_dir, kind, item_id, tag_ids):
+    if tag_ids:
+        with locked_machine_tags(plugin_dir) as rec:
+            key = f"{kind}:{item_id}"
+            rec[key] = sorted(set(rec.get(key, [])) | {str(t) for t in tag_ids}, key=int)
+
+
+def all_item_tags(stash):
+    """{"scene:ID" / "image:ID": {tag ids}} for every item with tags."""
+    out = {}
+    for kind, (query, field, farg, ftype) in (("scene", ("findScenes", "scenes", "scene_filter", "SceneFilterType")),
+                                             ("image", ("findImages", "images", "image_filter", "ImageFilterType"))):
+        page = 1
+        while True:
+            items = stash.call(
+                f"query($p: {ftype}, $f: FindFilterType) {{ {query}({farg}: $p, filter: $f) {{ {field} {{ id tags {{ id }} }} }} }}",
+                {"p": {"tag_count": {"value": 0, "modifier": "GREATER_THAN"}}, "f": {"page": page, "per_page": 5000}})[query][field]
+            for i in items:
+                out[f"{kind}:{i['id']}"] = {t["id"] for t in i["tags"]}
+            if len(items) < 5000:
+                break
+            page += 1
+    return out
+
+
+def rejected_tags(item_tags, machine):
+    """Tags the add-on added often that you've mostly removed again:
+    {tag id: (added, kept)}."""
+    added, kept = Counter(), Counter()
+    for key, tids in machine.items():
+        have = item_tags.get(key, set())
+        for t in tids:
+            added[t] += 1
+            kept[t] += t in have
+    return {t: (n, kept[t]) for t, n in added.items() if n >= REJECT_MIN and kept[t] < n * REJECT_KEPT}
+
+
+class LookIndex:
+    """Everything needed to guess tags from look-alikes, loaded once per run."""
+
+    def __init__(self, stash, cfg, plugin_dir, excluded=frozenset()):
+        self.cfg = cfg
+        self.cache = LookCache(plugin_dir)
+        tags = all_item_tags(stash)
+        try:
+            with open(os.path.join(plugin_dir, "machine_tags.json")) as f:
+                machine = json.load(f)
+        except (OSError, ValueError):
+            machine = {}
+        self.rejected = rejected_tags(tags, machine)
+        self.names = {t["id"]: t["name"] for t in stash.call("{ findTags(filter: {per_page: -1}) { tags { id name } } }")["findTags"]["tags"]
+                      if t["id"] not in excluded}
+        self.rows = []  # (key, fingerprint, tags you gave it)
+        for key, ent in self.cache.data.items():
+            t = tags.get(key)
+            if t and ent.get("e"):
+                t = t - set(excluded) - set(machine.get(key, []))
+                if t:
+                    self.rows.append((key, _ints(ent["e"]), frozenset(t)))
+
+    def ready(self):
+        return len(self.rows) >= LOOK_MIN_ITEMS
+
+    def scores(self, vec, skip=None):
+        """{tag id: 0-1} from the LOOK_K most alike tagged items."""
+        if not vec or not self.rows:
+            return {}
+        best = heapq.nlargest(LOOK_K, ((sum(map(operator.mul, vec, r[1])), n) for n, r in enumerate(self.rows)
+                                       if r[0] != skip))
+        if not best:
+            return {}
+        top = best[0][0] / 16129
+        out, total = defaultdict(float), 0.0
+        for dot, n in best:
+            w = math.exp((dot / 16129 - top) / LOOK_TEMP)
+            total += w
+            for t in self.rows[n][2]:
+                out[t] += w
+        return {t: s / total for t, s in out.items() if t not in self.rejected}
+
+    def for_item(self, stash, kind, item, compute=True):
+        vec = self.cache.vector(stash, self.cfg, kind, item, compute=compute)
+        return self.scores(vec, skip=f"{kind}:{item['id']}") if vec else None
+
+
+def load_look_index(stash, cfg, plugin_dir, excluded=frozenset(), quiet=False):
+    """A LookIndex when the helper can make picture fingerprints and enough
+    items have one; otherwise None (things work as before without it)."""
+    try:
+        with urllib.request.urlopen(cfg["ai"]["face_url"] + "/health", timeout=5) as resp:
+            if not json.loads(resp.read()).get("embed"):
+                raise RuntimeError("no picture model")
+        looks = LookIndex(stash, cfg, plugin_dir, excluded)
+    except Exception as e:
+        if not quiet:
+            log("info", f"Look-alike tags not used ({e}); the AI works on its own.")
+        return None
+    if not looks.ready():
+        if not quiet:
+            log("info", "Look-alike tags not used yet: run \"Look-alike tags: scan scenes and images\" first.")
+        return None
+    return looks
+
+
+def _look_targets(stash, cfg, only_untagged):
+    out = []
+    for kind, (query, field, farg, ftype) in (("scene", ("findScenes", "scenes", "scene_filter", "SceneFilterType")),
+                                             ("image", ("findImages", "images", "image_filter", "ImageFilterType"))):
+        f = {}
+        if only_untagged:
+            f["tag_count"] = {"value": 0, "modifier": "EQUALS"}
+        if only_untagged and not cfg["ai"]["include_organized"]:
+            f["organized"] = False
+        page = 1
+        while True:
+            items = stash.call(
+                f"query($p: {ftype}, $f: FindFilterType) {{ {query}({farg}: $p, filter: $f) {{ {field} {{ {LOOK_ITEM_FIELDS[kind]} }} }} }}",
+                {"p": f, "f": {"page": page, "per_page": 500, "sort": "created_at", "direction": "DESC"}})[query][field]
+            out += [(kind, i) for i in items]
+            if len(items) < 500:
+                break
+            page += 1
+    return out
+
+
+def run_look_scan(stash, plugin_dir):
+    """Task: a picture fingerprint for every scene and image (once; changed
+    files again)."""
+    cfg = settings(stash, plugin_dir)
+    picture_helper(cfg, [])  # fails early if the helper or its model isn't there
+    cache = LookCache(plugin_dir)
+    todo = _look_targets(stash, cfg, False)
+    left = [(k, i) for k, i in todo if not cache.has(k, i)]
+    log("info", f"Fingerprinting {len(left)} of {len(todo)} scene(s)/image(s) ({len(todo) - len(left)} done before). "
+        "Well under a second each; you can cancel and run it again to carry on.")
+    done = 0
+    for n, (kind, item) in enumerate(left):
+        progress(n / max(len(left), 1))
+        try:
+            done += cache.vector(stash, cfg, kind, item) is not None
+        except RuntimeError:
+            cache.save()
+            raise
+        except Exception as e:
+            log("debug", f"{kind} {item['id']}: {e}")
+    cache.save()
+    progress(1)
+    log("info", f"Done: {done} of {len(left)} item(s) fingerprinted. Look-alike tags are now used by the AI tagging "
+        "tasks and the edit page.")
+
+
+def look_picks(scores, have, names_by_id, limit):
+    """Tags the look-alikes are sure of that the item doesn't have."""
+    picks = sorted(((s, t) for t, s in scores.items() if s >= LOOK_SURE and t not in have and t in names_by_id),
+                   reverse=True)
+    return [t for _, t in picks[:limit]]
+
+
+def run_looks(stash, plugin_dir, preview=False, limit=None):
+    """Task: items with no tags get the tags their look-alikes are sure of."""
+    cfg = settings(stash, plugin_dir)
+    _, excluded = tag_lookup(stash, cfg, plugin_dir)
+    looks = load_look_index(stash, cfg, plugin_dir, excluded)
+    if not looks:
+        return
+    names = looks.names
+    targets = _look_targets(stash, cfg, True)
+    if limit:
+        import random
+        targets = random.sample(targets, min(limit, len(targets)))
+    log("info", f"{'Preview: ' if preview else ''}{len(targets)} item(s) with no tags; learning from "
+        f"{len(looks.rows)} item(s) you've tagged" + (" (nothing is saved)" if preview else ""))
+    if looks.rejected:
+        log("info", "Not added any more (you removed them from most items they were added to): "
+            + ", ".join(f"{names.get(t, t)} (kept {k} of {n})" for t, (n, k) in looks.rejected.items()))
+    tagged = added = 0
+    for n, (kind, item) in enumerate(targets):
+        progress(n / max(len(targets), 1))
+        label = f'{kind} {item["id"]}' + (f' "{item["title"]}"' if item.get("title") else "")
+        try:
+            scores = looks.for_item(stash, kind, item)
+        except RuntimeError:
+            looks.cache.save()
+            raise
+        except Exception as e:
+            log("debug", f"{label}: {e}")
+            continue
+        if not scores:
+            continue
+        picks = look_picks(scores, set(), names, cfg["ai"]["max_tags"])
+        maybe = sorted(((s, t) for t, s in scores.items() if LOOK_SUGGEST <= s < LOOK_SURE and t in names), reverse=True)[:4]
+        if picks and not preview:
+            stash.call(f"mutation($i: {'BulkSceneUpdateInput' if kind == 'scene' else 'BulkImageUpdateInput'}!) "
+                       f"{{ {'bulkSceneUpdate' if kind == 'scene' else 'bulkImageUpdate'}(input: $i) {{ id }} }}",
+                       {"i": {"ids": [item["id"]], "tag_ids": {"ids": picks, "mode": "ADD"}}})
+            record_machine_tags(plugin_dir, kind, item["id"], picks)
+        if picks or (preview and maybe):
+            tagged += bool(picks)
+            added += len(picks)
+            log("info", f"{label}: {'would add' if preview else '+'} "
+                + (", ".join(f"{names[t]} {round(scores[t] * 100)}%" for t in picks) or "nothing")
+                + (f" (less sure: {', '.join(f'{names[t]} {round(s * 100)}%' for s, t in maybe)})" if preview and maybe else ""))
+    looks.cache.save()
+    progress(1)
+    log("info", f"{'Preview done' if preview else 'Done'}: {tagged} of {len(targets)} item(s) "
+        f"{'would get' if preview else 'got'} {added} tag(s) from look-alikes.")
+
+
+def run_look_suggest(stash, plugin_dir, kind, item_id):
+    """Asked by the edit page: look-alike tag suggestions for one item,
+    nothing saved. [{id, name, score}] best first."""
+    cfg = settings(stash, plugin_dir)
+    _, excluded = tag_lookup(stash, cfg, plugin_dir)
+    looks = load_look_index(stash, cfg, plugin_dir, excluded, quiet=True)
+    if not looks:
+        raise RuntimeError("run the task \"Look-alike tags: scan scenes and images\" first (it needs the face helper)")
+    q = "findScene" if kind == "scene" else "findImage"
+    item = stash.call(f"query($id: ID!) {{ {q}(id: $id) {{ {LOOK_ITEM_FIELDS[kind]} }} }}", {"id": str(item_id)})[q]
+    scores = looks.for_item(stash, kind, item) or {}
+    looks.cache.save()
+    names = looks.names
+    best = sorted(((s, t) for t, s in scores.items() if s >= LOOK_SUGGEST and t in names), reverse=True)
+    return [{"id": t, "name": names[t], "score": round(s, 2), "sure": s >= LOOK_SURE} for s, t in best[:12]]
 
 
 # --- title ideas -------------------------------------------------------------
