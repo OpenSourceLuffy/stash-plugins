@@ -21,6 +21,9 @@ works on its own.
    and OpenAI's CLIP ViT-B/32 picture model, about 550 MB in all) that starts at login and only
    listens on your own computer (port 11535). Pictures are compared on your computer; nothing is
    sent anywhere. If you installed it before look-alike tags existed, run it again.
+5. For **Body tags**: run `sh face-helper/setup.sh --body`. It also downloads
+   [NudeNet](https://github.com/notAI-tech/NudeNet)'s body-part detector (about 12 MB, from its
+   official Python package). Note that NudeNet is licensed **AGPL-3.0**.
 
 ## While editing
 
@@ -78,6 +81,21 @@ close. Each section starts with a preview that only writes to the log.
   added to (at least 4) isn't added any more; the tasks list such tags in the log.
 - Accuracy depends on how consistently you tag: items in a folder or gallery you've already tagged
   get the best results; a completely new kind of picture gets fewer, less sure tags.
+
+**Body tags** (what's shown, and how big)
+- What's shown comes from a body-part detector (4 frames of a scene, or the image): **Tits**, **Ass**,
+  **Pussy** and **Cock**, using your tags with those names (make a tag to have that part added). It's
+  good at breasts and buttocks (in testing it found them in about 90% of items tagged so), weaker at
+  genitals. When an item's performers are all men it never adds Tits or Pussy (it can take a man's
+  chest for breasts), and Cock not when they're all women.
+- How big comes from the performer, and only when that part is shown: the size you usually tag them
+  with (on 2+ of their items, 70% of them: e.g. **Big Ass**), else for breasts their cup size (B and
+  under **Small Tits**, D and up **Big Tits**; C is skipped), plus **Natural Tits** / **Fake Tits**
+  from their details. **Defined Abs** / **Muscular** when a belly is shown and they're usually tagged
+  so. An item that has a size tag already never gets another. In testing, sizes from the performer's
+  own tags were right 79–100% of the time and cup sizes 83%.
+- **Scenes and images** does every item once (cancel and rerun to carry on). AI tagging, new items
+  after a scan and **Ask AI for tags** add them too.
 
 **AI titles**
 - **Scenes without a title** / **images without a title**: each gets the title from its file name

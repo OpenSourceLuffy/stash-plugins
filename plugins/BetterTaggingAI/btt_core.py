@@ -1949,7 +1949,7 @@ def ai_pictures(stash, kind, item):
 
 
 AI_ITEM_FIELDS = {
-    "image": "id title date organized tags { id name } performers { id } studio { id } paths { thumbnail } "
+    "image": "id title date organized tags { id name } performers { id } studio { id } paths { thumbnail image } "
              "visual_files { __typename ... on ImageFile { path } ... on VideoFile { path } }",
     "scene": "id title date organized tags { id name } performers { id } studio { id } files { path duration } "
              "paths { screenshot sprite vtt }",
@@ -2068,6 +2068,9 @@ def run_ai(stash, plugin_dir, only_untagged=False, preview=False, targets=None):
     log("info", f"{what}: {len(targets)} item(s), choosing from your {len(names)} most used tags with {cfg['ai']['model']}")
     _, excluded = tag_lookup(stash, cfg, plugin_dir)
     looks = load_look_index(stash, cfg, plugin_dir, excluded)
+    body = BodyIndex(stash, plugin_dir, body_excluded(stash, cfg)) if body_ready(cfg) else None
+    if body:
+        log("info", "Adding body tags too (what's shown, and sizes from the performers)")
     if looks:
         log("info", f"Checking the AI's picks against look-alikes among {len(looks.rows)} item(s) you've tagged")
         if looks.rejected:
@@ -2096,6 +2099,17 @@ def run_ai(stash, plugin_dir, only_untagged=False, preview=False, targets=None):
             if "urlopen" in repr(e) or "Connection" in repr(e):
                 raise RuntimeError(f"lost contact with Ollama: {e}")
             continue
+        if body:
+            try:
+                extra = body_item(stash, cfg, body, kind, item, apply=not preview, plugin_dir=plugin_dir,
+                                  rejected=looks.rejected if looks else ())
+                extra = [n for _, n, _ in extra if n not in (picked or [])]
+                if extra:
+                    picked = (picked or []) + extra
+            except RuntimeError:
+                raise
+            except Exception as e:
+                log("debug", f"{label}: body tags skipped ({e})")
         if picked is None:
             log("debug", f"{label}: nothing to look at, skipped")
         elif picked:
@@ -2148,7 +2162,14 @@ def run_ai_suggest(stash, plugin_dir, kind, item_id):
     picked = ai_tag_item(stash, cfg, vocab, names, kind, item, apply=False, looks=looks, details=True) or []
     if looks:
         looks.cache.save()
-    return [{"id": t, "name": n, "source": src} for t, n, src in picked]
+    out = [{"id": t, "name": n, "source": src} for t, n, src in picked]
+    if body_ready(cfg):
+        with contextlib.suppress(Exception):
+            body = BodyIndex(stash, plugin_dir, body_excluded(stash, cfg))
+            for t, n, why in body_item(stash, cfg, body, kind, item, apply=False):
+                if t not in [o["id"] for o in out]:
+                    out.append({"id": t, "name": n, "source": "body", "why": why})
+    return out
 
 
 # --- tags from look-alikes ---------------------------------------------------
@@ -2534,6 +2555,312 @@ def run_look_suggest(stash, plugin_dir, kind, item_id):
     names = looks.names
     best = sorted(((s, t) for t, s in scores.items() if s >= LOOK_SUGGEST and t in names), reverse=True)
     return [{"id": t, "name": names[t], "score": round(s, 2), "sure": s >= LOOK_SURE} for s, t in best[:12]]
+
+
+# --- body tags: what's shown, and how big -----------------------------------
+# What's shown comes from a body-part detector in the face helper (NudeNet,
+# optional: setup.sh --body). How big comes from the performer: the size you
+# usually tag them with (e.g. most of their scenes have "Big Ass"), else for
+# breasts their cup size (B and under small, D and up big; C is called either,
+# so it's skipped), and natural / fake from their details. A size is only
+# added when that part is shown, and never when the item has a size already.
+# Tested on the user's library: breasts found in 93% of items tagged "Tits",
+# buttocks in 89% of "Ass"; sizes from the performer's own tags right 79%
+# (breasts), 87% (ass), 100% (cock) of the time; cup sizes 83%.
+
+BODY_SHOWN = {  # tag -> (detector part, likeness needed: in two pictures, or 0.1 more in one)
+    "Tits": ("FEMALE_BREAST_EXPOSED", 0.45),
+    "Ass": ("BUTTOCKS_EXPOSED", 0.6),
+    "Pussy": ("FEMALE_GENITALIA_EXPOSED", 0.5),
+    "Cock": ("MALE_GENITALIA_EXPOSED", 0.55),  # the detector's weakest part
+}
+BODY_BELLY = ("BELLY_EXPOSED", 0.5)
+# size groups: tag names (yours) -> what they mean; the first of each kind is
+# the one added
+BODY_SIZES = {
+    "Tits": {"Small Tits": "small", "Tiny Tits": "small", "Medium Tits": "medium", "Medium Boobs": "medium",
+             "Big Tits": "big", "Huge Tits": "big"},
+    "Ass": {"Small Ass": "small", "Medium Ass": "medium", "Big Ass": "big", "Bubble Butt": "big"},
+    "Cock": {"Average Dick": "medium", "Big Dick": "big"},
+}
+BODY_NATURAL = ("Natural Tits", ("Fake Tits", "Fake Boobs"))
+BODY_ABS = ("Defined Abs", "Muscular", "Muscular Man")
+BODY_FRAME_POINTS = (0.2, 0.4, 0.6, 0.8)
+TRAIT_MIN, TRAIT_SHARE = 2, 0.7  # a performer's size: on 2+ of their items, and 70% of them
+FEMALE = ("FEMALE", "TRANSGENDER_FEMALE")
+MALE = ("MALE", "TRANSGENDER_MALE")
+BODY_ITEM_FIELDS = {
+    "scene": "id title organized tags { id name } performers { id } files { path duration }",
+    "image": "id title organized tags { id name } performers { id } paths { image thumbnail } "
+             "visual_files { __typename ... on ImageFile { path } ... on VideoFile { path } }",
+}
+
+
+def body_helper(cfg, pictures):
+    body = json.dumps({"images": [base64.b64encode(p).decode() for p in pictures]}).encode()
+    for attempt in range(4):
+        req = urllib.request.Request(cfg["ai"]["face_url"] + "/body", data=body, headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                return json.loads(resp.read())["results"]
+        except urllib.error.HTTPError as e:
+            detail = ""
+            with contextlib.suppress(Exception):
+                detail = json.loads(e.read()).get("error", "")
+            if "isn't installed" in detail or e.code == 404:
+                raise RuntimeError("the face helper has no body-part model: run face-helper/setup.sh --body")
+            raise ValueError(f"the helper couldn't read it ({e.code} {detail})")
+        except urllib.error.URLError as e:
+            reason = getattr(e, "reason", e)
+            if attempt < 3:
+                time.sleep(2 + attempt * 2)
+                continue
+            raise RuntimeError(f"can't reach the face helper at {cfg['ai']['face_url']} ({reason}).")
+
+
+def body_pictures(stash, kind, item):
+    if kind == "image":
+        if not all(f["__typename"] == "ImageFile" for f in item.get("visual_files") or []):
+            return []
+        data, ctype = stash.fetch(item["paths"]["image"])
+        if len(data) > FACE_MAX_IMAGE_BYTES:
+            data, ctype = stash.fetch(item["paths"]["thumbnail"])
+        return [data] if ctype.startswith("image/") else []
+    f = (item.get("files") or [None])[0]
+    if not f or not (f.get("duration") or 0) > 1:
+        return []
+    out = []
+    for at in BODY_FRAME_POINTS:
+        with contextlib.suppress(Exception):
+            out.append(grab_frame(stash, f["path"], f["duration"] * at, width=960)[0])
+    return out
+
+
+def parts_shown(cfg, pictures):
+    """{part: best score} for parts seen: in one picture clearly (0.1 over
+    what's needed), or in two."""
+    seen = defaultdict(list)
+    for found in body_helper(cfg, pictures) if pictures else []:
+        best = {}
+        for d in found:
+            best[d["part"]] = max(best.get(d["part"], 0), d["score"])
+        for part, sc in best.items():
+            seen[part].append(sc)
+    need = {p: th for p, th in list(BODY_SHOWN.values()) + [BODY_BELLY]}
+    out = {}
+    for part, scores in seen.items():
+        th = need.get(part)
+        if th is None:
+            continue
+        scores.sort(reverse=True)
+        if scores[0] >= th + 0.1 or (len(scores) >= 2 and scores[1] >= th):
+            out[part] = scores[0]
+    return out
+
+
+def _cup(measurements):
+    m = re.search(r"\d{2}\s*([A-K]+)", measurements or "")
+    return m and m.group(1).upper()
+
+
+class BodyIndex:
+    """Loaded once per run: tag names, each performer's details and the
+    sizes you usually tag them with."""
+
+    def __init__(self, stash, plugin_dir, excluded=frozenset()):
+        tags = stash.call("{ findTags(filter: {per_page: -1}) { tags { id name } } }")["findTags"]["tags"]
+        self.tag_id = {t["name"].lower(): t["id"] for t in tags if t["id"] not in excluded}
+        self.tag_name = {t["id"]: t["name"] for t in tags}
+        try:
+            with open(os.path.join(plugin_dir, "machine_tags.json")) as f:
+                machine = json.load(f)
+        except (OSError, ValueError):
+            machine = {}
+        self.perfs = {p["id"]: p for p in stash.call(
+            "{ findPerformers(filter: {per_page: -1}) { performers { id name gender measurements fake_tits } } }"
+        )["findPerformers"]["performers"]}
+        size_of = {}  # tag id -> (group, size)
+        for group, names in BODY_SIZES.items():
+            for n, size in names.items():
+                if n.lower() in self.tag_id:
+                    size_of[self.tag_id[n.lower()]] = (group, size)
+        abs_ids = {self.tag_id[n.lower()] for n in BODY_ABS if n.lower() in self.tag_id}
+        counts = defaultdict(Counter)  # performer -> Counter((group, size)) / ("abs", tag)
+        totals = defaultdict(Counter)  # performer -> Counter(group)
+        for kind, (query, field) in (("scene", ("findScenes", "scenes")), ("image", ("findImages", "images"))):
+            items = stash.call(f'{{ {query}(filter: {{per_page: -1}}, {kind}_filter: {{performer_count: {{value: 0, modifier: GREATER_THAN}}, '
+                               f'tag_count: {{value: 0, modifier: GREATER_THAN}}}}) {{ {field} {{ id tags {{ id }} performers {{ id gender }} }} }} }}'
+                               )[query][field]
+            for it in items:
+                own = set(machine.get(f"{kind}:{it['id']}", []))  # don't learn from the add-on's own tags
+                tids = [t["id"] for t in it["tags"] if t["id"] not in own]
+                for p in it["performers"]:
+                    same = [q for q in it["performers"] if (q["gender"] in FEMALE) == (p["gender"] in FEMALE)
+                            and (q["gender"] in MALE) == (p["gender"] in MALE)]
+                    if len(same) != 1:
+                        continue  # can't tell whose it is
+                    groups = set()
+                    for t in tids:
+                        if t in size_of:
+                            counts[p["id"]][size_of[t]] += 1
+                            groups.add(size_of[t][0])
+                        if t in abs_ids:
+                            counts[p["id"]][("abs", t)] += 1
+                    for g in groups:
+                        totals[p["id"]][g] += 1
+        self.traits = {}  # performer -> {group: size}
+        self.abs = {}  # performer -> tag id
+        for pid, c in counts.items():
+            for group, total in totals[pid].items():
+                best = max(((n, s) for (g, s), n in c.items() if g == group), default=None)
+                if best and best[0] >= TRAIT_MIN and best[0] >= TRAIT_SHARE * total:
+                    self.traits.setdefault(pid, {})[group] = best[1]
+            ab = [(n, t) for (g, t), n in c.items() if g == "abs" and n >= TRAIT_MIN]
+            if ab:
+                self.abs[pid] = max(ab)[1]
+
+    def tag(self, name):
+        return self.tag_id.get(name.lower())
+
+    def size_tag(self, group, size):
+        for n, s in BODY_SIZES[group].items():
+            if s == size and self.tag(n):
+                return self.tag(n)
+        return None
+
+    def picks(self, item, shown):
+        """[(tag id, why)] for what's shown and how big."""
+        have = {t["id"] for t in item.get("tags") or []}
+        perfs = [self.perfs[p["id"]] for p in item.get("performers") or [] if p["id"] in self.perfs]
+        women = [p for p in perfs if p["gender"] in FEMALE]
+        men = [p for p in perfs if p["gender"] in MALE]
+        out = []
+
+        def add(tid, why):
+            if tid and tid not in have and tid not in [t for t, _ in out]:
+                out.append((tid, why))
+
+        for name, (part, _) in BODY_SHOWN.items():
+            if part not in shown:
+                continue
+            # the detector can take a man's chest for breasts: trust who's in it
+            if perfs and name in ("Tits", "Pussy") and not women:
+                continue
+            if perfs and name == "Cock" and not men and all(p["gender"] == "FEMALE" for p in perfs):
+                continue
+            add(self.tag(name), f"{part.lower().replace('_', ' ')} {round(shown[part] * 100)}%")
+            if name not in BODY_SIZES or any(self.tag(n) in have for n in BODY_SIZES[name]):
+                continue
+            who = men if name == "Cock" else women if (women or name != "Ass") else men
+            if len(who) != 1:
+                continue
+            p = who[0]
+            size = (self.traits.get(p["id"]) or {}).get(name)
+            why = f"{p['name']} is usually tagged so"
+            if not size and name == "Tits":
+                cup = _cup(p.get("measurements"))
+                if cup:
+                    size = "small" if cup in ("AA", "A", "B") else "big" if cup >= "D" else None
+                    why = f"{p['name']}: {cup} cup"
+            if size:
+                add(self.size_tag(name, size), why)
+            if name == "Tits" and (p.get("fake_tits") or "").strip():
+                fake = p["fake_tits"].strip().lower().startswith("f")
+                nat, fakes = BODY_NATURAL
+                if not any(self.tag(n) in have for n in (nat,) + fakes):
+                    add(next((self.tag(n) for n in fakes if self.tag(n)), None) if fake else self.tag(nat),
+                        f"{p['name']}'s details")
+        if BODY_BELLY[0] in shown and len(perfs) == 1 and perfs[0]["id"] in self.abs:
+            add(self.abs[perfs[0]["id"]], f"belly shown; {perfs[0]['name']} is usually tagged so")
+        return out
+
+
+def body_excluded(stash, cfg):
+    """Only your "Tags to ignore" (gallery-name tags like "Tits" are fine
+    to add here: they're what's shown)."""
+    tags = stash.call("{ findTags(filter: {per_page: -1}) { tags { id name } } }")["findTags"]["tags"]
+    return {t["id"] for t in tags if t["name"].lower() in cfg["exclude"]}
+
+
+def body_ready(cfg):
+    try:
+        with urllib.request.urlopen(cfg["ai"]["face_url"] + "/health", timeout=5) as resp:
+            return bool(json.loads(resp.read()).get("body"))
+    except Exception:
+        return False
+
+
+def body_item(stash, cfg, body, kind, item, apply, plugin_dir=None, rejected=()):
+    """Body tags for one item: [(tag id, name, why)] (added when apply)."""
+    shown = parts_shown(cfg, body_pictures(stash, kind, item))
+    picks = [(t, why) for t, why in body.picks(item, shown) if t not in rejected]
+    if apply and picks:
+        stash.call(f"mutation($i: {'BulkSceneUpdateInput' if kind == 'scene' else 'BulkImageUpdateInput'}!) "
+                   f"{{ {'bulkSceneUpdate' if kind == 'scene' else 'bulkImageUpdate'}(input: $i) {{ id }} }}",
+                   {"i": {"ids": [item["id"]], "tag_ids": {"ids": [t for t, _ in picks], "mode": "ADD"}}})
+        if plugin_dir:
+            record_machine_tags(plugin_dir, kind, item["id"], [t for t, _ in picks])
+    return [(t, body.tag_name.get(t, t), why) for t, why in picks]
+
+
+def run_body(stash, plugin_dir, preview=False, limit=None):
+    """Task: body tags for every scene and image not done yet (or a
+    preview on `limit` random items)."""
+    cfg = settings(stash, plugin_dir)
+    if not body_ready(cfg):
+        raise RuntimeError("the face helper has no body-part model: run face-helper/setup.sh --body")
+    body = BodyIndex(stash, plugin_dir, body_excluded(stash, cfg))
+    missing = [n for n in BODY_SHOWN if not body.tag(n)]
+    if missing:
+        log("info", f"No tag called {', '.join(missing)}: those parts aren't tagged (make the tag to have them added)")
+    try:
+        with open(os.path.join(plugin_dir, "machine_tags.json")) as f:
+            rejected = rejected_tags(all_item_tags(stash), json.load(f))
+    except (OSError, ValueError):
+        rejected = {}
+    done_path = os.path.join(plugin_dir, "body_done.json")
+    with locked_json(done_path) as done:
+        done = {k: set(v) for k, v in done.items()}
+    targets = []
+    for kind in ("scene", "image"):
+        query, field = ("findScenes", "scenes") if kind == "scene" else ("findImages", "images")
+        f = {} if cfg["ai"]["include_organized"] else {"organized": False}
+        page = 1
+        while True:
+            items = stash.call(f"query($p: {kind.capitalize()}FilterType, $f: FindFilterType) {{ {query}({kind}_filter: $p, filter: $f) "
+                               f"{{ {field} {{ {BODY_ITEM_FIELDS[kind]} }} }} }}",
+                               {"p": f, "f": {"page": page, "per_page": 500, "sort": "created_at", "direction": "DESC"}})[query][field]
+            targets += [(kind, i) for i in items if preview or i["id"] not in done.get(kind + "s", set())]
+            if len(items) < 500:
+                break
+            page += 1
+    if limit:
+        import random
+        targets = random.sample(targets, min(limit, len(targets)))
+    log("info", f"{'Preview: ' if preview else ''}body tags for {len(targets)} item(s); sizes known for "
+        f"{len(body.traits)} performer(s) from your tags" + (" (nothing is saved)" if preview else
+                                                               ". Scenes take a few seconds, images under one; cancel and run again to carry on."))
+    tagged = added = 0
+    for n, (kind, item) in enumerate(targets):
+        progress(n / max(len(targets), 1))
+        label = f'{kind} {item["id"]}' + (f' "{item["title"]}"' if item.get("title") else "")
+        try:
+            picks = body_item(stash, cfg, body, kind, item, apply=not preview, plugin_dir=plugin_dir, rejected=rejected)
+        except RuntimeError:
+            raise
+        except Exception as e:
+            log("debug", f"{label}: {e}")
+            continue
+        if picks:
+            tagged += 1
+            added += len(picks)
+            log("info", f"{label}: {'would add' if preview else '+'} " + ", ".join(f"{name} ({why})" for _, name, why in picks))
+        if not preview:
+            with locked_json(done_path) as d:
+                d.setdefault(kind + "s", []).append(item["id"])
+    progress(1)
+    log("info", f"{'Preview done' if preview else 'Done'}: {tagged} of {len(targets)} item(s) "
+        f"{'would get' if preview else 'got'} {added} body tag(s).")
 
 
 # --- title ideas -------------------------------------------------------------

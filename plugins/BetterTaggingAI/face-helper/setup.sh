@@ -2,6 +2,8 @@
 # Sets up the face helper for Better Tagging AI Add-on on a Mac (or Linux):
 # a Python environment with OpenCV, the face and picture models, and (on a Mac) a
 # login service so it starts by itself. Run it once:  sh setup.sh
+# Add --body for body tags: it also downloads NudeNet's body-part detector
+# (AGPL-3.0, from its official Python package; about 12 MB).
 set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
 DEST="${FACE_HELPER_DIR:-$HOME/Library/Application Support/face-helper}"
@@ -15,6 +17,13 @@ cp "$HERE/face_helper.py" "$DEST/"
 ZOO=https://github.com/opencv/opencv_zoo/raw/main/models
 curl -sSL -o "$DEST/models/face_detection_yunet_2023mar.onnx" "$ZOO/face_detection_yunet/face_detection_yunet_2023mar.onnx"
 curl -sSL -o "$DEST/models/face_recognition_sface_2021dec.onnx" "$ZOO/face_recognition_sface/face_recognition_sface_2021dec.onnx"
+if [ "$1" = "--body" ]; then
+  TMP="$(mktemp -d)"
+  "$DEST/venv/bin/pip" download -q --no-deps -d "$TMP" "nudenet==3.4.2"
+  (cd "$TMP" && unzip -q -o ./*.whl 'nudenet/320n.onnx')
+  cp "$TMP/nudenet/320n.onnx" "$DEST/models/nudenet_320n.onnx"
+  rm -rf "$TMP"
+fi
 # CLIP ViT-B/32 picture model (about 350 MB), for tags from look-alikes
 curl -sSL -o "$DEST/models/clip_vit_b32_vision.onnx" "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/main/onnx/vision_model.onnx"
 

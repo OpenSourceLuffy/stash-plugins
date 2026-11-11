@@ -64,7 +64,7 @@
       setAi({ state: "loading" });
       try {
         const out = await ask({ mode: "ai_suggest", kind, id: m[2] });
-        setAi({ state: "done", tags: (out || []).map((t) => ({ id: String(t.id), name: t.name, aliases: [], source: t.source || "ai" })) });
+        setAi({ state: "done", tags: (out || []).map((t) => ({ id: String(t.id), name: t.name, aliases: [], source: t.source || "ai", why: t.why })) });
       } catch (e) {
         setAi({ state: "error", message: e.message });
       }
@@ -91,6 +91,7 @@
       both: "Picked by the AI and backed up by look-alikes you've tagged",
       looks: "Most look-alikes you've tagged have it",
       ai: "Picked by the AI model (look-alikes not scanned yet)",
+      body: "Shown in it (body-part detector); sizes from the performer",
     };
     const busy = (st) => st.state === "loading";
     return h(
@@ -111,7 +112,7 @@
       (ai.state === "done" || look.state === "done") && !busy(ai) && !busy(look) && !all.length &&
         h("span", { className: "pts-ai-note" }, (ai.tags || []).length + (look.tags || []).length ? "All suggestions are already added" : "No suggestions"),
       aiTags.map((t) =>
-        h("button", { key: "a" + t.id, type: "button", className: "pts-chip" + (t.source !== "ai" ? " bta-sure" : ""), title: SOURCE[t.source] || SOURCE.ai, onClick: () => add([t]) },
+        h("button", { key: "a" + t.id, type: "button", className: "pts-chip" + (t.source !== "ai" ? " bta-sure" : ""), title: (SOURCE[t.source] || SOURCE.ai) + (t.why ? " - " + t.why : ""), onClick: () => add([t]) },
           "+ " + t.name + (t.source !== "ai" ? " ✓" : ""))
       ),
       lookTags.map((t) =>

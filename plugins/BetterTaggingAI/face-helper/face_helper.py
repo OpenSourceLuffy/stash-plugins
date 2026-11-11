@@ -17,7 +17,10 @@ zoo); CLIP ViT-B/32 (OpenAI, MIT licence) the picture fingerprints.
       -> {"results": [[512 numbers] or null, ...]}; with boxes, each picture's
          result is a list: one fingerprint per box cut out of it (e.g. the
          frames in a scene's preview sprite)
-    GET /health  -> {"ok": true, "embed": true/false}
+    POST /body   {"images": [...]}
+      -> {"results": [[{"part": "FEMALE_BREAST_EXPOSED", "score": 0.8, "box": [x, y, w, h]}, ...], ...]}
+         (NudeNet 320n, AGPL-3.0, only if downloaded: setup.sh --body)
+    GET /health  -> {"ok": true, "embed": true/false, "body": true/false}
 
 Runs on 127.0.0.1 only (Stash's Docker container reaches it as
 host.docker.internal). Port: FACE_HELPER_PORT, default 11535.
@@ -36,6 +39,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DETECTOR = os.path.join(HERE, "models", "face_detection_yunet_2023mar.onnx")
 RECOGNIZER = os.path.join(HERE, "models", "face_recognition_sface_2021dec.onnx")
 CLIP_MODEL = os.path.join(HERE, "models", "clip_vit_b32_vision.onnx")
+BODY_MODEL = os.path.join(HERE, "models", "nudenet_320n.onnx")
+BODY_PARTS = [
+    "FEMALE_GENITALIA_COVERED", "FACE_FEMALE", "BUTTOCKS_EXPOSED", "FEMALE_BREAST_EXPOSED",
+    "FEMALE_GENITALIA_EXPOSED", "MALE_BREAST_EXPOSED", "ANUS_EXPOSED", "FEET_EXPOSED", "BELLY_COVERED",
+    "FEET_COVERED", "ARMPITS_COVERED", "ARMPITS_EXPOSED", "FACE_MALE", "BELLY_EXPOSED",
+    "MALE_GENITALIA_EXPOSED", "ANUS_COVERED", "FEMALE_BREAST_COVERED", "BUTTOCKS_COVERED",
+]
 CLIP_MEAN = np.array([0.48145466, 0.4578275, 0.40821073], np.float32)
 CLIP_STD = np.array([0.26862954, 0.26130258, 0.27577711], np.float32)
 MAX_SIDE = 1280      # bigger pictures are scaled down first (faster, same result)
@@ -142,6 +152,52 @@ def embed(pictures, boxes=None):
     return out
 
 
+_body = None
+_body_lock = threading.Lock()
+
+
+def body_parts(data):
+    """Body parts in a picture (NudeNet's detector, as its own package runs
+    it): pad to a square, 320x320, then keep boxes scoring 0.2+ after NMS."""
+    global _body
+    if _body is None:
+        try:
+            import onnxruntime as ort
+            _body = ort.InferenceSession(BODY_MODEL, providers=["CPUExecutionProvider"])
+        except Exception:
+            _body = False
+    if not _body:
+        raise RuntimeError("the body-part model isn't installed (run setup.sh --body)")
+    img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        return []
+    h, w = img.shape[:2]
+    side = max(h, w)
+    padded = cv2.copyMakeBorder(img, 0, side - h, 0, side - w, cv2.BORDER_CONSTANT)
+    blob = cv2.dnn.blobFromImage(padded, 1 / 255.0, (320, 320), (0, 0, 0), swapRB=True, crop=False)
+    with _body_lock:
+        out = _body.run(None, {_body.get_inputs()[0].name: blob})[0]
+    rows = np.transpose(np.squeeze(out))
+    cls_scores = rows[:, 4:]
+    best = cls_scores.argmax(1)
+    score = cls_scores.max(1)
+    keep = score >= 0.2
+    boxes, scores, ids = [], [], []
+    for (cx, cy, bw, bh), sc, ci in zip(rows[keep, :4], score[keep], best[keep]):
+        x, y = (cx - bw / 2) * side / 320, (cy - bh / 2) * side / 320
+        bw, bh = bw * side / 320, bh * side / 320
+        x, y = max(0, min(x, w)), max(0, min(y, h))
+        boxes.append([float(x), float(y), float(min(bw, w - x)), float(min(bh, h - y))])
+        scores.append(float(sc))
+        ids.append(int(ci))
+    found = []
+    for i in (cv2.dnn.NMSBoxes(boxes, scores, 0.25, 0.45) if boxes else []):
+        i = int(i)
+        found.append({"part": BODY_PARTS[ids[i]], "score": round(scores[i], 3),
+                      "box": [round(v) for v in boxes[i]]})
+    return found
+
+
 class Handler(BaseHTTPRequestHandler):
     def _send(self, code, obj):
         body = json.dumps(obj).encode()
@@ -153,12 +209,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/health":
-            self._send(200, {"ok": True, "embed": os.path.exists(CLIP_MODEL)})
+            self._send(200, {"ok": True, "embed": os.path.exists(CLIP_MODEL), "body": os.path.exists(BODY_MODEL)})
         else:
             self._send(404, {"error": "not found"})
 
     def do_POST(self):
-        if self.path not in ("/faces", "/embed"):
+        if self.path not in ("/faces", "/embed", "/body"):
             return self._send(404, {"error": "not found"})
         length = int(self.headers.get("Content-Length") or 0)
         if length <= 0 or length > MAX_BODY:
@@ -174,7 +230,12 @@ class Handler(BaseHTTPRequestHandler):
         try:
             req = json.loads(self.rfile.read(length))
             pictures = [base64.b64decode(b) for b in req.get("images") or []]
-            results = embed(pictures, req.get("boxes")) if self.path == "/embed" else [faces_in(p) for p in pictures]
+            if self.path == "/embed":
+                results = embed(pictures, req.get("boxes"))
+            elif self.path == "/body":
+                results = [body_parts(p) for p in pictures]
+            else:
+                results = [faces_in(p) for p in pictures]
         except Exception as e:  # bad input: say so, keep running
             return self._send(400, {"error": str(e)})
         self._send(200, {"results": results})

@@ -1,6 +1,6 @@
 name: Better Tagging AI Add-on
 description: An add-on for Better Tagging Tools that tags scenes and images, writes titles, finds a scene's studio and performers from the accounts and studio watermarks it shows, recognises performers' faces, and fills in performers' hair and eye colour, tattoos and piercings from their pictures - all with a local AI model (Ollama), on your own computer. Adds "Ask AI" buttons for tags and titles while editing, and can do all of it for new items after a scan. Install it next to Better Tagging Tools - it then uses that plugin's "Tags to ignore", special spellings and gallery-name tags, and its rows sit under Better Tagging Tools' suggestions. (It also works on its own.)
-version: "1.2.2"
+version: "1.3"
 url: https://github.com/OpenSourceLuffy/stash-plugins/tree/main/plugins/BetterTaggingAI
 exec:
   - python
@@ -45,6 +45,14 @@ tasks:
     description: Gives scenes and images with no tags the tags their look-alikes are sure of (no AI model needed, well under a second each). Only adds; skips organized items unless "AI - include organized items" is on. Tags you later remove from most items they were added to aren't added any more.
     defaultArgs:
       mode: looks_untagged
+  - name: "Body tags: preview on 10 items (no changes)"
+    description: Picks 10 random scenes/images and writes to the log the body tags each would get - what's shown (Tits, Ass, Pussy, Cock) and, for that part, the size the performer is usually tagged with (or their cup size), natural/fake from their details, and Defined Abs/Muscular when a belly is shown and that's usual for them - without changing anything. Needs the face helper's body-part model (setup.sh --body).
+    defaultArgs:
+      mode: body_preview
+  - name: "Body tags: scenes and images"
+    description: Adds body tags to every scene and image not done yet (only adds; a size is only added when that part is shown and the item has no size tag yet). Scenes take a few seconds (4 frames), images under one; cancel and run again to carry on. AI tagging (and new items after a scan) adds them too.
+    defaultArgs:
+      mode: body_all
   - name: "AI titles: preview on 10 items (no changes)"
     description: Picks 10 random scenes/images without a title and writes the title each would get to the log - from the file name when that makes a good one, else from the local AI model (Ollama) - without changing anything. Try this first.
     defaultArgs:

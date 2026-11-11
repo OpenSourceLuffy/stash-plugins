@@ -68,6 +68,10 @@ def main():
             c.run_looks(stash, plugin_dir)
         elif mode == "look_suggest":
             print(json.dumps({"output": c.run_look_suggest(stash, plugin_dir, args["kind"], args["id"])}))
+        elif mode == "body_preview":
+            c.run_body(stash, plugin_dir, preview=True, limit=10)
+        elif mode == "body_all":
+            c.run_body(stash, plugin_dir)
         elif mode == "faces_learn":
             c.update_face_index(stash, c.settings(stash, plugin_dir), plugin_dir)
         elif mode == "faces_preview":
