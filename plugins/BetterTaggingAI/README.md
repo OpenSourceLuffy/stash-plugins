@@ -152,11 +152,20 @@ close. Each section starts with a preview that only writes to the log.
 
 ## New items after a scan
 
-- **AI: tag new scenes and images automatically**: AI tags only.
-- **AI: tag, title and find the studio of new scenes and images**: all three, in that order (tags,
-  then a scene's studio and performers, then a title), so the title can use what was just found.
-- **Faces: add confident matches automatically** also checks new scenes and images (after the
-  studio step, before the title).
+- **AI: tag new scenes and images automatically**: AI tags (checked against look-alikes) and body tags.
+- **AI: tag, title and find the studio of new scenes and images**: tags, then a scene's studio and
+  performers, then a title (so the title can use what was just found).
+- **Faces: add confident matches automatically** also checks new scenes and images.
+- **AI: wait until night for new items**: the AI model is slow (seconds to a minute per item), and
+  Stash runs one task at a time, so a big scan's AI work can hold everything else up for hours.
+  With this on, new items get only the quick steps right after the scan (about a second each, no AI
+  model): tags from their file names, studios from links in them, look-alike tags, body tags and
+  faces. The AI model's steps (AI tags, studios from watermarks, AI titles) are saved and done once
+  at **AI: night time** (default 03:00, in **AI: time zone**). A small background process in Stash
+  waits for that time; it's started again by the next scan (or the task **AI: run tonight's new
+  items now**, which also does the saved work straight away) if Stash restarts.
+- Better Tagging Tools' own after-scan steps (dates and titles from file names, gallery-name tags,
+  Auto Tag for new performers/studios/tags) are quick and always run straight away.
 
 ## Settings
 
@@ -172,6 +181,9 @@ Under **Settings → Plugins → Better Tagging AI Add-on**:
 | AI: most tags per item | Default 6. |
 | AI: don't auto tag from file names first | Skip the file-name matching before the AI looks at an item. |
 | AI: include organized items | Also AI-tag items marked as organized. |
+| AI: wait until night for new items | New items get the quick steps after a scan; the AI model's steps wait for the night time. |
+| AI: night time | When the saved AI work runs (HH:MM). Default 03:00. |
+| AI: time zone | Time zone of the night time, e.g. `America/New_York`. Default UTC. |
 | Faces: add confident matches automatically | Let the Faces tasks (and new scans) add confident matches. |
 | Faces: likeness needed to add automatically (%) | Default 50 (images 5 more). |
 | Faces: likeness needed to suggest (%) | Default 36. |

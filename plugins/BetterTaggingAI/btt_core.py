@@ -61,6 +61,7 @@ def progress(p):
 
 class Stash:
     def __init__(self, conn):
+        self.conn = conn
         scheme = conn.get("Scheme", "http")
         host = conn.get("Host", "localhost")
         if host in ("0.0.0.0", ""):
@@ -581,24 +582,34 @@ def run_queued(stash, plugin_dir):
     if todo["ai_scenes"] or todo["ai_images"]:
         ai = cfg["ai"]
         new = {"scene": todo["ai_scenes"], "image": todo["ai_images"]}
-        # tags, then a scene's studio and performers from accounts, then who
-        # it looks like, then a title (which can use all of that)
-        if ai["auto"] or ai["new_all"]:
-            try:
-                run_ai_queued(stash, plugin_dir, todo["ai_scenes"], todo["ai_images"])
-            except Exception as e:
-                log("warning", f"AI tagging of new items skipped: {e}")
-        if ai["new_all"] and todo["ai_scenes"]:
-            try:
-                run_accounts_items(stash, plugin_dir, todo["ai_scenes"])
-            except Exception as e:
-                log("warning", f"Studios from accounts for new scenes skipped: {e}")
+        if ai["nightly"]:
+            # quick steps now (no AI model), the AI model's at night
+            if ai["auto"] or ai["new_all"]:
+                try:
+                    run_quick_new(stash, plugin_dir, cfg, new)
+                except Exception as e:
+                    log("warning", f"Quick steps for new items skipped: {e}")
+                save_for_tonight(stash, plugin_dir, cfg, new)
+        else:
+            # tags, then a scene's studio and performers from accounts, then
+            # a title (which can use all of that)
+            if ai["auto"] or ai["new_all"]:
+                try:
+                    run_ai_queued(stash, plugin_dir, todo["ai_scenes"], todo["ai_images"])
+                except Exception as e:
+                    log("warning", f"AI tagging of new items skipped: {e}")
+            if ai["new_all"] and todo["ai_scenes"]:
+                try:
+                    run_accounts_items(stash, plugin_dir, todo["ai_scenes"])
+                except Exception as e:
+                    log("warning", f"Studios from accounts for new scenes skipped: {e}")
+        # who it looks like: quick (face helper), so always right away
         if ai["face_auto"]:
             try:
                 run_faces(stash, plugin_dir, ["scene", "image"], ids=new)
             except Exception as e:
                 log("warning", f"Faces for new items skipped: {e}")
-        if ai["new_all"]:
+        if ai["new_all"] and not ai["nightly"]:
             try:
                 run_ai_titles(stash, plugin_dir, ["scene", "image"], ids=new)
             except Exception as e:
@@ -1878,7 +1889,18 @@ def ai_settings(s):
         # is usually the same person
         "face_min": num_pct(s.get("faceSuggestMin"), 36),
         "face_auto_min": num_pct(s.get("faceAutoMin"), 50),
+        # new items: quick steps right away, AI model steps once at night
+        "nightly": bool(s.get("aiNightly")),
+        "night_time": _clock(s.get("aiNightTime"), "03:00"),
+        "time_zone": (s.get("aiTimeZone") or os.environ.get("TZ") or "UTC").strip(),
     }
+
+
+def _clock(value, default):
+    m = re.fullmatch(r"\s*(\d{1,2})[:.](\d{2})\s*", str(value or ""))
+    if not m or int(m.group(1)) > 23 or int(m.group(2)) > 59:
+        return default
+    return f"{int(m.group(1)):02d}:{m.group(2)}"
 
 
 def ai_vocabulary(stash, cfg, plugin_dir):
@@ -2861,6 +2883,205 @@ def run_body(stash, plugin_dir, preview=False, limit=None):
     progress(1)
     log("info", f"{'Preview done' if preview else 'Done'}: {tagged} of {len(targets)} item(s) "
         f"{'would get' if preview else 'got'} {added} body tag(s).")
+
+
+# --- new items: quick steps now, AI model steps at night ---------------------
+# With "AI: wait until night for new items" on, a scan's new items get the
+# quick steps straight away (no AI model, about a second each: tags from the
+# file names, studios from links in them, look-alike tags, body tags) and
+# are saved in ai_night.json for the AI model steps (AI tags, watermarks, AI
+# titles), which run once at night. A small background process in Stash's
+# container (night_runner.*) wakes at that time and starts the task "AI: run
+# tonight's new items now"; it's started again by any scan if Stash restarted.
+
+NIGHT_TASK = "AI: run tonight's new items now"
+
+
+def locked_night(plugin_dir):
+    return locked_json(os.path.join(plugin_dir, "ai_night.json"))
+
+
+def run_quick_new(stash, plugin_dir, cfg, new):
+    """The quick steps for new items (no AI model)."""
+    ai = cfg["ai"]
+    targets = []
+    for kind, ids in (("scene", new.get("scene") or []), ("image", new.get("image") or [])):
+        if ids:
+            query, field = ("findScenes", "scenes") if kind == "scene" else ("findImages", "images")
+            items = stash.call(f"query($ids: [ID!]) {{ {query}(ids: $ids, filter: {{per_page: -1}}) {{ {field} {{ {AI_ITEM_FIELDS[kind]} }} }} }}",
+                               {"ids": ids})[query][field]
+            targets += [(kind, i) for i in items]
+    if not targets:
+        return
+    index = None
+    if ai["autotag_first"]:
+        with contextlib.suppress(Exception):
+            index = autotag_index(stash, plugin_dir)
+    _, excluded = tag_lookup(stash, cfg, plugin_dir)
+    looks = load_look_index(stash, cfg, plugin_dir, excluded, quiet=True)
+    body = BodyIndex(stash, plugin_dir, body_excluded(stash, cfg)) if body_ready(cfg) else None
+    ctx = accounts_context(stash, plugin_dir) if ai["new_all"] else None
+    done = 0
+    for kind, item in targets:
+        label = f'{kind} {item["id"]}' + (f' "{item["title"]}"' if item.get("title") else "")
+        added = []
+        try:
+            have = set()
+            if index is not None:
+                pre, have = autotag_item(stash, index, kind, item, apply=True)
+                added += pre or []
+            if looks:
+                scores = looks.for_item(stash, kind, item) or {}
+                own = {t["id"] for t in item.get("tags") or []} | set(have)
+                picks = look_picks(scores, own, looks.names, ai["max_tags"])
+                picks = [t for t in picks if t not in looks.rejected]
+                if picks:
+                    stash.call(f"mutation($i: {'BulkSceneUpdateInput' if kind == 'scene' else 'BulkImageUpdateInput'}!) "
+                               f"{{ {'bulkSceneUpdate' if kind == 'scene' else 'bulkImageUpdate'}(input: $i) {{ id }} }}",
+                               {"i": {"ids": [item["id"]], "tag_ids": {"ids": picks, "mode": "ADD"}}})
+                    record_machine_tags(plugin_dir, kind, item["id"], picks)
+                    added += [looks.names[t] for t in picks]
+            if body:
+                added += [n for _, n, _ in body_item(stash, cfg, body, kind, item, apply=True, plugin_dir=plugin_dir,
+                                                      rejected=looks.rejected if looks else ())]
+            if ctx is not None and kind == "scene":
+                line, _ = process_scene_accounts(stash, cfg, ctx, item, apply=True, use_ai=False)
+                if line:
+                    log("info", line)
+        except RuntimeError as e:
+            log("warning", f"Quick steps for new items stopped: {e}")
+            break
+        except Exception as e:
+            log("debug", f"{label}: {e}")
+        if added:
+            done += 1
+            log("info", f"{label}: + {', '.join(dict.fromkeys(added))}")
+    if looks:
+        looks.cache.save()
+    log("info", f"Quick steps done for {len(targets)} new item(s) ({done} got tags)")
+
+
+def save_for_tonight(stash, plugin_dir, cfg, new):
+    with locked_night(plugin_dir) as night:
+        for kind in ("scene", "image"):
+            have = night.setdefault(kind + "s", [])
+            have += [i for i in new.get(kind) or [] if i not in have]
+        waiting = len(night.get("scenes", [])) + len(night.get("images", []))
+    ensure_night_runner(stash, plugin_dir, cfg)
+    log("info", f"Saved for tonight's AI run at {cfg['ai']['night_time']} ({cfg['ai']['time_zone']}): "
+        f"{len(new.get('scene') or []) + len(new.get('image') or [])} new item(s), {waiting} waiting in all")
+
+
+def run_night(stash, plugin_dir):
+    """Task: the AI model steps for the new items saved for tonight."""
+    cfg = settings(stash, plugin_dir)
+    ai = cfg["ai"]
+    if ai["nightly"]:
+        ensure_night_runner(stash, plugin_dir, cfg)  # e.g. after Stash restarted
+    with locked_night(plugin_dir) as night:
+        todo = {"scene": list(night.get("scenes", [])), "image": list(night.get("images", []))}
+    n = len(todo["scene"]) + len(todo["image"])
+    if not n:
+        log("info", "No new items waiting for the AI.")
+        return
+    log("info", f"Tonight's AI run: {len(todo['scene'])} scene(s), {len(todo['image'])} image(s)")
+    if ai["auto"] or ai["new_all"]:
+        run_ai_queued(stash, plugin_dir, todo["scene"], todo["image"])
+    if ai["new_all"] and todo["scene"]:
+        run_accounts_items(stash, plugin_dir, todo["scene"])
+    if ai["new_all"]:
+        run_ai_titles(stash, plugin_dir, ["scene", "image"], ids=todo)
+    with locked_night(plugin_dir) as night:  # items added while this ran stay for next time
+        for kind in ("scene", "image"):
+            night[kind + "s"] = [i for i in night.get(kind + "s", []) if i not in todo[kind]]
+    log("info", "Tonight's AI run is done.")
+
+
+def _night_files(plugin_dir):
+    return {k: os.path.join(plugin_dir, "night_runner." + k) for k in ("json", "pid", "log")}
+
+
+def ensure_night_runner(stash, plugin_dir, cfg):
+    """Start the background process that starts tonight's run (unless it's
+    running already); it gets the current time and connection."""
+    files = _night_files(plugin_dir)
+    tmp = files["json"] + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump({"conn": stash.conn, "time": cfg["ai"]["night_time"], "tz": cfg["ai"]["time_zone"],
+                   "plugin_id": AI_ID, "task": NIGHT_TASK}, f)
+    os.replace(tmp, files["json"])
+    with contextlib.suppress(OSError, ValueError):
+        with open(files["pid"]) as f:
+            pid = int(f.read().strip())
+        os.kill(pid, 0)  # still there
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            if b"--night-runner" in f.read():
+                return
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "better_tagging_ai.py")
+    if not os.path.exists(script):
+        script = os.path.join(plugin_dir, "better_tagging_ai.py")
+    with open(files["log"], "a") as logf:
+        proc = subprocess.Popen([sys.executable, script, "--night-runner", plugin_dir], stdin=subprocess.DEVNULL,
+                                stdout=logf, stderr=logf, close_fds=True, start_new_session=True)
+    with open(files["pid"], "w") as f:  # straight away, so a second call sees it
+        f.write(str(proc.pid))
+
+
+def night_runner_main(plugin_dir):
+    """The background process: wait for the night time, start the task if
+    anything is waiting, repeat. Exits if another one took over."""
+    from datetime import datetime, timedelta
+    files = _night_files(plugin_dir)
+    with open(files["pid"], "w") as f:
+        f.write(str(os.getpid()))
+
+    def say(msg):
+        print(time.strftime("%Y-%m-%d %H:%M:%S"), msg, flush=True)
+
+    say("night runner started")
+    while True:
+        try:
+            with open(files["json"]) as f:
+                conf = json.load(f)
+            try:
+                from zoneinfo import ZoneInfo
+                tz = ZoneInfo(conf.get("tz") or "UTC")
+            except Exception:
+                tz = None
+            now = datetime.now(tz)
+            hh, mm = (int(x) for x in (conf.get("time") or "03:00").split(":"))
+            at = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+            if at <= now:
+                at += timedelta(days=1)
+            wait = (at - now).total_seconds()
+            while wait > 0:  # short naps, so a changed time or a new runner is noticed
+                time.sleep(min(wait, 300))
+                with open(files["pid"]) as f:
+                    if f.read().strip() != str(os.getpid()):
+                        say("another night runner took over; stopping")
+                        return
+                with open(files["json"]) as f:
+                    if json.load(f) != conf:
+                        break  # settings or connection changed: work out the time again
+                wait = (at - datetime.now(tz)).total_seconds()
+            if wait > 0:
+                continue
+            try:
+                with open(os.path.join(plugin_dir, "ai_night.json")) as f:
+                    night = json.load(f)
+            except (OSError, ValueError):
+                night = {}
+            if night.get("scenes") or night.get("images"):
+                stash = Stash(conf["conn"])
+                job = stash.call("mutation($p: ID!, $t: String!) { runPluginTask(plugin_id: $p, task_name: $t) }",
+                                 {"p": conf["plugin_id"], "t": conf["task"]})
+                say(f"started tonight's AI run (job {job.get('runPluginTask')})")
+            else:
+                say("nothing waiting tonight")
+            time.sleep(90)
+        except Exception as e:
+            say(f"problem: {e}; trying again in 10 minutes")
+            time.sleep(600)
 
 
 # --- title ideas -------------------------------------------------------------

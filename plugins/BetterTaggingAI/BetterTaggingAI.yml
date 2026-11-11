@@ -1,6 +1,6 @@
 name: Better Tagging AI Add-on
 description: An add-on for Better Tagging Tools that tags scenes and images, writes titles, finds a scene's studio and performers from the accounts and studio watermarks it shows, recognises performers' faces, and fills in performers' hair and eye colour, tattoos and piercings from their pictures - all with a local AI model (Ollama), on your own computer. Adds "Ask AI" buttons for tags and titles while editing, and can do all of it for new items after a scan. Install it next to Better Tagging Tools - it then uses that plugin's "Tags to ignore", special spellings and gallery-name tags, and its rows sit under Better Tagging Tools' suggestions. (It also works on its own.)
-version: "1.3"
+version: "1.4"
 url: https://github.com/OpenSourceLuffy/stash-plugins/tree/main/plugins/BetterTaggingAI
 exec:
   - python
@@ -21,6 +21,10 @@ hooks:
       - Image.Create.Post
 
 tasks:
+  - name: "AI: run tonight's new items now"
+    description: With "AI - wait until night for new items" on, new scenes and images get the quick steps right after a scan and wait for the AI model's steps (AI tags, studios from watermarks, AI titles) until the night time. This runs those now (it also runs by itself at night).
+    defaultArgs:
+      mode: night_run
   - name: "AI tagging: preview on 10 items (no changes)"
     description: Shows 10 random scenes/images to the local AI model (Ollama) and writes the tags it (and auto tagging from the file path) would add to the log, without changing anything. Try this first.
     defaultArgs:
@@ -136,6 +140,18 @@ settings:
     displayName: "AI: tag, title and find the studio of new scenes and images"
     description: "When a scan adds a scene or image, the local AI model does all three: tags it (like \"AI: tag new scenes and images automatically\"), finds a scene's studio and performers from the accounts and studio watermarks it shows (like the \"Studios from accounts\" tasks), and gives it a title if it has none (from the file name, else the AI). Runs in the background once the scan is done; a few seconds to a minute per item."
     type: BOOLEAN
+  aiNightly:
+    displayName: "AI: wait until night for new items"
+    description: "After a scan, new scenes and images only get the quick steps straight away (tags from file names, studios from links in them, look-alike tags, body tags and faces - about a second each, no AI model). The AI model's steps (AI tags, studios from watermarks, AI titles) are saved and done once at night, so scans finish quickly and other tasks aren't held up. Off: everything right after the scan."
+    type: BOOLEAN
+  aiNightTime:
+    displayName: "AI: night time"
+    description: When the saved AI work runs, as HH:MM (24-hour). Default 03:00.
+    type: STRING
+  aiTimeZone:
+    displayName: "AI: time zone"
+    description: The time zone of the night time, e.g. America/New_York or Europe/London. Default UTC (Stash's Docker container usually runs on UTC).
+    type: STRING
   aiOllamaUrl:
     displayName: "AI: Ollama address"
     description: Where Ollama runs, as seen from Stash. Default http://host.docker.internal:11434 (Ollama on the same computer as Stash's Docker container); use http://localhost:11434 if Stash isn't in Docker.

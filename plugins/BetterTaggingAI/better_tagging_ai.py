@@ -29,6 +29,9 @@ def carry_over(plugin_dir):
 
 
 def main():
+    if sys.argv[1:2] == ["--night-runner"]:  # the background process for tonight's run
+        c.night_runner_main(sys.argv[2])
+        return
     payload = json.loads(sys.stdin.read())
     conn = payload.get("server_connection", {})
     stash = c.Stash(conn)
@@ -60,6 +63,8 @@ def main():
             c.run_handle_studios(stash, plugin_dir, use_ai=True)
         elif mode == "handle_studios_preview":
             c.run_handle_studios(stash, plugin_dir, preview=True, limit=10)
+        elif mode == "night_run":
+            c.run_night(stash, plugin_dir)
         elif mode == "looks_scan":
             c.run_look_scan(stash, plugin_dir)
         elif mode == "looks_preview":
