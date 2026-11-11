@@ -27,13 +27,21 @@ works on its own.
   as one-click chips. Nothing is added until you click them and save.
 - **Faces** row under the **Performers** box (scenes and images): **Find performers by face** compares
   the faces in it (6 frames of a scene, or the image) with your performers' and shows the closest as
-  one-click chips with how alike they are, e.g. `+ Jane Doe 56% ✓`. ✓ marks a confident match;
+  one-click chips with their picture and how alike they are, e.g. `+ Jane Doe 56% ✓`. ✓ marks a confident match;
   without it, check it's really them. Nothing is added until you click and save.
 - **Ask AI for details** when editing a performer: suggests hair colour, eye colour, tattoos and
   piercings from their pictures. Click one to put it in its box (then **Save**).
 - **AI titles** row under the **Title** box (scenes, images and galleries): **Ask AI for titles**
   shows a few titles, written after looking at the picture (or a few frames) and its performers,
   studio, tags and file name. Click one to put it in the box. Ask again for different ones.
+
+## Performer pages: "Might also be in"
+
+A **Faces** row above the tabs on a performer's page: **Might also be in…** lists scanned scenes and
+images that don't have them but where someone looks like them (and they're the closest match of
+all your performers), with a thumbnail and how alike. Confident matches (✓) are ticked; tick the
+right ones and press **Add them to … selected**. **✕ Not them** takes one off the list for good;
+**✕ Close** puts the list away.
 
 ## Tasks
 
@@ -67,6 +75,14 @@ close. Each section starts with a preview that only writes to the log.
 - About 5–15 seconds per scene; scenes already looked at are skipped next time.
 
 **Faces**
+- **Scan scenes and images** finds the faces in every scene (6 frames) and image once and remembers
+  them (a few seconds per scene, well under one per image; cancel and rerun to carry on). Needed
+  for **Might also be in** and makes the other face tasks quicker.
+- **Learn from what you've tagged** learns up to 12 more faces per performer from scenes and images
+  where they're the only performer (only faces that look like their profile picture), so other
+  angles and lighting match better. Matches you accept are learned straight away.
+- **Find performers who may be the same person** lists the most alike pairs of performers in the
+  log. Look-alikes score high too, so check them; merge real duplicates in Stash.
 - **Learn performers' faces** turns each performer's profile picture (and up to 3 photos where
   they're the only performer, if they look like the same person) into a face fingerprint. Only new
   or changed performers are looked at; the other face tasks do this first anyway.

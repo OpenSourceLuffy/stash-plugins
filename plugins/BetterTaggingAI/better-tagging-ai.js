@@ -103,8 +103,11 @@
 
     const have = new Set((values || []).map((p) => String(p.id)));
     const cands = st.state === "done" ? st.cands.filter((c) => !have.has(String(c.id))) : [];
-    const add = (c) =>
+    const add = (c) => {
       onSelect([...(values || []), { id: String(c.id), name: c.name, disambiguation: null, alias_list: [], image_path: null }]);
+      // you've said it's them: remember that face as theirs too
+      ask({ mode: "face_confirm", performer: c.id, emb: c.emb }).catch(() => {});
+    };
     return h(
       "div",
       { className: "pts-suggest pts-ai bta-faces" },
@@ -120,11 +123,13 @@
         h("span", { className: "pts-ai-note" }, st.cands.length ? "Everyone it found is already added" : "No one it knows"),
       cands.map((c) =>
         h("button", {
-          key: c.id, type: "button", className: "pts-chip" + (c.sure ? " bta-sure" : ""),
+          key: c.id, type: "button", className: "pts-chip bta-face-chip" + (c.sure ? " bta-sure" : ""),
           title: `${c.score}% alike` + (m[1] === "scenes" ? `, closest match in ${c.pictures} of the frames` : "") +
             (c.sure ? " - a confident match" : " - check it's really them"),
           onClick: () => add(c),
-        }, "+ " + c.name + " " + c.score + "%" + (c.sure ? " ✓" : ""))
+        },
+          h("img", { className: "bta-face-pic", src: `/performer/${c.id}/image`, alt: "", loading: "lazy" }),
+          h("span", null, "+ " + c.name + " " + c.score + "%" + (c.sure ? " ✓" : "")))
       )
     );
   }
@@ -135,6 +140,175 @@
     if (!props.isMulti || !props.onSelect || props.isDisabled || !ITEM_PAGE.test(location.pathname)) return result;
     return h(React.Fragment, null, result, h(FaceRow, { values: props.values, onSelect: props.onSelect }));
   });
+
+  // ---- performer page: "Might also be in" ----------------------------------
+  // Scanned scenes and images without this performer where a face looks like
+  // theirs. Tick the right ones and add them in one go.
+  function mountLookalikes(anchor, id) {
+    const box = document.createElement("div");
+    box.className = "bta-lookalikes";
+    box.dataset.performer = id;
+    const head = document.createElement("div");
+    head.className = "pts-suggest";
+    const label = document.createElement("span");
+    label.className = "pts-label";
+    label.textContent = "Faces";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "pts-chip pts-ai-ask";
+    btn.textContent = "Might also be in…";
+    btn.title = "Scenes and images without them where someone looks like them (from the face scan)";
+    const note = document.createElement("span");
+    note.className = "pts-ai-note";
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "pts-chip bta-la-close";
+    close.textContent = "✕ Close";
+    close.title = "Put the list away";
+    close.hidden = true;
+    head.append(label, btn, note, close);
+    const list = document.createElement("div");
+    list.className = "bta-la-list";
+    const bar = document.createElement("div");
+    bar.className = "bta-la-bar";
+    box.append(head, list, bar);
+    anchor.insertAdjacentElement("beforebegin", box);
+
+    let items = [];
+    close.addEventListener("click", () => {
+      items = [];
+      note.textContent = "";
+      btn.textContent = "Might also be in…";
+      render();
+    });
+    function render() {
+      list.textContent = "";
+      bar.textContent = "";
+      close.hidden = !items.length;
+      items.forEach((it) => {
+        const card = document.createElement("label");
+        card.className = "bta-la-card" + (it.sure ? " bta-sure" : "");
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = it.checked;
+        cb.addEventListener("change", () => {
+          it.checked = cb.checked;
+          count();
+        });
+        const img = document.createElement("img");
+        img.loading = "lazy";
+        img.alt = "";
+        img.src = it.kind === "scene" ? `/scene/${it.id}/screenshot` : `/image/${it.id}/thumbnail`;
+        const info = document.createElement("span");
+        info.className = "bta-la-info";
+        const link = document.createElement("a");
+        link.href = `/${it.kind}s/${it.id}`;
+        link.target = "_blank";
+        link.textContent = it.title || `${it.kind} ${it.id}`;
+        const score = document.createElement("span");
+        score.className = "bta-la-score";
+        score.textContent = `${it.score}% alike` + (it.kind === "scene" ? ` · ${it.pictures} frame${it.pictures === 1 ? "" : "s"}` : "") +
+          (it.sure ? " ✓" : it.rival >= it.score ? ` · looks more like someone else (${it.rival}%)` : "");
+        const nope = document.createElement("button");
+        nope.type = "button";
+        nope.className = "bta-la-not";
+        nope.textContent = "✕ Not them";
+        nope.title = "Remove it from the list and don't suggest it for them again";
+        nope.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          ask({ mode: "face_reject", performer: id, key: `${it.kind}:${it.id}` }).catch(() => {});
+          items = items.filter((x) => x !== it);
+          if (!items.length) note.textContent = "That's all of them.";
+          render();
+        });
+        info.append(link, score, nope);
+        card.append(cb, img, info);
+        list.appendChild(card);
+      });
+      if (!items.length) return;
+      const addBtn = document.createElement("button");
+      addBtn.type = "button";
+      addBtn.className = "btn btn-primary btn-sm";
+      const all = document.createElement("button");
+      all.type = "button";
+      all.className = "btn btn-secondary btn-sm";
+      all.textContent = "Select all";
+      all.addEventListener("click", () => {
+        items.forEach((it) => (it.checked = true));
+        render();
+      });
+      const none = document.createElement("button");
+      none.type = "button";
+      none.className = "btn btn-secondary btn-sm";
+      none.textContent = "Select none";
+      none.addEventListener("click", () => {
+        items.forEach((it) => (it.checked = false));
+        render();
+      });
+      function count() {
+        const n = items.filter((it) => it.checked).length;
+        addBtn.textContent = `Add them to ${n} selected`;
+        addBtn.disabled = !n;
+      }
+      addBtn.addEventListener("click", async () => {
+        const picked = items.filter((it) => it.checked);
+        addBtn.disabled = true;
+        addBtn.textContent = "Adding…";
+        try {
+          for (const [kind, mutation, type] of [["scene", "bulkSceneUpdate", "BulkSceneUpdateInput"], ["image", "bulkImageUpdate", "BulkImageUpdateInput"]]) {
+            const ids = picked.filter((it) => it.kind === kind).map((it) => it.id);
+            if (ids.length) {
+              await gql(`mutation($i: ${type}!) { ${mutation}(input: $i) { id } }`, {
+                i: { ids, performer_ids: { ids: [id], mode: "ADD" } },
+              });
+            }
+          }
+          // learn from the faces you've said are them
+          picked.slice(0, 12).forEach((it) => ask({ mode: "face_confirm", performer: id, emb: it.emb }).catch(() => {}));
+          items = items.filter((it) => !it.checked);
+          note.textContent = `Added to ${picked.length}. Reload the page to see them in the tabs below.`;
+          render();
+        } catch (e) {
+          note.textContent = "Couldn't add them: " + e.message;
+          count();
+        }
+      });
+      bar.append(addBtn, all, none);
+      count();
+    }
+
+    btn.addEventListener("click", () => {
+      btn.disabled = true;
+      btn.textContent = "Looking…";
+      note.textContent = "";
+      ask({ mode: "face_lookalikes", id })
+        .then((r) => {
+          items = (r || []).map((it) => ({ ...it, checked: !!it.sure }));
+          note.textContent = items.length
+            ? `${items.length} found. Confident matches (✓) are ticked; check the others.`
+            : "No one else looks like them in what's been scanned";
+          render();
+          btn.textContent = "Look again";
+        })
+        .catch((e) => {
+          note.textContent = "Couldn't look: " + e.message;
+          btn.textContent = "Try again";
+        })
+        .finally(() => (btn.disabled = false));
+    });
+  }
+
+  function checkPerformerPage() {
+    const m = location.pathname.match(PERF_PAGE);
+    if (!m) return;
+    const tabs = document.querySelector("#performer-page .performer-tabs");
+    if (!tabs) return;
+    const old = document.querySelector(".bta-lookalikes");
+    if (old && old.dataset.performer === m[1] && old.nextElementSibling === tabs) return;
+    if (old) old.remove();
+    mountLookalikes(tabs, m[1]);
+  }
 
   // ---- performer page: "Ask AI for details" ---------------------------------
   // Hair / eye colour, tattoos and piercings from their pictures; each
@@ -311,8 +485,9 @@
     ["ai-studios", "Studios from accounts", "Studio and performers from the accounts and studio watermarks a scene shows",
       ["Studios from accounts: preview on 10 scenes (no changes)", "Studios from accounts: also read watermarks with the AI"]],
     ["ai-faces", "Faces", "Who the people in scenes and images look like, from your performers' pictures",
-      ["Faces: learn performers' faces", "Faces: preview on 10 items (no changes)", "Faces: scenes without performers",
-       "Faces: images without performers"]],
+      ["Faces: learn performers' faces", "Faces: scan scenes and images", "Faces: learn from what you've tagged",
+       "Faces: find performers who may be the same person", "Faces: preview on 10 items (no changes)",
+       "Faces: scenes without performers", "Faces: images without performers"]],
     ["ai-perf", "Performer details", "Hair and eye colour from performers' pictures",
       ["Performer details: preview on 10 performers (no changes)", "Performer details: fill in empty hair and eye colour"]],
   ];
@@ -375,6 +550,7 @@
     titleTimer = setTimeout(() => {
       checkTitles();
       checkPerformerForm();
+      checkPerformerPage();
       groupTasks();
     }, 200);
   }).observe(document.body, { childList: true, subtree: true });

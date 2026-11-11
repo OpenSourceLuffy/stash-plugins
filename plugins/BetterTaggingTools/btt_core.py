@@ -17,6 +17,7 @@ import contextlib
 import fcntl
 import hashlib
 import json
+import operator
 import os
 import re
 import shutil
@@ -2686,14 +2687,27 @@ def run_handle_studios(stash, plugin_dir, preview=False, limit=None, use_ai=True
 
 # --- faces: who's in it ---------------------------------------------------
 # The face helper (a small local service, see the add-on's face-helper
-# folder) finds faces and turns each into a fingerprint. Performers'
-# fingerprints come from their profile picture (plus a few photos where
-# they're the only performer, if they look like the same person) and are
-# kept in face_index.json. A scene's frames / an image's faces are compared
-# with all of them; the closest performers are the suggestions.
+# folder) finds faces and turns each into a fingerprint (128 numbers). Two
+# faces whose fingerprints point the same way (a high "likeness") are
+# probably the same person.
+#
+# face_index.json - each performer's fingerprints: from their profile
+#   picture and a few photos where they're alone ("embs"), from scenes and
+#   images you've tagged them in ("tagged"), and from matches you accepted
+#   with "Find performers by face" ("conf").
+# face_items.json - the faces found in each scene (a few frames) and image,
+#   so they're only looked at once ("Faces: scan scenes and images").
+# Fingerprints are kept as 128 small whole numbers (base64), which is plenty
+# for comparing and keeps the files small.
 
 FACE_FRAME_POINTS = (0.1, 0.25, 0.4, 0.55, 0.7, 0.85)
 FACE_EXTRA_PHOTOS = 3
+FACE_MAX_TAGGED = 12   # fingerprints learned from tagged items, per performer
+FACE_MAX_CONF = 12     # ... and from accepted matches
+FACE_SAME_AS_PROFILE = 0.45  # a tagged face must be this alike to count as them
+FACE_MARGIN = 0.05     # a confident match is this far ahead of anyone else
+FACE_DUPLICATE_MIN = 0.55
+FACE_LOOKALIKE_MIN = 0.45  # "Might also be in" lists the whole library, so it's stricter
 
 
 def face_helper(cfg, pictures):
@@ -2709,20 +2723,43 @@ def face_helper(cfg, pictures):
 
 
 def _dot(a, b):
-    return sum(x * y for x, y in zip(a, b))
+    return sum(map(operator.mul, a, b))
 
 
 def _biggest(faces):
     return max(faces, key=lambda f: f["box"][2] * f["box"][3]) if faces else None
 
 
+def q8(emb):
+    """A fingerprint as 128 bytes (base64): each number as a whole -127..127."""
+    return base64.b64encode(bytes((max(-127, min(127, round(v * 127))) & 0xFF) for v in emb)).decode()
+
+
+def unq8(s):
+    return [(b - 256 if b > 127 else b) / 127 for b in base64.b64decode(s)]
+
+
+def known_embs(entry):
+    """All of a performer's fingerprints (decoded)."""
+    return entry.get("embs", []) + [unq8(x) for x in entry.get("tagged", []) + entry.get("conf", [])]
+
+
 def locked_face_index(plugin_dir):
     return locked_json(os.path.join(plugin_dir, "face_index.json"))
 
 
+def load_face_index(plugin_dir):
+    try:
+        with open(os.path.join(plugin_dir, "face_index.json")) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
 def update_face_index(stash, cfg, plugin_dir, only=None, quiet=False):
-    """Learn the faces of performers that are new or got a new picture.
-    Returns the index {performer id: {"name", "img", "embs"}}."""
+    """Learn the faces of performers that are new or got a new picture (what
+    was learned from tagged items and accepted matches is kept). Returns the
+    index {performer id: {"name", "img", "embs", "tagged", "conf"}}."""
     perfs = stash.call("{ findPerformers(filter: {per_page: -1}) { performers { id name image_path } } }")["findPerformers"]["performers"]
     if only:
         perfs = [p for p in perfs if p["id"] in only]
@@ -2760,9 +2797,11 @@ def update_face_index(stash, cfg, plugin_dir, only=None, quiet=False):
                             pass
                     for faces in (face_helper(cfg, pics) if pics else []):
                         f = _biggest(faces)
-                        if f and _dot(f["emb"], main["emb"]) >= 0.45 and len(embs) < 1 + FACE_EXTRA_PHOTOS:
+                        if f and _dot(f["emb"], main["emb"]) >= FACE_SAME_AS_PROFILE and len(embs) < 1 + FACE_EXTRA_PHOTOS:
                             embs.append(f["emb"])
-                index[p["id"]] = {"name": p["name"], "img": p["image_path"], "embs": embs}
+                old = index.get(p["id"]) or {}
+                index[p["id"]] = {"name": p["name"], "img": p["image_path"], "embs": embs,
+                                  "tagged": old.get("tagged", []), "conf": old.get("conf", []), "not": old.get("not", [])}
                 learned += bool(embs)
             except RuntimeError:
                 raise
@@ -2773,9 +2812,11 @@ def update_face_index(stash, cfg, plugin_dir, only=None, quiet=False):
                 index[p["id"]]["name"] = p["name"]
         if todo and not quiet:
             log("info", f"Learned the faces of {learned} of {len(todo)} new or changed performer(s) "
-                f"({sum(1 for v in index.values() if v['embs'])} known in all)")
+                f"({sum(1 for v in index.values() if known_embs(v))} known in all)")
         return dict(index)
 
+
+# ---- the faces in scenes and images (kept in face_items.json) ----
 
 def item_face_pictures(stash, kind, item):
     """Pictures to look for faces in: a few frames of a scene, or an image."""
@@ -2803,31 +2844,71 @@ FACE_ITEM_FIELDS = {
 }
 
 
-def face_candidates(stash, cfg, index, kind, item):
+class FaceCache:
+    """face_items.json, read once; new results are merged back in batches
+    (so a long scan never holds the file locked)."""
+
+    def __init__(self, plugin_dir):
+        self.path = os.path.join(plugin_dir, "face_items.json")
+        try:
+            with open(self.path) as f:
+                self.data = json.load(f)
+        except (OSError, ValueError):
+            self.data = {}
+        self.new = {}
+
+    def groups(self, stash, cfg, kind, item, compute=True):
+        """The faces in each picture of the item: [[fingerprint, ...], ...]
+        (None if it isn't scanned yet and compute is off)."""
+        key, sig = f"{kind}:{item['id']}", item_path(kind, item)
+        hit = self.new.get(key) or self.data.get(key)
+        if hit and hit.get("p") == sig:
+            return [[unq8(x) for x in g] for g in hit["f"]]
+        if not compute:
+            return None
+        pics = item_face_pictures(stash, kind, item)
+        found = face_helper(cfg, pics) if pics else []
+        groups = [[f["emb"] for f in faces] for faces in found]
+        self.new[key] = {"p": sig, "f": [[q8(e) for e in g] for g in groups]}
+        if len(self.new) >= 25:
+            self.save()
+        return groups
+
+    def save(self):
+        if not self.new:
+            return
+        with locked_json(self.path) as data:
+            data.update(self.new)
+            self.data = dict(data)
+        self.new = {}
+
+
+def face_candidates(stash, cfg, index, kind, item, cache=None):
     """Performers who look like the people in it, best first:
-    [{"id", "name", "score", "pictures"}] - score is the best likeness (0-1),
-    pictures how many frames / faces they were the closest match in."""
-    pics = item_face_pictures(stash, kind, item)
-    if not pics:
-        return []
-    known = [(pid, v["name"], v["embs"]) for pid, v in index.items() if v.get("embs")]
-    best = {}  # performer id -> [score, pictures]
-    for faces in face_helper(cfg, pics):
+    [{"id", "name", "score", "pictures", "emb"}] - score is the best likeness
+    (0-1), pictures how many frames / faces they were the closest match in,
+    emb the face that matched best (to learn from if you accept it)."""
+    groups = cache.groups(stash, cfg, kind, item) if cache else None
+    if groups is None:
+        pics = item_face_pictures(stash, kind, item)
+        groups = [[f["emb"] for f in faces] for faces in (face_helper(cfg, pics) if pics else [])]
+    known = [(pid, v["name"], known_embs(v)) for pid, v in index.items()]
+    known = [k for k in known if k[2]]
+    best = {}  # performer id -> {...}
+    for faces in groups:
         seen_here = set()
-        for f in faces:
-            scored = sorted(((max(_dot(f["emb"], e) for e in embs), pid, name) for pid, name, embs in known), reverse=True)
+        for emb in faces:
+            scored = sorted(((max(_dot(emb, e) for e in embs), pid, name) for pid, name, embs in known), reverse=True)
             for score, pid, name in scored[:3]:
                 if score < cfg["ai"]["face_min"]:
                     break
-                b = best.setdefault(pid, {"id": pid, "name": name, "score": 0.0, "pictures": 0})
-                b["score"] = max(b["score"], score)
+                b = best.setdefault(pid, {"id": pid, "name": name, "score": 0.0, "pictures": 0, "emb": None})
+                if score > b["score"]:
+                    b["score"], b["emb"] = score, q8(emb)
                 if pid not in seen_here and score == scored[0][0]:
                     b["pictures"] += 1
                     seen_here.add(pid)
     return sorted(best.values(), key=lambda b: (-b["pictures"] if kind == "scene" else 0, -b["score"]))
-
-
-FACE_MARGIN = 0.05  # ahead of every other candidate by this much
 
 
 def confident(cfg, kind, c, cands):
@@ -2846,19 +2927,53 @@ def confident(cfg, kind, c, cands):
 
 
 def run_face_suggest(stash, plugin_dir, kind, item_id):
-    """Asked by the edit page: who it looks like. Nothing is saved."""
+    """Asked by the edit page: who it looks like. Nothing is saved (except
+    the faces found, so they're not looked for again)."""
     cfg = settings(stash, plugin_dir)
     index = update_face_index(stash, cfg, plugin_dir, quiet=True)
     query = "findScene" if kind == "scene" else "findImage"
     item = stash.call(f"query($id: ID!) {{ {query}(id: $id) {{ {FACE_ITEM_FIELDS[kind]} }} }}", {"id": str(item_id)})[query]
     if not item:
         raise RuntimeError(f"{kind} {item_id} not found")
-    cands = face_candidates(stash, cfg, index, kind, item)
+    cache = FaceCache(plugin_dir)
+    cands = face_candidates(stash, cfg, index, kind, item, cache)
+    cache.save()
     sure = {c["id"] for c in cands if confident(cfg, kind, c, cands)}
-    out = []
-    for c in cands[:6]:
-        out.append({**c, "score": round(c["score"] * 100), "sure": c["id"] in sure})
-    return out
+    return [{**c, "score": round(c["score"] * 100), "sure": c["id"] in sure} for c in cands[:6]]
+
+
+def _add_fingerprint(entry, key, emb_b64, cap):
+    """Add a fingerprint unless it's a near copy of one already there."""
+    emb = unq8(emb_b64)
+    have = [unq8(x) for x in entry.get(key, [])]
+    if any(_dot(emb, h) >= 0.92 for h in have):
+        return False
+    entry[key] = (entry.get(key, []) + [emb_b64])[-cap:]
+    return True
+
+
+def run_face_confirm(plugin_dir, performer_id, emb_b64):
+    """You accepted a face match: remember that face as theirs too."""
+    if not emb_b64:
+        return False
+    with locked_face_index(plugin_dir) as index:
+        entry = index.get(str(performer_id))
+        if not entry:
+            return False
+        return _add_fingerprint(entry, "conf", emb_b64, FACE_MAX_CONF)
+
+
+def run_face_reject(plugin_dir, performer_id, key):
+    """"Not them" on a performer's "Might also be in": don't suggest that
+    scene / image for them again."""
+    with locked_face_index(plugin_dir) as index:
+        entry = index.get(str(performer_id))
+        if not entry or not key:
+            return False
+        nots = entry.get("not", [])
+        if key not in nots:
+            entry["not"] = (nots + [key])[-2000:]
+        return True
 
 
 def add_performers(stash, kind, item, ids):
@@ -2868,51 +2983,59 @@ def add_performers(stash, kind, item, ids):
                {"i": {"ids": [item["id"]], "performer_ids": {"ids": sorted(set(ids) - have, key=int), "mode": "ADD"}}})
 
 
+def _face_items(stash, kind, item_filter=None, ids=None):
+    query, field, farg, ftype = {"scene": ("findScenes", "scenes", "scene_filter", "SceneFilterType"),
+                                 "image": ("findImages", "images", "image_filter", "ImageFilterType")}[kind]
+    if ids is not None:
+        if not ids:
+            return []
+        return stash.call(
+            f"query($ids: [ID!]) {{ {query}(ids: $ids, filter: {{per_page: -1}}) {{ {field} {{ {FACE_ITEM_FIELDS[kind]} }} }} }}",
+            {"ids": ids})[query][field]
+    out, page = [], 1
+    while True:
+        items = stash.call(
+            f"query($p: {ftype}, $f: FindFilterType) {{ {query}({farg}: $p, filter: $f) {{ {field} {{ {FACE_ITEM_FIELDS[kind]} }} }} }}",
+            {"p": item_filter or {}, "f": {"page": page, "per_page": 500, "sort": "created_at", "direction": "DESC"}})[query][field]
+        out += items
+        if len(items) < 500:
+            return out
+        page += 1
+
+
 def run_faces(stash, plugin_dir, kinds, preview=False, limit=None, ids=None):
     """Task: find who's in scenes / images without performers. Confident
     matches are added when "Faces: add confident matches automatically" is
     on; otherwise (or in a preview) they're only written to the log."""
     cfg = settings(stash, plugin_dir)
     index = update_face_index(stash, cfg, plugin_dir, quiet=ids is not None)
-    if not any(v.get("embs") for v in index.values()):
+    if not any(known_embs(v) for v in index.values()):
         log("warning", "No performer faces known yet - performers need a profile picture with a face in it.")
         return
     apply = cfg["ai"]["face_auto"] and not preview
     todo = []
     for kind in kinds:
-        query, field, farg, ftype = {"scene": ("findScenes", "scenes", "scene_filter", "SceneFilterType"),
-                                     "image": ("findImages", "images", "image_filter", "ImageFilterType")}[kind]
         if ids is not None:
-            if ids.get(kind):
-                todo += [(kind, i) for i in stash.call(
-                    f"query($ids: [ID!]) {{ {query}(ids: $ids, filter: {{per_page: -1}}) {{ {field} {{ {FACE_ITEM_FIELDS[kind]} }} }} }}",
-                    {"ids": ids[kind]})[query][field]]
-            continue
-        page = 1
-        while True:
-            items = stash.call(
-                f"query($p: {ftype}, $f: FindFilterType) {{ {query}({farg}: $p, filter: $f) {{ {field} {{ {FACE_ITEM_FIELDS[kind]} }} }} }}",
-                {"p": {"performer_count": {"value": 0, "modifier": "EQUALS"}},
-                 "f": {"page": page, "per_page": 500, "sort": "created_at", "direction": "DESC"}})[query][field]
-            todo += [(kind, i) for i in items]
-            if len(items) < 500:
-                break
-            page += 1
+            todo += [(kind, i) for i in _face_items(stash, kind, ids=ids.get(kind) or [])]
+        else:
+            todo += [(kind, i) for i in _face_items(stash, kind, {"performer_count": {"value": 0, "modifier": "EQUALS"}})]
     if limit:
         import random
         todo = random.sample(todo, min(limit, len(todo)))
     if ids is None:
-        log("info", f"Looking for known faces in {len(todo)} item(s)" + (" without performers" if not ids else "")
+        log("info", f"Looking for known faces in {len(todo)} item(s) without performers"
             + (" (preview, nothing is saved)" if preview else "" if apply else
                " - only writing suggestions to the log, as \"Faces: add confident matches automatically\" is off"))
+    cache = FaceCache(plugin_dir)
     added = found = 0
     for n, (kind, item) in enumerate(todo):
         if ids is None:
             progress(n / max(len(todo), 1))
         name = os.path.basename(item_path(kind, item)) or f"{kind} {item['id']}"
         try:
-            cands = face_candidates(stash, cfg, index, kind, item)
+            cands = face_candidates(stash, cfg, index, kind, item, cache)
         except RuntimeError:
+            cache.save()
             raise
         except Exception as e:
             log("warning", f"{name}: skipped ({e})")
@@ -2929,10 +3052,175 @@ def run_faces(stash, plugin_dir, kinds, preview=False, limit=None, ids=None):
             log("info", f'{name}: added {", ".join(c["name"] for c in sure)} (looks like: {text})')
         else:
             log("info", f'{name}: looks like {text}' + (f' - would add {", ".join(c["name"] for c in sure)}' if sure else ""))
+    cache.save()
     if ids is None:
         progress(1)
         log("info", f"{'Preview: ' if preview else 'Done: '}found a likeness in {found} of {len(todo)} item(s)"
             + (f"; added performers to {added}" if apply else "") + ("." if apply else ". Nothing was saved."))
+
+
+def run_face_scan(stash, plugin_dir, kinds=("scene", "image")):
+    """Task: find the faces in every scene (a few frames) and image once, so
+    look-alike searches and learning from tagged items are quick. Picks up
+    where it left off; changed files are looked at again."""
+    cfg = settings(stash, plugin_dir)
+    face_helper(cfg, [])  # fails early if the helper isn't running
+    cache = FaceCache(plugin_dir)
+    todo = [(k, i) for k in kinds for i in _face_items(stash, k)]
+    left = [(k, i) for k, i in todo if cache.groups(stash, cfg, k, i, compute=False) is None]
+    log("info", f"Scanning {len(left)} of {len(todo)} scene(s)/image(s) for faces ({len(todo) - len(left)} done before). "
+        "Scenes take a few seconds each, images well under one; you can cancel and run it again to carry on.")
+    faces = 0
+    for n, (kind, item) in enumerate(left):
+        progress(n / max(len(left), 1))
+        try:
+            faces += sum(len(g) for g in cache.groups(stash, cfg, kind, item))
+        except RuntimeError:
+            cache.save()
+            raise
+        except Exception as e:
+            log("debug", f"{kind} {item['id']}: {e}")
+    cache.save()
+    progress(1)
+    log("info", f"Done: scanned {len(left)} item(s), {faces} face(s) found.")
+
+
+def run_face_learn_tagged(stash, plugin_dir):
+    """Task: learn more of each performer's faces from scenes and images
+    where they're the only performer (and that face looks like them)."""
+    cfg = settings(stash, plugin_dir)
+    index = update_face_index(stash, cfg, plugin_dir)
+    base = {pid: v["embs"] for pid, v in index.items() if v.get("embs")}
+    cache = FaceCache(plugin_dir)
+    solo = {"performer_count": {"value": 1, "modifier": "EQUALS"}}
+    todo = [(k, i) for k in ("scene", "image") for i in _face_items(stash, k, solo)]
+    todo = [(k, i) for k, i in todo if i["performers"] and i["performers"][0]["id"] in base]
+    log("info", f"Learning from {len(todo)} scene(s)/image(s) where a known performer is the only one"
+        " (items not scanned for faces yet are scanned now)")
+    found = defaultdict(list)  # performer id -> [(likeness, fingerprint)]
+    for n, (kind, item) in enumerate(todo):
+        progress(n / max(len(todo), 1))
+        pid = item["performers"][0]["id"]
+        try:
+            groups = cache.groups(stash, cfg, kind, item)
+        except RuntimeError:
+            cache.save()
+            raise
+        except Exception as e:
+            log("debug", f"{kind} {item['id']}: {e}")
+            continue
+        for faces in groups:
+            for emb in faces:
+                score = max(_dot(emb, e) for e in base[pid])
+                if score >= FACE_SAME_AS_PROFILE:
+                    found[pid].append((score, emb))
+    cache.save()
+    grew = 0
+    with locked_face_index(plugin_dir) as idx:
+        for pid, faces in found.items():
+            entry = idx.get(pid)
+            if not entry:
+                continue
+            before = len(entry.get("tagged", []))
+            # most like them first, but keep a spread (near copies are skipped)
+            for _, emb in sorted(faces, key=lambda x: -x[0]):
+                if len(entry.get("tagged", [])) >= FACE_MAX_TAGGED:
+                    break
+                _add_fingerprint(entry, "tagged", q8(emb), FACE_MAX_TAGGED)
+            grew += len(entry.get("tagged", [])) > before
+    progress(1)
+    log("info", f"Done: learned more faces for {grew} performer(s).")
+
+
+def run_face_lookalikes(stash, plugin_dir, performer_id, limit=80):
+    """Asked by a performer's page: scanned scenes / images that don't have
+    them but have a face that looks like them, best first. Nothing is saved."""
+    cfg = settings(stash, plugin_dir)
+    index = load_face_index(plugin_dir)
+    pid = str(performer_id)
+    mine = known_embs(index.get(pid) or {})
+    if not mine:
+        raise RuntimeError("their face isn't known yet - they need a profile picture with a face in it "
+                           "(then run \"Faces: learn performers' faces\")")
+    cache = FaceCache(plugin_dir)
+    if not cache.data:
+        raise RuntimeError('nothing is scanned yet - run "Faces: scan scenes and images" first')
+    have = set((index.get(pid) or {}).get("not", []))  # ones you said aren't them
+    for kind, (query, field, farg) in (("scene", ("findScenes", "scenes", "scene_filter")),
+                                       ("image", ("findImages", "images", "image_filter"))):
+        got = stash.call(f"query($p: {kind.capitalize()}FilterType) {{ {query}({farg}: $p, filter: {{per_page: -1}}) {{ {field} {{ id }} }} }}",
+                         {"p": {"performers": {"value": [pid], "modifier": "INCLUDES"}}})[query][field]
+        have |= {f"{kind}:{x['id']}" for x in got}
+    others = [(p, known_embs(v)) for p, v in index.items() if p != pid]
+    others = [o for o in others if o[1]]
+    floor = max(cfg["ai"]["face_min"], FACE_LOOKALIKE_MIN)
+    hits = []
+    for key, entry in cache.data.items():
+        if key in have:
+            continue
+        best, best_emb, pictures = 0.0, None, 0
+        for g in entry.get("f", []):
+            here = 0.0
+            for s_ in g:
+                emb = unq8(s_)
+                score = max(_dot(emb, e) for e in mine)
+                if score > here:
+                    here = score
+                if score > best:
+                    best, best_emb = score, emb
+            pictures += here >= floor
+        if best >= floor:
+            hits.append([key, best, best_emb, pictures])
+    hits.sort(key=lambda h: -h[1])
+    out = []
+    for key, best, emb, pictures in hits[:limit * 3]:
+        kind, iid = key.split(":")
+        # only where they're the closest match for that face of everyone known
+        rival = max((max(_dot(emb, e) for e in embs) for _, embs in others), default=0.0)
+        if rival > best:
+            continue
+        if len(out) >= limit:
+            break
+        sure = (best >= cfg["ai"]["face_auto_min"] + (0.05 if kind == "image" else 0) and best - rival >= FACE_MARGIN
+                and (kind == "image" or pictures >= 2))
+        out.append({"kind": kind, "id": iid, "score": round(best * 100), "pictures": pictures,
+                    "rival": round(rival * 100), "sure": sure, "emb": q8(emb)})
+    # titles for the list
+    for kind, query, field in (("scene", "findScenes", "scenes"), ("image", "findImages", "images")):
+        ids = [o["id"] for o in out if o["kind"] == kind]
+        if ids:
+            got = stash.call(f"query($ids: [ID!]) {{ {query}(ids: $ids, filter: {{per_page: -1}}) {{ {field} {{ id title {'files { basename }' if kind == 'scene' else 'visual_files { ... on BaseFile { basename } }'} }} }} }}",
+                             {"ids": ids})[query][field]
+            names = {x["id"]: x.get("title") or ((x.get("files") or x.get("visual_files") or [{}])[0] or {}).get("basename") or "" for x in got}
+            for o in out:
+                if o["kind"] == kind:
+                    o["title"] = names.get(o["id"], "")
+    out.sort(key=lambda o: (not o["sure"], -o["score"]))
+    return out
+
+
+def run_face_duplicates(stash, plugin_dir):
+    """Task: performers whose faces are nearly the same - often one person
+    under two names. Only writes the pairs to the log."""
+    cfg = settings(stash, plugin_dir)
+    index = update_face_index(stash, cfg, plugin_dir)
+    people = [(pid, v["name"], v["embs"]) for pid, v in index.items() if v.get("embs")]
+    pairs = []
+    for i in range(len(people)):
+        progress(i / max(len(people), 1))
+        a = people[i]
+        for b in people[i + 1:]:
+            score = max(_dot(x, y) for x in a[2] for y in b[2])
+            if score >= FACE_DUPLICATE_MIN:
+                pairs.append((score, a, b))
+    pairs.sort(key=lambda p: -p[0])
+    for score, a, b in pairs[:100]:
+        log("info", f'{round(score * 100)}% alike: "{a[1]}" (/performers/{a[0]}) and "{b[1]}" (/performers/{b[0]})')
+    progress(1)
+    log("info", f"Done: {len(pairs)} pair(s) of performers are very alike (at least {round(FACE_DUPLICATE_MIN * 100)}%)"
+        + (" - the 100 most alike are listed above" if len(pairs) > 100 else "")
+        + ". Check them: look-alikes score this high too, so not every pair is one person. Nothing was changed;"
+        " if a pair is one person, merge them in Stash (select both on the Performers page, ••• → Merge).")
 
 
 # --- performer details from their pictures ---------------------------------

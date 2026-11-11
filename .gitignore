@@ -16,3 +16,4 @@ plugins/*/.zip
 plugins/*/picture_hashes.json
 plugins/*/ai_done.json
 plugins/*/face_index.json
+plugins/*/face_items.json

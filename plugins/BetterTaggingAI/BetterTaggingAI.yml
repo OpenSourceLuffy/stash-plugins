@@ -58,6 +58,18 @@ tasks:
     description: Turns each performer's profile picture (and a few photos where they're the only performer) into a face fingerprint for the tasks below and the "Find performers by face" button. Only new or changed performers are looked at, so it's quick after the first time; the other face tasks do this first anyway. Needs the face helper (see the README).
     defaultArgs:
       mode: faces_learn
+  - name: "Faces: scan scenes and images"
+    description: Finds the faces in every scene (6 frames) and image once and remembers them, so "Might also be in" on performer pages and "learn from what you've tagged" are quick. A few seconds per scene and well under one per image; you can cancel it and run it again to carry on. Changed files are looked at again.
+    defaultArgs:
+      mode: faces_scan
+  - name: "Faces: learn from what you've tagged"
+    description: Learns more of each performer's faces from scenes and images where they're the only performer - only faces that look like their profile picture, up to 12 each - so matching gets better at other angles and lighting. Matches you accept with "Find performers by face" or "Might also be in" are learned straight away.
+    defaultArgs:
+      mode: faces_learn_tagged
+  - name: "Faces: find performers who may be the same person"
+    description: Lists the pairs of performers whose faces are most alike in the log - sometimes one person under two names (e.g. a stage name and an account name), sometimes just look-alikes, so check them. Nothing is changed; merge them in Stash if they're one person.
+    defaultArgs:
+      mode: faces_duplicates
   - name: "Faces: preview on 10 items (no changes)"
     description: Picks 10 random scenes/images without performers and writes to the log who the people in them look like, without changing anything.
     defaultArgs:

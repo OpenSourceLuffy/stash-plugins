@@ -65,6 +65,18 @@ def main():
             c.run_faces(stash, plugin_dir, ["scene", "image"], preview=True, limit=10)
         elif mode in ("faces_scenes", "faces_images"):
             c.run_faces(stash, plugin_dir, [mode.split("_")[1][:-1]])
+        elif mode == "faces_scan":
+            c.run_face_scan(stash, plugin_dir)
+        elif mode == "faces_learn_tagged":
+            c.run_face_learn_tagged(stash, plugin_dir)
+        elif mode == "faces_duplicates":
+            c.run_face_duplicates(stash, plugin_dir)
+        elif mode == "face_lookalikes":
+            print(json.dumps({"output": c.run_face_lookalikes(stash, plugin_dir, args["id"])}))
+        elif mode == "face_reject":
+            print(json.dumps({"output": c.run_face_reject(plugin_dir, args["performer"], args.get("key"))}))
+        elif mode == "face_confirm":
+            print(json.dumps({"output": c.run_face_confirm(plugin_dir, args["performer"], args.get("emb"))}))
         elif mode == "face_suggest":
             print(json.dumps({"output": c.run_face_suggest(stash, plugin_dir, args["kind"], args["id"])}))
         elif mode == "perf_details":
