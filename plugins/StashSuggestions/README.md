@@ -35,3 +35,4 @@ performer pages, so there's always something to go to next. Works with any theme
 - Everything runs in your browser using Stash's own data. Nothing is sent anywhere else.
 - These rows used to be part of Modern UI (up to version 0.48). Install this plugin alongside Modern UI 0.49 or later to keep them.
 - Tested with Stash v0.31.
+- Changes are listed in the [changelog](CHANGELOG.md).

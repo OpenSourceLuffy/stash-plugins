@@ -2,15 +2,15 @@
 
 Plugins for [Stash](https://stashapp.cc):
 
-| Plugin | What it does |
-| --- | --- |
-| [Modern UI](plugins/ModernUI) | A cleaner, app-like look for Stash, with a phone-friendly layout, light and dark themes, picture-first cards (tags included) and an A–Z tag index. |
-| [Stash Suggestions](plugins/StashSuggestions) | "Suggested", "Similar photos", "More with…" and "Similar Performers" rows at the bottom of scene, image and performer pages. Works with any theme. |
-| [Better Tagging Tools](plugins/BetterTaggingTools) | Tags performers, studios and galleries with their most used tags and suggests tags and titles while you edit. Also bulk tagging on performer and gallery pages, gallery-name tags, pictures for tags from your own library, consistent tag name capitalisation (`dating app` → `Dating App`), auto tag, and dates, titles and studios from file names. No AI. |
-| [Better Tagging AI Add-on](plugins/BetterTaggingAI) | Add-on for Better Tagging Tools (also works alone): tags, titles, a scene's studio and performers from the accounts and studio watermarks it shows, performers recognised by face, and performers' hair and eye colour - using a local AI model (Ollama) and a small local face helper. "Ask AI" buttons while editing, tasks, and the same for new items after a scan. |
-| [Library Cleanup](plugins/LibraryCleanup) | Finds and deletes tags, performers and studios that nothing is connected to, with a preview first. |
-| [Vertical Cover Stitcher](plugins/VerticalStitcher) | Turns portrait (vertical) videos' covers into proper 16:9 covers by stitching several frames side by side. |
-| [Privacy Blur](plugins/PrivacyBlur) | One switch in its settings (or Shift+Alt+B) blurs every picture and video in Stash, and optionally names and titles. Good for screenshots or browsing in company. |
+| Plugin | What it does | Changes |
+| --- | --- | --- |
+| [Modern UI](plugins/ModernUI) | A cleaner, app-like look for Stash, with a phone-friendly layout, light and dark themes, picture-first cards (tags included), quick filters for your saved filters and an A–Z tag index. | [Changelog](plugins/ModernUI/CHANGELOG.md) |
+| [Stash Suggestions](plugins/StashSuggestions) | "Suggested", "Similar photos", "More with…" and "Similar Performers" rows at the bottom of scene, image and performer pages. Works with any theme. | [Changelog](plugins/StashSuggestions/CHANGELOG.md) |
+| [Better Tagging Tools](plugins/BetterTaggingTools) | Tags performers, studios and galleries with their most used tags and suggests tags and titles while you edit. Also bulk tagging on performer and gallery pages, gallery-name tags, pictures for tags from your own library, consistent tag name capitalisation (`dating app` → `Dating App`), auto tag, and dates, titles and studios from file names. No AI. | [Changelog](plugins/BetterTaggingTools/CHANGELOG.md) |
+| [Better Tagging AI Add-on](plugins/BetterTaggingAI) | Add-on for Better Tagging Tools (also works alone): tags (checked against look-alikes of what you've already tagged), body tags, titles, a scene's studio and performers from the accounts and studio watermarks it shows, performers recognised by face, and performers' hair and eye colour - using a local AI model (Ollama) and a small local face helper, so nothing leaves your computer. "Ask AI" buttons while editing, tasks, and the same for new items after a scan (the slow AI steps can wait until night). Needs some setup: see [its README](plugins/BetterTaggingAI#setup). | [Changelog](plugins/BetterTaggingAI/CHANGELOG.md) |
+| [Library Cleanup](plugins/LibraryCleanup) | Finds and deletes tags, performers and studios that nothing is connected to, with a preview first. | [Changelog](plugins/LibraryCleanup/CHANGELOG.md) |
+| [Vertical Cover Stitcher](plugins/VerticalStitcher) | Turns portrait (vertical) videos' covers into proper 16:9 covers by stitching several frames side by side. | [Changelog](plugins/VerticalStitcher/CHANGELOG.md) |
+| [Privacy Blur](plugins/PrivacyBlur) | One switch in its settings (or Shift+Alt+B) blurs every picture and video in Stash, and optionally names and titles. Good for screenshots or browsing in company. | [Changelog](plugins/PrivacyBlur/CHANGELOG.md) |
 
 ![Modern UI's home page in the dark theme, with Privacy Blur on](docs/screenshots/Dark_Mode_Home.png)
 
@@ -25,7 +25,13 @@ Plugins for [Stash](https://stashapp.cc):
 3. Open the new source, tick the plugins you want and click **Install**.
 4. Reload the page (or click **Reload plugins** under Settings → Plugins).
 
-Updates show up in the same place whenever a new version is published.
+Updates show up in the same place whenever a new version is published. Each plugin's changelog
+(linked above) lists what changed.
+
+The **Better Tagging AI Add-on** also needs a local AI model and a small helper program installed
+on your computer; its README walks through the
+[setup](plugins/BetterTaggingAI#setup) and explains
+[which models it uses and why](plugins/BetterTaggingAI#which-models-and-why).
 
 ## For maintainers
 
@@ -37,8 +43,9 @@ Every push to `main` that changes something under `plugins/` runs the
 it to GitHub Pages. One-time setup: **Settings → Pages → Build and deployment →
 Source: GitHub Actions**.
 
-To release an update, change the plugin's files, bump `version:` in its `.yml`
-and push.
+To release an update, change the plugin's files, bump `version:` in its `.yml`,
+add an entry at the top of its `CHANGELOG.md`, and push. Better Tagging Tools and the AI add-on
+ship the same `btt_core.py`: keep the two copies identical, and bump both plugins when it changes.
 
 To check the build locally:
 

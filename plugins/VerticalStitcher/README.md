@@ -40,3 +40,4 @@ Horizontal videos are never touched.
 - It replaces the scene's current cover. Scraping or identifying the scene later
   may replace it again with the site's own cover.
 - Covers are 1280×720 JPEGs.
+- Changes are listed in the [changelog](CHANGELOG.md).

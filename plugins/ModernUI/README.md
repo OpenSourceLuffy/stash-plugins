@@ -24,11 +24,22 @@ A cleaner, app-like look for Stash, built to feel good on a phone as well as a c
 - Cleaner scene, performer, image, gallery, studio, group and tag cards.
 - Dark, light, or auto (follows your device) colour themes.
 - Home page rows run edge to edge with round scroll arrows.
-- **Quick filters**: on scene, image, gallery, performer, studio, group and marker lists, a
-  scrolling row of buttons for your saved filters sits between the search box and the filters in
-  use. Tap one to load it; the one in use is highlighted until you change the filter, search or sort.
-- The filters in use are hidden under a **Filters (n)** button below the quick filters. Tap it to
-  see them on one line that scrolls sideways, with **Hide** and **Clear** (take them all off) buttons.
+
+**Lists**
+- A labelled **Filters** button at the start of the list toolbar opens Stash's filter panel (instead
+  of the half-hidden tab on the left edge).
+- **Quick filters**: on scene, image, gallery, performer, studio, tag, group and marker lists that
+  have saved filters, a row of buttons for them sits under the toolbar and scrolls sideways when
+  there are many. Tap one to load it, exactly as if you'd picked it from Stash's saved-filter
+  (bookmark) menu. The one in use is highlighted, also on later pages, until you change the filter,
+  search or sort. Filters you save or delete show up straight away. Turn the row off with **Hide
+  quick filters**.
+- The filters in use (Stash's row of filter tags) are tucked away under a **Filters (n)** button
+  below the quick filters. Tap it to see them on one line that scrolls sideways, with **Hide** and
+  **Clear** (take them all off; your saved filters aren't touched) at the start of the row. Lists
+  without saved filters show their filter tags as usual.
+- In the saved-filter menu, the **Save** button says "Save" and only lights up once you've typed a
+  name.
 - On an image's page, click the picture to see it full screen. Zoom in with the mouse wheel, a
   trackpad or two-finger pinch, or a double-click / double-tap, and drag to move around. Click
   outside the picture, press Esc or tap **Close** to go back. While zoomed out, swipe (or drag, or
@@ -113,3 +124,4 @@ On phones the sign-in box sits near the top of the screen, so it stays in view w
 
 - Tested with Stash v0.31. Other themes or CSS plugins may clash with it, so turn those off if something looks wrong.
 - Upgrading from 0.48 or earlier: the Suggested / Similar rows moved to [Stash Suggestions](../StashSuggestions). Install it to keep them.
+- Changes are listed in the [changelog](CHANGELOG.md).

@@ -79,6 +79,23 @@ the gallery's name** task once for the galleries you already have.
 - These tags never count towards performers' top tags or "most used" suggestions.
 - Photos added from a gallery's **Add** tab don't trigger anything in Stash, so re-run the task to pick those up.
 
+## A gallery's tags, performers and studio on its images
+
+Gives every image in a gallery the gallery's **tags** and **performers**, and its **studio** if the
+image has none yet.
+
+- **One gallery:** **Tag images with this gallery's tags, performers & studio** in the **…** menu of
+  the gallery's image list (or the gallery's **⋮** menu).
+- **Several:** select them in the Galleries list and use **Tag images with their gallery's tags,
+  performers & studio** in its **…** menu.
+- **Every gallery:** the task **Tag gallery images with the gallery's tags, performers and studio**,
+  with **Preview gallery tags, performers and studio on images** to check first.
+- It only adds: nothing is taken off, and a studio an image already has is kept.
+- Tags this plugin added to a gallery as its top tags (counted from its images) aren't copied back
+  down, or a tag on a few images would spread to all of them.
+- Galleries tagged as sexual content involving minors (lolicon, shotacon and the like) are skipped.
+- It runs as a background job; follow it under **Settings → Tasks**.
+
 ## Tag pictures
 
 The **Give tags without a picture one from your library** task gives every tag without a picture
@@ -254,7 +271,8 @@ Stash treats tag names that differ only in case as the same tag, so renaming nev
 
 Under **Settings → Tasks → Plugin Tasks → Better Tagging Tools** the tasks are grouped into
 sections you can open and close: **Top tags**, **Titles**, **Studios from accounts**, **Dates**, **Tag pictures**
-and **Tidy up tags**. Each section starts with its preview task, which only writes to the log.
+and **Tidy up tags** (capitalisation, gallery-name tags, and a gallery's tags, performers and studio
+on its images). Each section starts with its preview task, which only writes to the log.
 
 ## Settings
 
@@ -270,14 +288,13 @@ Under **Settings → Plugins → Better Tagging Tools**:
 | Refresh studios' top tags on edit | Recount a studio when tags or the studio change on its scenes, images or galleries. |
 | Refresh galleries' top tags on edit | Recount a gallery when its photos' tags change or photos move into it. |
 | Tag gallery images with the gallery's name | See above. |
-| Preview gallery tags, performers and studio on images (no changes) | Writes what the task below would add to the log. |
-| Tag gallery images with the gallery's tags, performers and studio | Gives every image in a gallery the gallery's tags and performers, and its studio if the image has none yet (only adds, never removes or replaces). Top tags this plugin put on a gallery aren't copied back down, and galleries tagged as sexual content involving minors (lolicon, shotacon...) are skipped. For one gallery, use **Tag images with this gallery's tags, performers & studio** in the gallery's image list "…" menu or its ⋮ menu; for several, select them in the Galleries list and use the same entry in its "…" menu. |
 | Parent tag for gallery-name tags | Optional; files the gallery-name tags under one tag, e.g. `Galleries`. |
 | Give tags a picture automatically | See above. |
 | Capitalise new tags automatically | See "Tag names" above. |
 | Auto tag new performers, studios and tags | See "Auto tag" above. |
 | Fill in dates of new scenes, images and galleries | See "Dates from file names" above. |
 | Fill in titles of new scenes, images and galleries | See "Titles from file names" above. |
+| Don't title images after their gallery | Leave images whose file name makes no title without one, instead of `Gallery name #12`. |
 | Keep performer and studio names in titles | Leave names in titles made from file names. |
 | Special spellings | Comma-separated words or tag names to always write exactly as given when capitalising, e.g. `CNN, POV, HD, iPhone`. |
 | Suggested tags to show | The most suggestions per row. Default 15. |
@@ -289,5 +306,6 @@ Under **Settings → Plugins → Better Tagging Tools**:
   Docker image includes it.
 - The code is in `btt_core.py`, which the AI add-on ships too (the same file), so each plugin works
   on its own.
+- Changes are listed in the [changelog](CHANGELOG.md).
 - The plugin keeps a few small files in its own folder (which tags it added, a short work queue). Deleting them is safe; it just forgets which performer tags it added.
 - Works with any theme.

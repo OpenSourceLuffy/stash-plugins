@@ -12,18 +12,100 @@ works on its own.
 
 ## Setup
 
-1. Install Ollama (on a Mac: `brew install ollama`, then `brew services start ollama`).
-2. Download the model: `ollama pull gemma3:4b` (about 3 GB).
-3. If Stash runs in Docker on the same computer, the default address
-   (`http://host.docker.internal:11434`) works as is. Otherwise set **AI: Ollama address**.
-4. For **Faces** and **Look-alike tags**: run `sh face-helper/setup.sh` from this plugin's folder.
-   It installs a small helper (Python with OpenCV, two small face models from the OpenCV model zoo
-   and OpenAI's CLIP ViT-B/32 picture model, about 550 MB in all) that starts at login and only
-   listens on your own computer (port 11535). Pictures are compared on your computer; nothing is
-   sent anywhere. If you installed it before look-alike tags existed, run it again.
-5. For **Body tags**: run `sh face-helper/setup.sh --body`. It also downloads
-   [NudeNet](https://github.com/notAI-tech/NudeNet)'s body-part detector (about 12 MB, from its
-   official Python package). Note that NudeNet is licensed **AGPL-3.0**.
+You need two things on the computer Stash runs on (or one it can reach): **Ollama** with the
+**Gemma 3 4B** model, for everything that says "AI"; and the small **face helper**, for faces,
+look-alike tags and body tags. Each part is optional: tasks that need a missing part say so in the
+log and do nothing.
+
+### 1. Ollama and the AI model
+
+1. Install [Ollama](https://ollama.com):
+   - **Mac:** `brew install ollama`, then `brew services start ollama` (it then starts at login).
+     Or download the app from ollama.com.
+   - **Linux:** `curl -fsSL https://ollama.com/install.sh | sh`
+   - **Windows:** the installer from ollama.com.
+2. Download the model: `ollama pull gemma3:4b` (about 3.3 GB).
+3. Check it works: `curl http://localhost:11434/api/tags` should list `gemma3:4b`.
+4. Tell the plugin where Ollama is (**AI: Ollama address**):
+   - **Stash in Docker Desktop** (Mac or Windows) on the same computer: the default,
+     `http://host.docker.internal:11434`, works as is.
+   - **Stash installed directly** (not in Docker): `http://localhost:11434`.
+   - **Stash in Docker on Linux:** containers can't reach programs that only listen on the
+     computer itself (Ollama and the face helper both do, for safety). Easiest is to run the Stash
+     container with `network_mode: host` and use `http://127.0.0.1:11434`.
+5. In Stash, run **AI tagging: preview on 10 items (no changes)** under Settings → Tasks. The log
+   shows the tags it would add; an error there says what's missing.
+
+### 2. The face helper (faces, look-alike tags, body tags)
+
+A tiny program that runs next to Stash and turns pictures into "fingerprints". From this plugin's
+folder (Stash's `plugins/BetterTaggingAI`), run:
+
+```sh
+sh face-helper/setup.sh          # faces and look-alike tags
+sh face-helper/setup.sh --body   # the same, plus body tags
+```
+
+- **Needs:** Python 3 and `curl` (both come with a Mac). Mac and Linux; on Windows it's untested
+  (WSL may work).
+- **Installs:** a Python environment with OpenCV, NumPy and ONNX Runtime, and the models (about
+  650 MB in all) in `~/Library/Application Support/face-helper` (Mac) or
+  `~/.local/share/face-helper` (Linux; set `FACE_HELPER_DIR` to choose another folder).
+- **Runs:** on a Mac it's set up to start at login and restart if it stops. On Linux it prints the
+  command to start it (put it in a systemd user service to keep it running).
+- **Check it:** `curl http://127.0.0.1:11535/health` should answer
+  `{"ok": true, "embed": true, "body": false}` (`"body": true` with `--body`).
+- It only listens on your own computer (port 11535; change it with `FACE_HELPER_PORT`), keeps
+  nothing, and sends nothing anywhere. The plugin keeps the fingerprints in its own folder.
+- If you installed it before look-alike tags or body tags existed, run it again; it updates in
+  place.
+- On a Mac, keep the helper out of `Documents`, `Desktop` and `Downloads`: programs started at login
+  aren't allowed to read those folders. (The default folder is fine.)
+- To remove it on a Mac: `launchctl bootout gui/$(id -u)/face-helper`, then delete
+  `~/Library/LaunchAgents/face-helper.plist` and the `face-helper` folder. To remove the AI model:
+  `ollama rm gemma3:4b`.
+
+### 3. Then
+
+- Run **Look-alike tags: scan scenes and images** and **Faces: scan scenes and images** once
+  (each takes a while on a big library; cancel and rerun to carry on).
+- Turn on the after-scan settings you want (see [New items after a scan](#new-items-after-a-scan)).
+
+## Which models, and why
+
+Everything runs on your own computer: these are personal libraries, so no picture is ever sent to
+an online AI service. That means models small enough to run next to Stash on an ordinary computer,
+and each job uses the smallest model that does it well.
+
+| Job | Model | Size | Why this one |
+| --- | --- | --- | --- |
+| Tags, titles, reading watermarks, hair and eye colour | **Gemma 3 4B** (Google), through Ollama | 3.3 GB | The smallest model that can look at a picture and describe it well. About 5 seconds a picture on an Apple M4 (a scene about 15). |
+| Finding faces | **YuNet** (OpenCV model zoo) | under 1 MB | Built only for finding faces; fast without a graphics card. |
+| Telling faces apart | **SFace** (OpenCV model zoo) | 39 MB | Turns a face into 128 numbers; the same person's faces get similar numbers, so your performers can be recognised. A language model can't recognise *your* performers. |
+| Look-alike tags | **CLIP ViT-B/32** (OpenAI), as a picture-only ONNX file | 350 MB | Turns a whole picture into 512 numbers describing what's in it (setting, clothes, poses, style), so the plugin can find the items you've already tagged that look most alike. The smallest standard CLIP model; well under a second a picture. |
+| Body tags | **NudeNet 320n** | 12 MB | A detector made for exactly this: which body parts are shown, and where. Fast and much more consistent than asking a general model. |
+
+**Why not a bigger AI model?** Bigger models (e.g. `gemma3:12b` or `27b`) are more accurate but 3–7
+times slower and need 8–20+ GB of memory. With thousands of items, that turns hours into days. The
+plugin instead keeps the small model to what it does well and checks its work:
+
+- **Tags:** on its own, the AI's tags matched the ones you'd have given only 8–20% of the time
+  (tested on 64 tagged items). So it can only pick from your own tag list, and its picks are only
+  kept when look-alikes back them up: 70–78% right. Look-alike tags alone (no AI) were 79–85%
+  right for items like ones you've tagged.
+- **Account names in watermarks:** asked for an account name directly, small models make up
+  plausible ones (even for a video with no text in it). So the model is only asked to copy out the
+  text it sees, the names are picked out of that text by the plugin, and a name needs two frames
+  to agree.
+- **No example answers in its instructions:** small models copy them (e.g. reporting the example
+  tattoo for everyone), so the instructions never include any.
+
+You can try another model with **AI: model** (any Ollama model that can see pictures, e.g.
+`gemma3:12b`); only `gemma3:4b` has been tested.
+
+**Licences:** Gemma 3 is under Google's Gemma terms, CLIP under MIT, and YuNet and SFace come from
+OpenCV's model zoo. NudeNet is **AGPL-3.0**, so it isn't included: `setup.sh --body` downloads it
+from NudeNet's official Python package (version 3.4.2) on your own computer.
 
 ## While editing
 
@@ -199,7 +281,9 @@ you change them here.
   about 15), so doing thousands of items takes hours. It gets most things right but not all: check
   the previews, and use the **Ask AI** buttons where accuracy matters.
 - ffmpeg for video frames (the one Stash uses; the official Docker image includes it).
-- The face helper (see Setup), only for **Faces**.
+- The face helper (see [Setup](#2-the-face-helper-faces-look-alike-tags-body-tags)), only for
+  faces, look-alike tags and body tags.
 - The code is in `btt_core.py`, the same file Better Tagging Tools ships, so each plugin works on
   its own. Small files in the plugin's folder remember what's been done; deleting them is safe.
 - Works with any theme.
+- Changes are listed in the [changelog](CHANGELOG.md).
