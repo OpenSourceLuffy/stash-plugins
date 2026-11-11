@@ -32,9 +32,10 @@ works on its own.
   and save.
 - **Faces** row under the **Performers** box (scenes and images): **Find performers by face** compares
   the faces in it (6 frames of a scene, or the image) with your performers' and shows the closest as
-  one-click chips with their picture and how alike they are, e.g. `+ Jane Doe 56% ✓`. ✓ marks a confident match;
-  without it, check it's really them. Nothing is added until you click and save; **✕ Hide** puts the
-  suggestions away again.
+  chips with their picture and how alike they are, e.g. `+ Jane Doe 56% ✓`. ✓ marks a confident match;
+  without it, check it's really them. With a mouse, hover over one to see a bigger picture and click
+  to add; on a phone, tap one to see the bigger picture, then **+ Add** (or **✕ Close**). Nothing is
+  saved until you save; **✕ Hide** puts the suggestions away again.
 - **Ask AI for details** when editing a performer: suggests hair colour, eye colour, tattoos and
   piercings from their pictures. Click one to put it in its box (then **Save**).
 - **AI titles** row under the **Title** box (scenes, images and galleries): **Ask AI for titles**

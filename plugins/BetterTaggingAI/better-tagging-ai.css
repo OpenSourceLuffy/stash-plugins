@@ -223,3 +223,71 @@
 .bta-faces .bta-hide {
   opacity: 0.75;
 }
+
+/* bigger picture of a suggested performer: on hover (mouse), or after a tap
+   (phone) with "+ Add" / "✕ Close". A dark card, so it reads the same on
+   light and dark themes. */
+.bta-faces {
+  position: relative;
+}
+.bta-faces .bta-peeking {
+  border-style: solid;
+  background: rgba(19, 124, 189, 0.25);
+}
+.bta-face-peek {
+  flex: 1 1 100%;
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 10px;
+  border-radius: 12px;
+  background: #1c2228;
+  color: #f5f8fa;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+}
+.bta-face-peek img {
+  width: 150px;
+  height: 200px;
+  object-fit: cover;
+  object-position: top;
+  border-radius: 8px;
+  flex: none;
+  background: rgba(128, 128, 128, 0.25);
+}
+.bta-peek-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.85rem;
+  min-width: 0;
+}
+.bta-peek-text strong {
+  font-size: 1rem;
+  overflow-wrap: anywhere;
+}
+.bta-peek-hint {
+  opacity: 0.7;
+}
+.bta-peek-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.bta-face-peek .pts-chip {
+  color: inherit;
+}
+/* with a mouse it floats under the row, so nothing moves while you hover */
+.bta-face-peek.bta-hover {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  width: max-content;
+  max-width: min(420px, 100%);
+  pointer-events: none;
+}
+.bta-face-peek.bta-hover img {
+  width: 180px;
+  height: 240px;
+}

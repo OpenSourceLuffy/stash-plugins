@@ -137,11 +137,36 @@
   function FaceRow({ values, onSelect }) {
     const m = location.pathname.match(ITEM_PAGE);
     const [st, setSt] = React.useState({ state: "idle" });
+    // the performer whose bigger picture is showing: on hover with a mouse,
+    // or after a tap on a phone (where a tap shows it, and "+ Add" adds)
+    const [peek, setPeek] = React.useState(null);
+    const [hovering, setHovering] = React.useState(false); // peek came from a mouse hover
+    const lastPointer = React.useRef("mouse");
+    const lastTouch = React.useRef(0);
+    // phones send made-up mouse events after a tap (and when the page
+    // scrolls under a finger): only a real mouse may hover
+    const realMouse = (e) =>
+      e.pointerType === "mouse" && Date.now() - lastTouch.current > 1500 &&
+      !(window.matchMedia && window.matchMedia("(hover: none)").matches);
+    const peekRef = React.useRef(null);
+    // a tapped card can open under the phone's bottom bar: bring it into view
+    React.useEffect(() => {
+      if (peek && !hovering && peekRef.current) {
+        const bar = document.querySelector(".mui-bottom-nav");
+        const r = peekRef.current.getBoundingClientRect();
+        const bottom = window.innerHeight - (bar ? bar.offsetHeight : 0) - 8;
+        if (r.bottom > bottom) window.scrollBy({ top: r.bottom - bottom, behavior: "smooth" });
+      }
+    }, [peek, hovering]);
     const key = m ? m[1] + m[2] : "";
-    React.useEffect(() => setSt({ state: "idle" }), [key]);
+    React.useEffect(() => {
+      setSt({ state: "idle" });
+      setPeek(null);
+    }, [key]);
     if (!m) return null;
 
     async function go() {
+      setPeek(null);
       setSt({ state: "loading" });
       try {
         const out = await ask({ mode: "face_suggest", kind: m[1] === "scenes" ? "scene" : "image", id: m[2] });
@@ -154,6 +179,7 @@
     const have = new Set((values || []).map((p) => String(p.id)));
     const cands = st.state === "done" ? st.cands.filter((c) => !have.has(String(c.id))) : [];
     const add = (c) => {
+      setPeek(null);
       onSelect([...(values || []), { id: String(c.id), name: c.name, disambiguation: null, alias_list: [], image_path: null }]);
       // you've said it's them: remember that face as theirs too
       ask({ mode: "face_confirm", performer: c.id, emb: c.emb }).catch(() => {});
@@ -173,18 +199,48 @@
         h("span", { className: "pts-ai-note" }, st.cands.length ? "Everyone it found is already added" : "No one it knows"),
       cands.map((c) =>
         h("button", {
-          key: c.id, type: "button", className: "pts-chip bta-face-chip" + (c.sure ? " bta-sure" : ""),
-          title: `${c.score}% alike` + (m[1] === "scenes" ? `, closest match in ${c.pictures} of the frames` : "") +
-            (c.sure ? " - a confident match" : " - check it's really them"),
-          onClick: () => add(c),
+          key: c.id, type: "button",
+          className: "pts-chip bta-face-chip" + (c.sure ? " bta-sure" : "") + (peek && peek.id === c.id ? " bta-peeking" : ""),
+          onPointerDown: (e) => {
+            lastPointer.current = e.pointerType;
+            if (e.pointerType !== "mouse") lastTouch.current = Date.now();
+          },
+          onPointerEnter: (e) => {
+            if (e.pointerType !== "mouse") lastTouch.current = Date.now();
+            if (!realMouse(e)) return;
+            lastPointer.current = "mouse";
+            setHovering(true);
+            setPeek(c);
+          },
+          onPointerLeave: (e) => {
+            if (realMouse(e) && hovering) setPeek((p) => (p && p.id === c.id ? null : p));
+          },
+          // a mouse click adds; a tap (finger / pen) shows the bigger picture first
+          onClick: () => {
+            if (lastPointer.current === "mouse") return add(c);
+            setHovering(false);
+            setPeek((p) => (p && p.id === c.id ? null : c));
+          },
         },
           h("img", { className: "bta-face-pic", src: `/performer/${c.id}/image`, alt: "", loading: "lazy" }),
           h("span", null, "+ " + c.name + " " + c.score + "%" + (c.sure ? " ✓" : "")))
       ),
       // put the suggestions away again (the button comes back)
       (st.state === "done" || st.state === "error") &&
-        h("button", { type: "button", className: "pts-chip bta-hide", onClick: () => setSt({ state: "idle" }),
-          title: "Hide these suggestions" }, "✕ Hide")
+        h("button", { type: "button", className: "pts-chip bta-hide", onClick: () => { setPeek(null); setSt({ state: "idle" }); },
+          title: "Hide these suggestions" }, "✕ Hide"),
+      peek && cands.some((c) => c.id === peek.id) &&
+        h("div", { ref: peekRef, className: "bta-face-peek" + (hovering ? " bta-hover" : "") },
+          h("img", { src: `/performer/${peek.id}/image`, alt: peek.name }),
+          h("div", { className: "bta-peek-text" },
+            h("strong", null, peek.name),
+            h("span", null, `${peek.score}% alike` + (m[1] === "scenes" ? `, closest in ${peek.pictures} of the frames` : "")),
+            h("span", null, peek.sure ? "✓ A confident match" : "Check it's really them"),
+            hovering
+              ? h("span", { className: "bta-peek-hint" }, "Click to add")
+              : h("div", { className: "bta-peek-buttons" },
+                  h("button", { type: "button", className: "pts-chip bta-sure", onClick: () => add(peek) }, "+ Add " + peek.name),
+                  h("button", { type: "button", className: "pts-chip", onClick: () => setPeek(null) }, "✕ Close"))))
     );
   }
 
