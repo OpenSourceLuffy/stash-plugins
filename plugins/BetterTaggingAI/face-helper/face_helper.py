@@ -30,7 +30,7 @@ RECOGNIZER = os.path.join(HERE, "models", "face_recognition_sface_2021dec.onnx")
 MAX_SIDE = 1280      # bigger pictures are scaled down first (faster, same result)
 MIN_FACE = 40        # px; smaller faces are too blurry to recognise
 MAX_FACES = 8        # per picture, biggest first
-MAX_BODY = 60 * 1024 * 1024
+MAX_BODY = 300 * 1024 * 1024
 
 _lock = threading.Lock()
 _detector = cv2.FaceDetectorYN.create(DETECTOR, "", (320, 320), 0.8, 0.3, 5000)
@@ -86,7 +86,15 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(404, {"error": "not found"})
         length = int(self.headers.get("Content-Length") or 0)
         if length <= 0 or length > MAX_BODY:
-            return self._send(400, {"error": "no body, or too big"})
+            # read (and drop) what was sent first, so the sender gets the answer
+            # instead of a broken connection
+            left = length
+            while left > 0:
+                chunk = self.rfile.read(min(left, 1 << 20))
+                if not chunk:
+                    break
+                left -= len(chunk)
+            return self._send(413, {"error": "no body, or too big"})
         try:
             req = json.loads(self.rfile.read(length))
             results = [faces_in(base64.b64decode(b)) for b in req.get("images") or []]

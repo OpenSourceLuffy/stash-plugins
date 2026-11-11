@@ -2707,6 +2707,7 @@ FACE_MAX_CONF = 12     # ... and from accepted matches
 FACE_SAME_AS_PROFILE = 0.45  # a tagged face must be this alike to count as them
 FACE_MARGIN = 0.05     # a confident match is this far ahead of anyone else
 FACE_DUPLICATE_MIN = 0.55
+FACE_MAX_IMAGE_BYTES = 15 * 1024 * 1024
 FACE_LOOKALIKE_MIN = 0.45  # "Might also be in" lists the whole library, so it's stricter
 
 
@@ -2717,8 +2718,13 @@ def face_helper(cfg, pictures):
     try:
         with urllib.request.urlopen(req, timeout=120) as resp:
             return json.loads(resp.read())["results"]
+    except urllib.error.HTTPError as e:
+        raise ValueError(f"the face helper couldn't read it ({e.code})")  # this item only
     except urllib.error.URLError as e:
-        raise RuntimeError(f"can't reach the face helper at {cfg['ai']['face_url']} ({e.reason if hasattr(e, 'reason') else e}). "
+        reason = getattr(e, "reason", e)
+        if isinstance(reason, (BrokenPipeError, ConnectionResetError)):
+            raise ValueError(f"the face helper dropped it ({reason})")  # e.g. too big: this item only
+        raise RuntimeError(f"can't reach the face helper at {cfg['ai']['face_url']} ({reason}). "
                            "Is it running? See the add-on's README.")
 
 
@@ -2824,6 +2830,8 @@ def item_face_pictures(stash, kind, item):
         if not all(f["__typename"] == "ImageFile" for f in item.get("visual_files") or []):
             return []
         data, ctype = stash.fetch(item["paths"]["image"])
+        if len(data) > FACE_MAX_IMAGE_BYTES:  # a huge photo: its thumbnail is plenty
+            data, ctype = stash.fetch(item["paths"]["thumbnail"])
         return [data] if ctype.startswith("image/") else []
     f = (item.get("files") or [None])[0]
     if not f or not (f.get("duration") or 0) > 1:
