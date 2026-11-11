@@ -1,6 +1,6 @@
 name: Better Tagging Tools
 description: Tags each performer and studio with the tags used most often in their scenes, images and galleries, and each gallery with its images' most used tags, shows one-click "Suggested tags" and "Title ideas" when editing, and adds "Bulk tag" buttons on performer and gallery pages. Can also tag every image in a gallery with the gallery's name, give tags without a picture one from your library, keep tag names consistently capitalised, auto tag from file names, fill in dates and titles from file names, and give scenes a studio from the account link in their file name. No AI - for that, add Better Tagging AI (works with or without this plugin).
-version: "2.1"
+version: "2.2"
 url: https://github.com/OpenSourceLuffy/stash-plugins/tree/main/plugins/BetterTaggingTools
 exec:
   - python
@@ -98,6 +98,14 @@ tasks:
     description: Gives every image in every gallery a tag named after its gallery (its title, or the zip or folder name), creating the tags as needed. Use it once to catch up existing galleries; the setting below keeps new ones tagged.
     defaultArgs:
       mode: gallerynames
+  - name: Preview gallery tags on images (no changes)
+    description: Writes what "Tag gallery images with the gallery's tags" would add to the log, without changing anything.
+    defaultArgs:
+      mode: gallerytags_preview
+  - name: Tag gallery images with the gallery's tags
+    description: Gives every image in a gallery the tags that gallery has. Tags are only added, never removed. Top tags this plugin added to a gallery (counted from its images) aren't copied back down.
+    defaultArgs:
+      mode: gallerytags
 
 settings:
   topTagCount:

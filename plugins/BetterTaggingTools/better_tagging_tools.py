@@ -30,6 +30,8 @@ def main():
             c.run_bulktag(stash, args)
         elif mode == "gallerynames":
             c.run_gallery_all(stash, plugin_dir)
+        elif mode in ("gallerytags", "gallerytags_preview"):
+            c.run_gallery_tags_to_images(stash, plugin_dir, preview=mode == "gallerytags_preview")
         elif mode == "tagpictures":
             c.run_tag_pictures(stash, plugin_dir)
         elif mode == "uniquepictures":

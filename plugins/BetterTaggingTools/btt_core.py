@@ -791,6 +791,50 @@ def run_gallery_all(stash, plugin_dir):
     log("info", f"Done: checked {len(galleries)} galleries, tagged {tagged} image(s) with their gallery's name.")
 
 
+UNDERAGE_TAGS = {"lolicon", "loli", "shotacon", "shota", "toddlercon"}
+
+
+def run_gallery_tags_to_images(stash, plugin_dir, preview=False):
+    """Task: give every image in a gallery the tags on that gallery. Top tags
+    this plugin put on the gallery (counted from its images) aren't copied
+    back down, or a tag on a few images would spread to all of them."""
+    with locked_record(plugin_dir) as record:
+        auto = {k.split(":", 1)[1]: set(v) for k, v in record.items() if k.startswith("gallery:")}
+    galleries = stash.call(
+        "{ findGalleries(gallery_filter: {tag_count: {value: 0, modifier: GREATER_THAN}}, filter: {per_page: -1})"
+        " { galleries { id title files { basename } folder { path } image_count tags { id name } } } }"
+    )["findGalleries"]["galleries"]
+    total, changed = 0, 0
+    for n, g in enumerate(galleries):
+        name = gallery_name(g) or f"gallery {g['id']}"
+        if any(t["name"].strip().lower() in UNDERAGE_TAGS for t in g["tags"]):
+            log("warning", f'"{name}": skipped - tagged as sexual content involving minors')
+            continue
+        skip = auto.get(str(g["id"]), set())
+        added = []
+        for t in g["tags"]:
+            if t["id"] in skip:
+                continue
+            missing = item_ids(stash, "images", {
+                "galleries": {"value": [g["id"]], "modifier": "INCLUDES"},
+                "tags": {"value": [t["id"]], "modifier": "EXCLUDES"},
+            })
+            if not missing:
+                continue
+            if not preview:
+                bulk_images(stash, missing, t["id"], "ADD")
+            added.append(f"{t['name']} ({len(missing)})")
+            total += len(missing)
+        if added:
+            changed += 1
+            log("info", f'"{name}": {"would add" if preview else "added"} {", ".join(added)}')
+        progress((n + 1) / max(len(galleries), 1))
+    if preview:
+        log("info", f"Preview done: {changed} of {len(galleries)} tagged galleries would add {total} tag(s) to their images. Nothing was saved.")
+    else:
+        log("info", f"Done: {changed} of {len(galleries)} tagged galleries added {total} tag(s) to their images.")
+
+
 # --- tag pictures ---------------------------------------------------------
 # Tags without a picture get one from the library: the best photo with that
 # tag (highest rated of the ones with the fewest other tags, i.e. most
