@@ -703,6 +703,10 @@
       ...(props.extraOperations || []),
       { ...open, text: "Bulk tag images…", icon: tagsIcon },
       { ...open, text: "Bulk tag images…" },
+      {
+        text: "Tag images with this gallery's tags, performers & studio",
+        onClick: () => requestAutotag("gallery", [String(gallery.id)], "gallerytags"),
+      },
     ];
     return [Object.assign({}, props, { extraOperations: extra }), ...args.slice(1)];
   });
@@ -1013,12 +1017,13 @@
   // doesn't let plugins add to the page menus, so the item is put in whenever
   // the menu appears. A small component in the nav bar shows the results.
   const AUTOTAG_ITEM_TEXT = "Auto tag this (from file name)";
+  const GALLERY_COPY_TEXT = "Tag images with this gallery's tags, performers & studio";
   const LIST_LIMIT = 500; // more than this runs as a background task
   const autotag = { request: null, listeners: new Set(), host: null };
   const KIND_BY_PATH = { scenes: "scene", images: "image", galleries: "gallery" };
 
-  function requestAutotag(kind, ids) {
-    autotag.request = { kind, ids: ids.map(String) };
+  function requestAutotag(kind, ids, action) {
+    autotag.request = { kind, ids: ids.map(String), action: action || "autotag" };
     autotag.listeners.forEach((fn) => fn());
   }
 
@@ -1082,10 +1087,25 @@
         const now = location.pathname.match(/^\/(scenes|images|galleries)\/(\d+)/);
         if (now) requestAutotag(KIND_BY_PATH[now[1]], [now[2]]);
       });
+      const items = [item];
+      if (m[1] === "galleries") {
+        // copy the gallery's tags, performers and studio to its images
+        const copy = document.createElement("a");
+        copy.href = "#";
+        copy.setAttribute("role", "button");
+        copy.className = "dropdown-item bg-secondary text-white bt-autotag-item";
+        copy.textContent = GALLERY_COPY_TEXT;
+        copy.addEventListener("click", (e) => {
+          e.preventDefault();
+          toggle.click(); // close the menu
+          const now = location.pathname.match(/^\/galleries\/(\d+)/);
+          if (now) requestAutotag("gallery", [now[1]], "gallerytags");
+        });
+        items.push(copy);
+      }
       // above Delete, which stays last
       const del = [...menu.querySelectorAll(".dropdown-item")].find((el) => /^delete/i.test(el.textContent.trim()));
-      if (del) del.before(item);
-      else menu.appendChild(item);
+      items.forEach((el) => (del ? del.before(el) : menu.appendChild(el)));
     });
   }
 
@@ -1128,10 +1148,27 @@
           Toast.error(e);
         }
       };
+      // copy galleries' tags, performers and studio to their images: a task,
+      // as big galleries take a while
+      const copyGallery = async (ids) => {
+        const what = ids.length === 1 ? "this gallery's" : `${ids.length} galleries'`;
+        try {
+          await gql("mutation($p: ID!, $d: String, $a: Map) { runPluginTask(plugin_id: $p, description: $d, args_map: $a) }", {
+            p: PLUGIN_ID,
+            d: `Better Tagging Tools: tag images with ${what} tags, performers & studio`,
+            a: { mode: "gallerytags", gallery_ids: ids.join(",") },
+          });
+          Toast.success(`Tagging images with ${what} tags, performers & studio. You can follow it under Settings → Tasks.`);
+        } catch (e) {
+          Toast.error(e);
+        }
+      };
       const fn = () => {
         const req = autotag.request;
         autotag.request = null;
-        if (req && req.ids.length) run(req);
+        if (!req || !req.ids.length) return;
+        if (req.action === "gallerytags") copyGallery(req.ids);
+        else run(req);
       };
       autotag.listeners.add(fn);
       return () => {
@@ -1157,7 +1194,14 @@
         isDisplayed: (result, filter, selectedIds) => !!selectedIds && selectedIds.size > 0,
         onClick: (result, filter, selectedIds) => requestAutotag(kind, [...(selectedIds || [])]),
       };
-      return [Object.assign({}, props, { extraOperations: [...(props.extraOperations || []), op] }), ...args.slice(1)];
+      const ops = [op];
+      if (kind === "gallery")
+        ops.push({
+          text: "Tag images with their gallery's tags, performers & studio",
+          isDisplayed: (result, filter, selectedIds) => !!selectedIds && selectedIds.size > 0,
+          onClick: (result, filter, selectedIds) => requestAutotag("gallery", [...(selectedIds || [])], "gallerytags"),
+        });
+      return [Object.assign({}, props, { extraOperations: [...(props.extraOperations || []), ...ops] }), ...args.slice(1)];
     });
   }
 
@@ -1261,7 +1305,9 @@
       ["Give tags without a picture one from your library", "Give tags that share a picture their own",
        "Give every tag a new picture (replaces existing ones)"]],
     ["tidy", "Tidy up tags", "Capitalisation and gallery-name tags",
-      ["Preview tag name capitalisation (no changes)", "Capitalise tag names", "Tag gallery images with the gallery's name"]],
+      ["Preview tag name capitalisation (no changes)", "Capitalise tag names", "Tag gallery images with the gallery's name",
+       "Preview gallery tags, performers and studio on images (no changes)",
+       "Tag gallery images with the gallery's tags, performers and studio"]],
   ];
   const GROUP_OF = new Map();
   TASK_GROUPS.forEach(([key], g) => TASK_GROUPS[g][3].forEach((name) => GROUP_OF.set(name, key)));

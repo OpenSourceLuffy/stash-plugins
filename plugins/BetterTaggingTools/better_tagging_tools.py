@@ -31,7 +31,8 @@ def main():
         elif mode == "gallerynames":
             c.run_gallery_all(stash, plugin_dir)
         elif mode in ("gallerytags", "gallerytags_preview"):
-            c.run_gallery_tags_to_images(stash, plugin_dir, preview=mode == "gallerytags_preview")
+            ids = [i for i in str(args.get("gallery_ids") or "").split(",") if i]
+            c.run_gallery_tags_to_images(stash, plugin_dir, preview=mode == "gallerytags_preview", gallery_ids=ids or None)
         elif mode == "tagpictures":
             c.run_tag_pictures(stash, plugin_dir)
         elif mode == "uniquepictures":

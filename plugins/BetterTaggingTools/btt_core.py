@@ -670,6 +670,8 @@ def without_studio(name, studio):
         core = r"[\s_.\-]*".join(re.escape(w) for w in words)
         # the name, with any brackets round it, as whole words
         out = re.sub(r"[\[(\{]\s*" + core + r"\s*[\])\}]|(?<![^\W_])" + core + r"(?![^\W_])", " ", out, flags=re.I)
+    if out == name:  # the studio isn't in it: leave the name exactly as it is
+        return name
     out = re.sub(r"\s+", " ", out)
     out = re.sub(r"(\s*[-|:~,]\s*){2,}", " - ", out)  # "A -  - B" left where the name was
     out = re.sub(r"^[\s\-_|:~,.]+|[\s\-_|:~,]+$", "", out)
@@ -817,17 +819,22 @@ def run_gallery_all(stash, plugin_dir):
 UNDERAGE_TAGS = {"lolicon", "loli", "shotacon", "shota", "toddlercon"}
 
 
-def run_gallery_tags_to_images(stash, plugin_dir, preview=False):
+def run_gallery_tags_to_images(stash, plugin_dir, preview=False, gallery_ids=None):
     """Task: give every image in a gallery the gallery's tags and performers,
     and its studio if the image has none (a studio already set is kept).
+    gallery_ids: only these galleries (from the gallery page / list).
     Top tags this plugin put on the gallery (counted from its images) aren't
     copied back down, or a tag on a few images would spread to all of them."""
     with locked_record(plugin_dir) as record:
         auto = {k.split(":", 1)[1]: set(v) for k, v in record.items() if k.startswith("gallery:")}
     galleries = stash.call(
-        "{ findGalleries(filter: {per_page: -1}) { galleries { id title files { basename } folder { path }"
-        " tags { id name } performers { id name } studio { id name } } } }"
+        "query($ids: [ID!]) { findGalleries(ids: $ids, filter: {per_page: -1}) { galleries { id title files { basename }"
+        " folder { path } tags { id name } performers { id name } studio { id name aliases } } } }",
+        {"ids": gallery_ids or None},
     )["findGalleries"]["galleries"]
+    if gallery_ids and not any(g["tags"] or g["performers"] or g["studio"] for g in galleries):
+        log("info", "Nothing to copy: the gallery has no tags, performers or studio.")
+        return
     galleries = [g for g in galleries if g["tags"] or g["performers"] or g["studio"]]
     totals = Counter()
     changed = 0

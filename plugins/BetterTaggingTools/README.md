@@ -271,7 +271,7 @@ Under **Settings → Plugins → Better Tagging Tools**:
 | Refresh galleries' top tags on edit | Recount a gallery when its photos' tags change or photos move into it. |
 | Tag gallery images with the gallery's name | See above. |
 | Preview gallery tags, performers and studio on images (no changes) | Writes what the task below would add to the log. |
-| Tag gallery images with the gallery's tags, performers and studio | Gives every image in a gallery the gallery's tags and performers, and its studio if the image has none yet (only adds, never removes or replaces). Top tags this plugin put on a gallery aren't copied back down, and galleries tagged as sexual content involving minors (lolicon, shotacon...) are skipped. |
+| Tag gallery images with the gallery's tags, performers and studio | Gives every image in a gallery the gallery's tags and performers, and its studio if the image has none yet (only adds, never removes or replaces). Top tags this plugin put on a gallery aren't copied back down, and galleries tagged as sexual content involving minors (lolicon, shotacon...) are skipped. For one gallery, use **Tag images with this gallery's tags, performers & studio** in the gallery's image list "…" menu or its ⋮ menu; for several, select them in the Galleries list and use the same entry in its "…" menu. |
 | Parent tag for gallery-name tags | Optional; files the gallery-name tags under one tag, e.g. `Galleries`. |
 | Give tags a picture automatically | See above. |
 | Capitalise new tags automatically | See "Tag names" above. |
