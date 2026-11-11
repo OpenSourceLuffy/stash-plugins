@@ -93,7 +93,7 @@ image has none yet.
 - It only adds: nothing is taken off, and a studio an image already has is kept.
 - Tags this plugin added to a gallery as its top tags (counted from its images) aren't copied back
   down, or a tag on a few images would spread to all of them.
-- Galleries tagged as sexual content involving minors (lolicon, shotacon and the like) are skipped.
+- Galleries tagged as sexual content involving minors are skipped.
 - It runs as a background job; follow it under **Settings → Tasks**.
 
 ## Tag pictures
