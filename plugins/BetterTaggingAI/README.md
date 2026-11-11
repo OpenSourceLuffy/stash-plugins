@@ -67,10 +67,17 @@ close. Each section starts with a preview that only writes to the log.
   links in the file name, title, details or URLs, and from the watermark and on-screen text the
   model reads in up to 6 frames. It only transcribes the text (asked for names directly, small models
   tend to make one up), and a name only counts if two frames agree, so one-off misreads are ignored.
+- A name read in a watermark that's a near miss of a studio or performer you have (`f1nnster` or
+  `flnn5ter` for *f1nn5ter*; letters that look alike, like 1/l/i, 0/o and 5/s, count as the same) is
+  taken as that one, so misreads don't make extra studios. A new name read only in watermarks gets a
+  studio once it's been read in a second scene too; the earlier scene then gets it as well. Names from
+  links in the file name, title, details or URLs are used straight away.
 - The names of studios you already have count too, e.g. `studioname.com` for *Studio Name*
   (symbols count, so *PORN+* needs the `+`); that studio is used first. Otherwise a studio is made for
   the account, with its profile link, under a parent studio for the platform (**OnlyFans**,
-  **Fansly**, **Instagram** or **TikTok**). A scene that has a studio never gets a different one.
+  **Fansly**, **Instagram** or **TikTok**). The platform studios are set to be ignored by Auto Tag, so
+  Stash's Auto Tag and Identify don't give them to every file with "OnlyFans" in its name. A scene that
+  has a studio never gets a different one.
 - Account names, and performers' names read in the watermark, that match a performer (name, alias
   or profile link) add that performer. Performers are only ever added.
 - About 5–15 seconds per scene; scenes already looked at are skipped next time.

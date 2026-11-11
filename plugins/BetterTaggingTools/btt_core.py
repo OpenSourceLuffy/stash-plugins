@@ -2446,10 +2446,11 @@ def name_patterns(name):
     return [re.compile(r"(?<![a-z0-9])" + re.escape(v) + r"(?![a-z0-9])") for v in variants if v]
 
 
-def accounts_context(stash):
+def accounts_context(stash, plugin_dir=None):
     """What a scan matches against, loaded once per run: all studios, the
-    existing studios whose name could show up as a watermark, and the
-    performers by name / alias / profile link."""
+    existing studios whose name could show up as a watermark, the
+    performers by name / alias / profile link, and account names read in
+    one scene's watermark so far (waiting for a second scene)."""
     studios = stash.call("{ findStudios(filter: {per_page: -1}) { studios { id name aliases urls } } }")["findStudios"]["studios"]
     platform_names = {v[0].lower() for v in PLATFORMS.values()}
     marks = []  # (pattern, studio)
@@ -2469,7 +2470,126 @@ def accounts_context(stash):
             # names worth looking for in a watermark: two words, or 6+ letters
             if len(k) >= 6 or len([w for w in (n or "").split() if len(w) >= 2]) >= 2:
                 perf_marks += [(pat, p) for pat in name_patterns(n)]
-    return {"studios": studios, "marks": marks, "perf_keys": by_key, "perfs": perfs, "perf_marks": perf_marks}
+    pending_path = os.path.join(plugin_dir, "handle_pending.json") if plugin_dir else None
+    pending = {}
+    if pending_path:
+        try:
+            with open(pending_path) as fh:
+                pending = json.load(fh)
+        except (OSError, ValueError):
+            pending = {}
+    return {"studios": studios, "marks": marks, "perf_keys": by_key, "perfs": perfs, "perf_marks": perf_marks,
+            "pending": pending, "pending_path": pending_path}
+
+
+# Watermarks read by a small model come out slightly wrong now and then
+# ("f1nnster", "flnn5ter", "Ann5ter" for f1nn5ter). A name read off frames is
+# compared with the studios and performers you have, letters that look alike
+# counted as the same, and a near miss is taken as that one.
+OCR_LOOKALIKE = str.maketrans({"0": "o", "1": "l", "i": "l", "5": "s", "3": "e", "8": "b"})
+
+
+def ocr_key(name):
+    return re.sub(r"[^a-z0-9]", "", (name or "").lower()).translate(OCR_LOOKALIKE)
+
+
+def edit_distance(a, b, most):
+    """Letters to change, add or drop to turn a into b (most + 1 if more)."""
+    if abs(len(a) - len(b)) > most:
+        return most + 1
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        if min(cur) > most:
+            return most + 1
+        prev = cur
+    return prev[-1]
+
+
+def misread_allowance(a, b):
+    """How far off a misread may be: none for short names (under 5
+    letters), 1 letter for names of 5-6, 2 for longer ones."""
+    n = min(len(a), len(b))
+    return 0 if n < 5 else 1 if n < 7 else 2
+
+
+def known_name_for(ctx, handle):
+    """("studio", studio) or ("performer", performer) whose name or alias
+    the handle (read off frames) most likely is, or None. A studio wins over
+    a performer at the same distance; two different studios (or performers)
+    equally close mean it can't be told, so None."""
+    key = ocr_key(handle)
+    if len(key) < 2:
+        return None
+    platform_names = {v[0].lower() for v in PLATFORMS.values()}
+    cands = []  # (distance, kind order, kind, thing)
+    for st in ctx["studios"]:
+        if st["name"].lower() in platform_names:
+            continue
+        for n in [st["name"]] + (st.get("aliases") or []):
+            k = ocr_key(n)
+            if len(k) >= 4 or k == key:
+                d = edit_distance(key, k, misread_allowance(key, k))
+                if d <= misread_allowance(key, k):
+                    cands.append((d, 0, "studio", st))
+    for p in ctx["perfs"]:
+        for n in [p["name"]] + (p.get("alias_list") or []):
+            k = ocr_key(n)
+            if len(k) >= 4 or k == key:
+                d = edit_distance(key, k, misread_allowance(key, k))
+                if d <= misread_allowance(key, k):
+                    cands.append((d, 1, "performer", p))
+    if not cands:
+        return None
+    cands.sort(key=lambda c: (c[0], c[1]))
+    best = cands[0]
+    rivals = {c[3]["id"] for c in cands if c[:2] == best[:2]}
+    return (best[2], best[3]) if len(rivals) == 1 else None
+
+
+def pending_handle(stash, ctx, platform, handle, scene, apply):
+    """An account name read only in this scene's watermark, matching nothing
+    you have. It gets a studio once it's been read in a second scene (any
+    near spelling counts; the most read spelling is used), which the earlier
+    scenes then get too. Returns (studio or None, new, scenes waiting)."""
+    pend = ctx["pending"] if apply else json.loads(json.dumps(ctx["pending"]))
+    key = ocr_key(handle)
+    match = next((k for k in pend if edit_distance(key, k, misread_allowance(key, k)) <= misread_allowance(key, k)), None)
+    if match is None:
+        match = key
+        pend[key] = {"platform": platform, "spellings": {}, "scenes": []}
+    e = pend[match]
+    if scene["id"] not in e["scenes"]:
+        e["scenes"].append(scene["id"])
+    e["spellings"][handle] = e["spellings"].get(handle, 0) + 1
+    if len(e["scenes"]) < 2:
+        if apply:
+            save_pending(ctx)
+        return None, False, e["scenes"]
+    spelling = max(e["spellings"].items(), key=lambda kv: kv[1])[0]
+    st, new = studio_for_handle(stash, ctx["studios"], e["platform"], spelling, apply)
+    earlier = [i for i in e["scenes"] if i != scene["id"]]
+    if apply:
+        still = stash.call("query($ids: [ID!]) { findScenes(ids: $ids, filter: {per_page: -1}) { scenes { id studio { id } } } }",
+                           {"ids": earlier})["findScenes"]["scenes"]
+        todo = [x["id"] for x in still if not x.get("studio")]
+        if todo:
+            stash.call("mutation($i: BulkSceneUpdateInput!) { bulkSceneUpdate(input: $i) { id } }",
+                       {"i": {"ids": todo, "studio_id": st["id"]}})
+        del pend[match]
+        save_pending(ctx)
+    return st, new, earlier
+
+
+def save_pending(ctx):
+    if not ctx.get("pending_path"):
+        return
+    tmp = ctx["pending_path"] + ".tmp"
+    with open(tmp, "w") as fh:
+        json.dump(ctx["pending"], fh)
+    os.replace(tmp, ctx["pending_path"])
 
 
 def performer_for_handle(ctx, platform, handle):
@@ -2558,6 +2678,13 @@ def process_scene_accounts(stash, cfg, ctx, scene, apply, use_ai=True):
     handles, mark_studios, mark_perfs = scene_accounts(stash, cfg, ctx, scene, use_ai)
     name = os.path.basename(item_path("scene", scene)) or f"scene {scene['id']}"
     parts, inp, new = [], {"id": scene["id"]}, False
+    # names read off frames may be misread: take a near match with what you have
+    known = {}  # handle -> ("studio" | "performer", thing)
+    for plat, handle, where in handles:
+        if not where.startswith("text"):
+            hit = known_name_for(ctx, handle)
+            if hit:
+                known[handle] = hit
     if not scene.get("studio"):
         if mark_studios:
             st, n = mark_studios[0]
@@ -2565,13 +2692,32 @@ def process_scene_accounts(stash, cfg, ctx, scene, apply, use_ai=True):
             inp["studio_id"] = st["id"]
         elif handles:
             plat, handle, where = handles[0]
-            st, new = studio_for_handle(stash, ctx["studios"], plat, handle, apply)
-            parts.append(f'studio "{st["name"]}"' + (f" (new, under {PLATFORMS[plat][0]})" if new else "")
-                         + f" [{PLATFORMS[plat][0]} @{handle}, from {where}]")
-            inp["studio_id"] = st["id"]
+            kind, thing = known.get(handle, (None, None))
+            src = f" [{PLATFORMS[plat][0]} @{handle}, from {where}"
+            if kind == "studio":
+                st = thing
+                parts.append(f'studio "{st["name"]}"' + src + ("" if st["name"] == handle else f', taken as "{st["name"]}"') + "]")
+                inp["studio_id"] = st["id"]
+            elif kind == "performer" or where.startswith("text"):
+                spelling = thing["name"] if kind == "performer" else handle
+                st, new = studio_for_handle(stash, ctx["studios"], plat, spelling, apply, with_url=kind != "performer")
+                parts.append(f'studio "{st["name"]}"' + (f" (new, under {PLATFORMS[plat][0]})" if new else "")
+                             + src + (f', taken as performer "{thing["name"]}"' if kind == "performer" else "") + "]")
+                inp["studio_id"] = st["id"]
+            else:  # a new name, only in this scene's watermark so far
+                st, new, earlier = pending_handle(stash, ctx, plat, handle, scene, apply)
+                if st:
+                    parts.append(f'studio "{st["name"]}"' + (f" (new, under {PLATFORMS[plat][0]})" if new else "")
+                                 + src + f", also read in {len(earlier)} earlier scene(s), which get it too]")
+                    inp["studio_id"] = st["id"]
+                else:
+                    log("info", f"{name}: read {PLATFORMS[plat][0]} @{handle} in the watermark; a studio is made "
+                        "once it's read in a second scene too (misreads rarely repeat)")
     have = {p["id"] for p in scene.get("performers") or []}
     add = []
-    for p in [performer_for_handle(ctx, plat, handle) for plat, handle, _ in handles] + mark_perfs:
+    by_handle = [known[h][1] if known.get(h, ("",))[0] == "performer" else performer_for_handle(ctx, plat, h)
+                 for plat, h, _ in handles]
+    for p in by_handle + mark_perfs:
         if p and p["id"] not in have and p["id"] not in [x["id"] for x in add]:
             add.append(p)
     if add:
@@ -2586,10 +2732,12 @@ def process_scene_accounts(stash, cfg, ctx, scene, apply, use_ai=True):
     return f'{"Would give" if not apply else "Gave"} {name} ' + " and ".join(parts) + (f"; also saw {others}" if others else ""), new
 
 
-def studio_for_handle(stash, studios, platform, handle, apply):
+def studio_for_handle(stash, studios, platform, handle, apply, with_url=True):
     """The studio for an account: an existing one with that name, alias or
     profile URL, else a new one under the platform's studio. `studios` is
-    the list of all studios (kept up to date)."""
+    the list of all studios (kept up to date). The platform's studio is set
+    to be ignored by Auto Tag, or every file with "OnlyFans" in its name
+    would get it."""
     parent_name, url_fmt, _ = PLATFORMS[platform]
     url = url_fmt.format(handle)
     low = handle.lower()
@@ -2602,10 +2750,10 @@ def studio_for_handle(stash, studios, platform, handle, apply):
     parent = next((st for st in studios if st["name"].lower() == parent_name.lower()), None)
     if not parent:
         parent = stash.call("mutation($i: StudioCreateInput!) { studioCreate(input: $i) { id name aliases urls } }",
-                            {"i": {"name": parent_name}})["studioCreate"]
+                            {"i": {"name": parent_name, "ignore_auto_tag": True}})["studioCreate"]
         studios.append(parent)
     st = stash.call("mutation($i: StudioCreateInput!) { studioCreate(input: $i) { id name aliases urls } }",
-                    {"i": {"name": handle, "urls": [url], "parent_id": parent["id"]}})["studioCreate"]
+                    {"i": {"name": handle, "parent_id": parent["id"], **({"urls": [url]} if with_url else {})}})["studioCreate"]
     studios.append(st)
     return st, True
 
@@ -2614,7 +2762,7 @@ def run_accounts_items(stash, plugin_dir, scene_ids):
     """New scenes from a scan: studio and performers from accounts."""
     cfg = settings(stash, plugin_dir)
     ai_check(cfg)
-    ctx = accounts_context(stash)
+    ctx = accounts_context(stash, plugin_dir)
     scenes = stash.call(f"query($ids: [ID!]) {{ findScenes(ids: $ids, filter: {{per_page: -1}}) {{ scenes {{ {HANDLE_SCENE_FIELDS} }} }} }}",
                         {"ids": scene_ids})["findScenes"]["scenes"]
     for sc in scenes:
@@ -2654,7 +2802,7 @@ def run_handle_studios(stash, plugin_dir, preview=False, limit=None, use_ai=True
         scenes = random.sample(scenes, min(limit, len(scenes)))
     elif use_ai:  # the AI pass skips scenes it has already looked at
         scenes = [s_ for s_ in scenes if s_["id"] not in done]
-    ctx = accounts_context(stash)
+    ctx = accounts_context(stash, plugin_dir)
     log("info", f"Looking for OnlyFans / Fansly / Instagram / TikTok accounts and studio watermarks in {len(scenes)} scene(s) without a studio"
         + (" (preview, nothing is saved)" if preview else "")
         + (". The AI reads up to 6 frames of each, so this takes a while; you can cancel it under Settings → Tasks and run it again to carry on."
