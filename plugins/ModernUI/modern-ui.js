@@ -87,10 +87,174 @@
   if (!cfg.stayOnEditAfterSave) setupBackToDetailsOnSave();
   setupVerticalPoster();
   if (!cfg.showGalleryDetails) setupGalleryPanelClosed();
+  if (!cfg.disableQuickFilters) setupQuickFilters();
 
   // the full-screen viewer swipes between images too, unless that's off
   const imageNav = cfg.disableImageSwipe ? null : setupImageSwipe();
   setupImageViewer(imageNav);
+
+  // ------------------------------------------------------------------
+  // Quick filters: a scrolling row of buttons between a list's toolbar
+  // (search box) and the filters in use, with the saved filters for the kind
+  // of list you're on. A button loads the filter through
+  // Stash's own saved-filter menu, so it works exactly like choosing it there.
+  // The one in use is highlighted until the filter, search or sort changes
+  // (pages, per-page and zoom don't count).
+  // ------------------------------------------------------------------
+  function setupQuickFilters() {
+    const MODES = {
+      "/scenes": "SCENES", "/images": "IMAGES", "/galleries": "GALLERIES", "/performers": "PERFORMERS",
+      "/studios": "STUDIOS", "/tags": "TAGS", "/groups": "GROUPS", "/scenes/markers": "SCENE_MARKERS",
+    };
+    const STORE = "mui-quick-filter";
+    const bar = document.createElement("nav");
+    bar.className = "mui-quick-filters";
+    bar.setAttribute("aria-label", "Quick filters");
+
+    let lists = {}; // mode -> [names], loaded per page visit
+    let shownFor = "";
+    let pending = null; // { mode, name, at } while a filter is loading
+    let lastHref = "";
+
+    const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+    const modeNow = () => MODES[location.pathname.replace(/\/+$/, "")] || null;
+    // the parts of the address that make up the filter itself
+    function filterKey(search) {
+      const params = new URLSearchParams(search);
+      ["p", "perPage", "disp", "z"].forEach((k) => params.delete(k));
+      return [...params.entries()].sort().map(([k, v]) => k + "=" + v).join("&");
+    }
+    function chosen() {
+      try { return JSON.parse(sessionStorage.getItem(STORE) || "{}"); } catch (e) { return {}; }
+    }
+    function remember(mode, name) {
+      const all = chosen();
+      all[mode] = { name, key: filterKey(location.search) };
+      try { sessionStorage.setItem(STORE, JSON.stringify(all)); } catch (e) { /* private mode */ }
+    }
+
+    async function load(mode) {
+      try {
+        const res = await fetch("/graphql", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query: `{ findSavedFilters(mode: ${mode}) { name } }` }),
+        });
+        const json = await res.json();
+        lists[mode] = (json.data.findSavedFilters || []).map((f) => f.name)
+          .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }));
+      } catch (e) {
+        lists[mode] = [];
+      }
+      render();
+    }
+
+    // right after the list's toolbar (Stash re-renders the list, so this is
+    // checked again on every tick)
+    function place() {
+      const toolbar = document.querySelector(".main .filtered-list-toolbar");
+      if (!toolbar) return bar.remove();
+      if (bar.previousElementSibling !== toolbar) toolbar.after(bar);
+    }
+
+    function render() {
+      const mode = modeNow();
+      const names = (mode && lists[mode]) || [];
+      const on = names.length > 0;
+      body.toggle("mui-has-quick-filters", on);
+      if (!on) { shownFor = ""; bar.remove(); return; }
+      const pick = chosen()[mode];
+      const active = pick && pick.key === filterKey(location.search) ? pick.name : null;
+      const sig = mode + "|" + names.join("\n") + "|" + active;
+      if (sig !== shownFor) {
+        shownFor = sig;
+        bar.innerHTML = '<span class="mui-qf-label">Quick filters</span><div class="mui-qf-row">' +
+          names.map((n) => `<button type="button" class="mui-qf-btn${n === active ? " active" : ""}"` +
+            `${n === active ? ' aria-pressed="true"' : ""} data-name="${esc(n)}">${esc(n)}</button>`).join("") +
+          "</div>";
+      }
+      place();
+      const act = bar.querySelector(".mui-qf-btn.active");
+      const row = bar.querySelector(".mui-qf-row");
+      if (act && row && act.dataset.shown !== "1") {
+        act.dataset.shown = "1"; // bring it into view once, without scrolling the page
+        row.scrollLeft = act.offsetLeft - row.offsetLeft - (row.clientWidth - act.offsetWidth) / 2;
+      }
+    }
+
+    function waitFor(fn, ms) {
+      return new Promise((resolve) => {
+        const end = Date.now() + ms;
+        (function check() {
+          const v = fn();
+          if (v || Date.now() > end) return resolve(v);
+          setTimeout(check, 50);
+        })();
+      });
+    }
+
+    async function apply(name) {
+      const mode = modeNow();
+      const toggle = document.querySelector(".main .saved-filter-dropdown .dropdown-toggle");
+      if (!mode || !toggle) return;
+      body.add("mui-qf-busy"); // keeps Stash's menu out of sight while it's used
+      try {
+        if (!document.querySelector(".saved-filter-list-menu.show")) toggle.click();
+        const item = await waitFor(() => [...document.querySelectorAll(".saved-filter-list-menu.show .saved-filter-list a.dropdown-item")]
+          .find((a) => (a.getAttribute("title") || a.textContent.trim()) === name), 1500);
+        if (!item) {
+          if (document.querySelector(".saved-filter-list-menu.show")) toggle.click();
+          return;
+        }
+        pending = { mode, name, at: Date.now() };
+        // the item is a href="#" link: only Stash's handler should run, not
+        // the browser following it (with Stash's <base href="/"> that's the
+        // home page)
+        item.addEventListener("click", (e) => e.preventDefault(), { once: true });
+        item.click();
+        await waitFor(() => !document.querySelector(".saved-filter-list-menu.show"), 400);
+        if (document.querySelector(".saved-filter-list-menu.show")) toggle.click();
+      } finally {
+        setTimeout(() => body.remove("mui-qf-busy"), 100);
+      }
+      // the address may already be this filter's (nothing changes then)
+      setTimeout(() => {
+        if (pending && pending.name === name) { remember(mode, name); pending = null; render(); }
+      }, 1200);
+    }
+
+    bar.addEventListener("click", (e) => {
+      const btn = e.target.closest(".mui-qf-btn");
+      // after this click is done: Stash closes its menu on clicks outside it
+      if (btn) setTimeout(() => apply(btn.dataset.name), 0);
+    });
+
+    // filters chosen (or saved / deleted) in Stash's own menu
+    document.addEventListener("click", (e) => {
+      const menu = e.target.closest && e.target.closest(".saved-filter-list-menu");
+      if (!menu || body.contains("mui-qf-busy")) return;
+      const item = e.target.closest(".saved-filter-list a.dropdown-item");
+      const mode = modeNow();
+      if (item && mode) pending = { mode, name: item.getAttribute("title") || item.textContent.trim(), at: Date.now() };
+      else if (mode && e.target.closest("button")) setTimeout(() => load(mode), 800);
+    }, true);
+
+    function tick() {
+      if (body.contains("mui-has-quick-filters")) place();
+      if (location.href !== lastHref) {
+        lastHref = location.href;
+        const mode = modeNow();
+        if (pending && pending.mode === mode && Date.now() - pending.at < 3000) {
+          remember(mode, pending.name);
+          pending = null;
+        }
+        render();
+        if (mode) load(mode); // (again each time, to pick up filters saved elsewhere)
+      }
+    }
+    setInterval(tick, 300);
+    tick();
+  }
 
   // Stash's filter sidebar toggle is a half-transparent tab stuck to the left
   // edge. Put a proper "Filters" button at the start of the toolbar instead;

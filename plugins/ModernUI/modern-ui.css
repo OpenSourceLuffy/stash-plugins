@@ -2938,3 +2938,89 @@ body.mui .saved-filter-list-menu .input-group-append > .btn:not(:disabled) {
   color: #fff !important;
   opacity: 1 !important;
 }
+
+/* ------------------------------------------------------------------
+   Quick filters: saved filters as a scrolling row of buttons between a
+   list's toolbar and the filters in use
+   ------------------------------------------------------------------ */
+.mui-quick-filters {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  max-width: 100%;
+  margin: 0 auto 10px;
+  padding: 0 4px;
+}
+.mui-qf-label {
+  flex: none;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  opacity: 0.6;
+  white-space: nowrap;
+}
+.mui-qf-row {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+  padding: 2px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.mui-qf-row::-webkit-scrollbar {
+  display: none;
+}
+.mui-qf-btn {
+  flex: none;
+  padding: 4px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.mui-qf-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+.mui-qf-btn.active {
+  border-color: var(--mui-accent);
+  background: var(--mui-accent);
+  color: #fff;
+  font-weight: 600;
+}
+.mui-qf-btn:focus-visible {
+  outline: 2px solid var(--mui-accent);
+  outline-offset: 2px;
+}
+@media (max-width: 576px) {
+  .mui-quick-filters {
+    justify-content: flex-start;
+    gap: 8px;
+  }
+  .mui-qf-btn {
+    padding: 6px 14px;
+  }
+}
+body.mui.mui-light .mui-qf-btn {
+  border-color: var(--mui-l-border);
+  background: var(--mui-l-surface);
+}
+body.mui.mui-light .mui-qf-btn:hover {
+  background: var(--mui-l-hover);
+}
+body.mui.mui-light .mui-qf-btn.active {
+  border-color: var(--mui-accent);
+  background: var(--mui-accent);
+  color: #fff;
+}
+/* while a quick filter loads it through Stash's saved-filter menu */
+body.mui-qf-busy .saved-filter-list-menu {
+  visibility: hidden !important;
+}

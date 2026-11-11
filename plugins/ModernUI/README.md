@@ -24,6 +24,9 @@ A cleaner, app-like look for Stash, built to feel good on a phone as well as a c
 - Cleaner scene, performer, image, gallery, studio, group and tag cards.
 - Dark, light, or auto (follows your device) colour themes.
 - Home page rows run edge to edge with round scroll arrows.
+- **Quick filters**: on scene, image, gallery, performer, studio, group and marker lists, a
+  scrolling row of buttons for your saved filters sits between the search box and the filters in
+  use. Tap one to load it; the one in use is highlighted until you change the filter, search or sort.
 - On an image's page, click the picture to see it full screen. Zoom in with the mouse wheel, a
   trackpad or two-finger pinch, or a double-click / double-tap, and drag to move around. Click
   outside the picture, press Esc or tap **Close** to go back. While zoomed out, swipe (or drag, or
@@ -86,6 +89,7 @@ Under **Settings → Plugins → Modern UI**:
 | Scene details beside the video | Keep Stash's side panel on scene pages on wide screens. |
 | Image details beside the picture | Keep Stash's side panel on image pages on wide screens. |
 | Open gallery details panel by default | Start gallery pages with the details panel open. |
+| Hide quick filters | Turn off the Quick filters row under the search box. |
 | Disable mobile tweaks | Turn off the phone layout. |
 | Stay on Edit after saving | Don't go back to the Details tab after saving a scene or image. |
 | Disable swiping between images | Turn off swipe / arrow-key navigation on image pages. |

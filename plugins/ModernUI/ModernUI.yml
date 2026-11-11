@@ -1,6 +1,6 @@
 name: Modern UI
 description: Cleaner scene, performer, image, gallery, studio, group and tag cards, plus a mobile-friendly layout.
-version: "0.52"
+version: "0.53"
 ui:
   javascript:
     - modern-ui.js
@@ -51,6 +51,10 @@ settings:
   showGalleryDetails:
     displayName: Open gallery details panel by default
     description: On a gallery's page, show the details panel on the left straight away instead of starting with it closed. (Wide screens only.)
+    type: BOOLEAN
+  disableQuickFilters:
+    displayName: Hide quick filters
+    description: Turn off the "Quick filters" row under the search box (between it and the filters in use) with buttons for your saved filters on scene, image, gallery, performer, studio, tag, group and marker lists.
     type: BOOLEAN
   disableMobile:
     displayName: Disable mobile tweaks
