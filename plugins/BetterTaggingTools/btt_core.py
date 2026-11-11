@@ -155,6 +155,7 @@ def settings(stash, plugin_dir=None):
         "dates_new": bool(s.get("datesNewItems")),
         "titles_new": bool(s.get("titlesNewItems")),
         "titles_keep_names": bool(s.get("titlesKeepNames")),
+        "titles_no_gallery": bool(s.get("titlesNoGallery")),
     }
 
 
@@ -1677,17 +1678,83 @@ def run_redo_titles(stash, preview):
         + (" Nothing was saved." if preview else ""))
 
 
-def fill_titles(stash, work, apply, spellings=None, keep_names=None):
-    """Give items without a title one made from their file name. `work`:
-    [(kind, item)]. Returns [(kind, item, title)] (given, or would be)."""
+ARCHIVE_EXT = re.compile(r"\.(zip|cbz|cbr|rar|7z)$", re.I)
+
+
+def gallery_display_name(g):
+    """A gallery's name for image titles: its title, else its zip / folder
+    name, without an archive extension."""
+    name = (g.get("title") or "").strip()
+    if not name:
+        path = ((g.get("files") or [{}])[0].get("path") or (g.get("folder") or {}).get("path") or "")
+        name = os.path.basename(path.rstrip("/"))
+    return ARCHIVE_EXT.sub("", name).strip() or None
+
+
+class GalleryTitles:
+    """Titles for images whose file name makes none: "<gallery> #<place>",
+    the place being the image's position in the gallery (by path, the way
+    Stash orders them). An image in several galleries uses the most specific:
+    a zip / folder gallery first, then the smallest."""
+
+    def __init__(self, stash):
+        self.stash = stash
+        self.galleries = {}  # id -> gallery
+        self.order = {}  # gallery id -> {image id: place}
+
+    def of(self, image_ids):
+        """{image id: title} for these images (those in a gallery)."""
+        if not image_ids:
+            return {}
+        rows = self.stash.call("query($ids: [ID!]) { findImages(ids: $ids, filter: {per_page: -1}) { images { id galleries { id } } } }",
+                               {"ids": list(image_ids)})["findImages"]["images"]
+        need = {g["id"] for r in rows for g in r["galleries"]} - set(self.galleries)
+        if need:
+            for g in self.stash.call("query($ids: [ID!]) { findGalleries(ids: $ids, filter: {per_page: -1}) "
+                                     "{ galleries { id title image_count files { path } folder { path } } } }",
+                                     {"ids": sorted(need, key=int)})["findGalleries"]["galleries"]:
+                self.galleries[g["id"]] = g
+        out = {}
+        for r in rows:
+            gs = [self.galleries[g["id"]] for g in r["galleries"] if g["id"] in self.galleries]
+            gs = [g for g in gs if gallery_display_name(g)]
+            if not gs:
+                continue
+            g = min(gs, key=lambda g: (not (g.get("files") or g.get("folder")), g.get("image_count") or 0))
+            place = self.place(g["id"], r["id"])
+            if place:
+                out[r["id"]] = f"{gallery_display_name(g)} #{place}"
+        return out
+
+    def place(self, gallery_id, image_id):
+        if gallery_id not in self.order:
+            ids = [i["id"] for i in self.stash.call(
+                "query($g: [ID!]) { findImages(image_filter: {galleries: {value: $g, modifier: INCLUDES}}, "
+                "filter: {per_page: -1, sort: \"path\", direction: ASC}) { images { id } } }", {"g": [gallery_id]}
+            )["findImages"]["images"]]
+            self.order[gallery_id] = {i: n + 1 for n, i in enumerate(ids)}
+        return self.order[gallery_id].get(image_id)
+
+
+def fill_titles(stash, work, apply, spellings=None, keep_names=None, use_galleries=None, galleries=None):
+    """Give items without a title one made from their file name (an image
+    whose file name makes none: from its gallery's name, see GalleryTitles).
+    `work`: [(kind, item)]. Returns [(kind, item, title)] (given, or would be)."""
     names = title_names(stash)
-    if keep_names is None:
-        keep_names = settings(stash)["titles_keep_names"]
+    if keep_names is None or use_galleries is None:
+        cfg = settings(stash)
+        keep_names = cfg["titles_keep_names"] if keep_names is None else keep_names
+        use_galleries = not cfg["titles_no_gallery"] if use_galleries is None else use_galleries
+    todo = [(kind, item) for kind, item in work if not (item.get("title") or "").strip()]
+    from_name = {(kind, item["id"]): title_from_path(item_path(kind, item), names, spellings, keep_names)
+                 for kind, item in todo}
+    from_gallery = {}
+    if use_galleries:
+        galleries = galleries or GalleryTitles(stash)
+        from_gallery = galleries.of([item["id"] for kind, item in todo if kind == "image" and not from_name[(kind, item["id"])]])
     done = []
-    for kind, item in work:
-        if (item.get("title") or "").strip():
-            continue
-        title = title_from_path(item_path(kind, item), names, spellings, keep_names)
+    for kind, item in todo:
+        title = from_name[(kind, item["id"])] or (from_gallery.get(item["id"]) if kind == "image" else None)
         if not title:
             continue
         if apply:
@@ -1708,8 +1775,9 @@ def run_titles(stash, preview):
         work += [(kind, i) for i in items]
     empty = [(k, i) for k, i in work if not (i.get("title") or "").strip()]
     done = []
+    galleries = GalleryTitles(stash)
     for n in range(0, len(empty), 200):
-        done += fill_titles(stash, empty[n:n + 200], apply=not preview, spellings=spellings)
+        done += fill_titles(stash, empty[n:n + 200], apply=not preview, spellings=spellings, galleries=galleries)
         progress(min(n + 200, len(empty)) / max(len(empty), 1))
     for kind, item, title in done[:60]:
         log("info", f'{"Would set" if preview else "Set"} {os.path.basename(item_path(kind, item))} → "{title}"')
@@ -1721,7 +1789,7 @@ def run_titles(stash, preview):
     verb = "would get" if preview else "got"
     log("info", f"{'Preview: ' if preview else 'Done: '}{len(done)} of {len(empty)} items without a title {verb} one "
         f"from the file name" + (f" ({parts})" if parts else "")
-        + f"; {len(empty) - len(done)} had only a camera / app name or an id and were left alone"
+        + f"; {len(empty) - len(done)} had only a camera / app name or an id (and no gallery) and were left alone"
         + (". Nothing was saved." if preview else "."))
 
 

@@ -205,8 +205,12 @@ Scenes, images and galleries without a title can get one made from their file na
 - Underscores and dots become spaces, and `CamelCaseNames` and `name12` are split up. All-lowercase
   or ALL-CAPS names are capitalised like tags (using **Special spellings**).
 - Names that are only a camera or app name (`IMG_…`, screen recordings, `FullSizeRender`), a random
-  id (UUIDs, hashes, TikTok-style ids) or a performer's name get no title. A title you've already
-  set is never changed.
+  id (UUIDs, hashes, TikTok-style ids) or a performer's name get no title from it. A title you've
+  already set is never changed.
+- An **image** whose file name makes no title gets one from its **gallery** instead: the gallery's
+  name and the image's place in it (in path order), e.g. `Beach Trip #12`; a zip's `.zip` / `.cbz`
+  is left off. In several galleries, the zip or folder gallery is used first, else the smallest.
+  Turn on **Don't title images after their gallery** to leave such images without a title.
 - **Fill in titles from file names** (task), with **Preview titles from file names** to check first.
 - **Fill in titles of new scenes, images and galleries** (setting): new items from a scan get a title.
 - **Redo titles made from file names** (task): after changing **Keep performer and studio names in

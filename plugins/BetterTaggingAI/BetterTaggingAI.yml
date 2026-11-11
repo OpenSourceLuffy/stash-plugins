@@ -1,6 +1,6 @@
 name: Better Tagging AI Add-on
 description: An add-on for Better Tagging Tools that tags scenes and images, writes titles, finds a scene's studio and performers from the accounts and studio watermarks it shows, recognises performers' faces, and fills in performers' hair and eye colour, tattoos and piercings from their pictures - all with a local AI model (Ollama), on your own computer. Adds "Ask AI" buttons for tags and titles while editing, and can do all of it for new items after a scan. Install it next to Better Tagging Tools - it then uses that plugin's "Tags to ignore", special spellings and gallery-name tags, and its rows sit under Better Tagging Tools' suggestions. (It also works on its own.)
-version: "1.4"
+version: "1.4.1"
 url: https://github.com/OpenSourceLuffy/stash-plugins/tree/main/plugins/BetterTaggingAI
 exec:
   - python
