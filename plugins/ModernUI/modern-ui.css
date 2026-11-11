@@ -2914,3 +2914,27 @@ body.mui-drag-selecting {
   -webkit-user-select: none;
   user-select: none;
 }
+
+/* Saved filters menu: the save button next to "Filter name…" looked the
+   same disabled (no name typed yet) and ready. Now it says "Save", is faded
+   until there's a name, and turns the accent colour when it can be used. */
+body.mui .saved-filter-list-menu .input-group-append > .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+body.mui .saved-filter-list-menu .input-group-append > .btn::after {
+  content: "Save";
+}
+body.mui .saved-filter-list-menu .input-group-append > .btn:disabled {
+  opacity: 0.4 !important;
+  cursor: not-allowed;
+}
+body.mui .saved-filter-list-menu .input-group-append > .btn:not(:disabled) {
+  background: var(--mui-accent, #3d8bfd) !important;
+  border-color: var(--mui-accent, #3d8bfd) !important;
+  color: #fff !important;
+  opacity: 1 !important;
+}
