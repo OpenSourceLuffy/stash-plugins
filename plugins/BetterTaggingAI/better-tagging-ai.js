@@ -34,17 +34,31 @@
   // ---- "Ask AI for tags" under the Tags box ---------------------------------
   const ITEM_PAGE = /^\/(scenes|images)\/(\d+)/;
 
+  function lookList(out) {
+    return (out || []).map((t) => ({ id: String(t.id), name: t.name, aliases: [], score: t.score, sure: t.sure }));
+  }
+
   function AiTags({ values, onSelect }) {
     const m = location.pathname.match(ITEM_PAGE);
     const [ai, setAi] = React.useState({ state: "idle" });
     const [look, setLook] = React.useState({ state: "idle" });
     const key = m ? m[1] + m[2] : "";
+    const kind = m && (m[1] === "scenes" ? "scene" : "image");
+    // look-alike tags are quick: load them as soon as the edit form opens
+    // (if they can't be had, e.g. not scanned yet, the button stays instead)
     React.useEffect(() => {
       setAi({ state: "idle" });
-      setLook({ state: "idle" });
+      if (!m) return undefined;
+      let live = true;
+      setLook({ state: "loading", auto: true });
+      ask({ mode: "look_suggest", kind, id: m[2] })
+        .then((out) => live && setLook({ state: "done", tags: lookList(out) }))
+        .catch(() => live && setLook({ state: "idle" }));
+      return () => {
+        live = false;
+      };
     }, [key]);
     if (!m) return null;
-    const kind = m[1] === "scenes" ? "scene" : "image";
 
     async function go() {
       setAi({ state: "loading" });
@@ -60,7 +74,7 @@
       setLook({ state: "loading" });
       try {
         const out = await ask({ mode: "look_suggest", kind, id: m[2] });
-        setLook({ state: "done", tags: (out || []).map((t) => ({ id: String(t.id), name: t.name, aliases: [], score: t.score, sure: t.sure })) });
+        setLook({ state: "done", tags: lookList(out) });
       } catch (e) {
         setLook({ state: "error", message: e.message });
       }

@@ -27,8 +27,9 @@ works on its own.
 - **AI** row under the **Tags** box (scenes and images): **Ask AI for tags** shows the model's picks
   as one-click chips, checked against look-alikes (✓ = look-alikes back it up). **Tags from
   look-alikes** (quick, no AI model) shows the tags of the scenes and images you've tagged that look
-  most like it, with how many of them have it, e.g. `+ Outdoors 72% ✓`. Nothing is added until you
-  click them and save.
+  most like it, with how many of them have it, e.g. `+ Outdoors 72% ✓`; these load by themselves
+  when you open **Edit** (once the look-alike scan has run). Nothing is added until you click them
+  and save.
 - **Faces** row under the **Performers** box (scenes and images): **Find performers by face** compares
   the faces in it (6 frames of a scene, or the image) with your performers' and shows the closest as
   one-click chips with their picture and how alike they are, e.g. `+ Jane Doe 56% ✓`. ✓ marks a confident match;
