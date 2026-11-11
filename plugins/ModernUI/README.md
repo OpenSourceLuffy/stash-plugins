@@ -27,7 +27,8 @@ A cleaner, app-like look for Stash, built to feel good on a phone as well as a c
 - **Quick filters**: on scene, image, gallery, performer, studio, group and marker lists, a
   scrolling row of buttons for your saved filters sits between the search box and the filters in
   use. Tap one to load it; the one in use is highlighted until you change the filter, search or sort.
-- The filters in use (the tags under the quick filters) stay on one line that scrolls sideways too.
+- The filters in use are hidden under a **Filters (n)** button below the quick filters. Tap it to
+  see them on one line that scrolls sideways, with **Hide** and **Clear** (take them all off) buttons.
 - On an image's page, click the picture to see it full screen. Zoom in with the mouse wheel, a
   trackpad or two-finger pinch, or a double-click / double-tap, and drag to move around. Click
   outside the picture, press Esc or tap **Close** to go back. While zoomed out, swipe (or drag, or

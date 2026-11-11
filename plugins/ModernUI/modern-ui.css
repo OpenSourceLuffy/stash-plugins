@@ -2944,8 +2944,81 @@ body.mui .saved-filter-list-menu .input-group-append > .btn:not(:disabled) {
    list's toolbar and the filters in use
    ------------------------------------------------------------------ */
 .mui-quick-filters {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
   max-width: 100%;
   margin: 0 auto 8px;
+}
+.mui-qf-row {
+  flex: none;
+}
+/* show / hide the filters in use */
+.mui-qf-toggle {
+  flex: none;
+  padding: 4px 10px;
+  border: 1px dashed rgba(255, 255, 255, 0.25);
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  white-space: nowrap;
+  opacity: 0.8;
+  cursor: pointer;
+}
+.mui-qf-toggle[hidden] {
+  display: none;
+}
+body.mui.mui-light .mui-qf-toggle {
+  border-color: var(--mui-l-border);
+}
+body.mui-has-quick-filters:not(.mui-filter-tags-shown) .main .filter-tags {
+  display: none !important;
+}
+/* Hide and Clear before the filters in use (they replace Stash's
+   "Clear all") */
+.mui-ft-actions {
+  display: inline-flex;
+  flex: none;
+  gap: 6px;
+  margin-right: 4px;
+}
+body.mui-has-quick-filters .main .filter-tags .clear-all-button {
+  display: none !important;
+}
+.mui-ft-btn {
+  flex: none;
+  padding: 2px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font-size: 0.8rem;
+  line-height: 1.6;
+  white-space: nowrap;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.mui-ft-clear {
+  border-color: rgba(220, 53, 69, 0.6);
+  color: #e35d6a;
+}
+body.mui.mui-light .mui-ft-btn {
+  border-color: var(--mui-l-border);
+}
+body.mui.mui-light .mui-ft-clear {
+  border-color: rgba(220, 53, 69, 0.5);
+  color: #c82333;
+}
+@media (hover: hover) and (pointer: fine) {
+  .mui-ft-btn:hover {
+    background: rgba(255, 255, 255, 0.12);
+  }
+  body.mui.mui-light .mui-ft-btn:hover {
+    background: var(--mui-l-hover);
+  }
 }
 /* the quick filters and the filters in use: one line each that scrolls
    sideways, centred while it fits (the auto margins, unlike centring,
@@ -2993,8 +3066,21 @@ body.mui .main .filter-tags > * {
   white-space: nowrap;
   cursor: pointer;
 }
-.mui-qf-btn:hover {
-  background: rgba(255, 255, 255, 0.12);
+/* hover colour only with a mouse: on phones it sticks to whatever was
+   last under the finger */
+@media (hover: hover) and (pointer: fine) {
+  .mui-qf-btn:hover,
+  .mui-qf-toggle:hover {
+    background: rgba(255, 255, 255, 0.12);
+  }
+  body.mui.mui-light .mui-qf-btn:hover,
+  body.mui.mui-light .mui-qf-toggle:hover {
+    background: var(--mui-l-hover);
+  }
+}
+.mui-qf-btn,
+.mui-qf-toggle {
+  -webkit-tap-highlight-color: transparent;
 }
 .mui-qf-btn.active {
   border-color: var(--mui-accent);
@@ -3014,9 +3100,6 @@ body.mui .main .filter-tags > * {
 body.mui.mui-light .mui-qf-btn {
   border-color: var(--mui-l-border);
   background: var(--mui-l-surface);
-}
-body.mui.mui-light .mui-qf-btn:hover {
-  background: var(--mui-l-hover);
 }
 body.mui.mui-light .mui-qf-btn.active {
   border-color: var(--mui-accent);

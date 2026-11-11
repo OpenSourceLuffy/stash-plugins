@@ -162,30 +162,106 @@
       if (bar.previousElementSibling !== toolbar) toolbar.after(bar);
     }
 
+    // The row of buttons, and under it a "Filters (n)" button: the filters
+    // in use (the tags under the row) stay hidden until it's tapped, and
+    // then get Hide and Clear buttons of their own at the start of their row
+    // (where they're in view on a phone however many filters there are)
+    const row = document.createElement("div");
+    row.className = "mui-qf-row";
+    const tagsToggle = document.createElement("button");
+    tagsToggle.type = "button";
+    tagsToggle.className = "mui-qf-toggle";
+    bar.append(row, tagsToggle);
+    const tagActions = document.createElement("span");
+    tagActions.className = "mui-ft-actions";
+    tagActions.innerHTML = '<button type="button" class="mui-ft-btn" data-act="hide">Hide</button>' +
+      '<button type="button" class="mui-ft-btn mui-ft-clear" data-act="clear">Clear</button>';
+    let tagsShown = false; // hidden whenever the page is opened
+    let rowFor = "";
+
+    const filterTags = () => document.querySelector(".main .filter-tags");
+    const tagCount = (tags) => (tags ? tags.querySelectorAll(".tag-item:not(.more-tags)").length : 0);
+
+    function syncTagsToggle() {
+      const tags = filterTags();
+      const count = tagCount(tags);
+      body.toggle("mui-filter-tags-shown", tagsShown);
+      tagsToggle.hidden = tagsShown || count === 0;
+      const text = `Filters (${count})`;
+      if (tagsToggle.textContent !== text) tagsToggle.textContent = text;
+      tagsToggle.setAttribute("aria-expanded", String(tagsShown));
+      // Stash draws the tags again now and then: keep the buttons first
+      if (tagsShown && tags && count) {
+        if (tags.firstElementChild !== tagActions) tags.prepend(tagActions);
+      } else if (tagActions.isConnected) {
+        tagActions.remove();
+      }
+    }
+
+    function setTagsShown(on) {
+      tagsShown = on;
+      syncTagsToggle();
+    }
+
+    // Take every filter in use off: Stash's own "Clear all" if it has one,
+    // else each tag's ✕ in turn
+    async function clearFilters() {
+      for (let i = 0; i < 30; i++) {
+        const tags = filterTags();
+        if (!tagCount(tags)) break;
+        const all = tags.querySelector(".clear-all-button");
+        const x = all || tags.querySelector(".tag-item:not(.more-tags) .btn");
+        if (!x) break;
+        x.click();
+        await sleep(200);
+      }
+      setTagsShown(false);
+    }
+
+    tagsToggle.addEventListener("click", () => setTagsShown(true));
+    tagActions.addEventListener("click", (e) => {
+      const btn = e.target.closest(".mui-ft-btn");
+      if (btn) e.preventDefault();
+      if (!btn) return;
+      e.stopPropagation();
+      if (btn.dataset.act === "hide") setTagsShown(false);
+      else clearFilters();
+    });
+
     function render() {
       const mode = modeNow();
       const names = (mode && lists[mode]) || [];
       const on = names.length > 0;
       body.toggle("mui-has-quick-filters", on);
-      if (!on) { shownFor = ""; bar.remove(); return; }
+      if (!on) { shownFor = ""; rowFor = ""; bar.remove(); return; }
       const pick = chosen()[mode];
       const active = showing && showing.mode === mode ? showing.name
         : pick && pick.key === filterKey(location.search) ? pick.name : null;
-      const sig = mode + "|" + names.join("\n") + "|" + active;
-      if (sig !== shownFor) {
+      // the buttons are only made again when the list of filters changes;
+      // otherwise just the highlight moves (so nothing shifts under a finger)
+      const list = mode + "|" + names.join("\n");
+      let fresh = false;
+      if (list !== rowFor) {
+        rowFor = list;
+        fresh = true;
+        row.innerHTML = names.map((n) => `<button type="button" class="mui-qf-btn" data-name="${esc(n)}">${esc(n)}</button>`).join("");
+      }
+      const sig = list + "|" + active;
+      if (sig !== shownFor || fresh) {
         shownFor = sig;
-        bar.innerHTML = '<div class="mui-qf-row">' +
-          names.map((n) => `<button type="button" class="mui-qf-btn${n === active ? " active" : ""}"` +
-            `${n === active ? ' aria-pressed="true"' : ""} data-name="${esc(n)}">${esc(n)}</button>`).join("") +
-          "</div>";
+        row.querySelectorAll(".mui-qf-btn").forEach((b) => {
+          const on = b.dataset.name === active;
+          b.classList.toggle("active", on);
+          if (on) b.setAttribute("aria-pressed", "true");
+          else b.removeAttribute("aria-pressed");
+        });
       }
       place();
-      const act = bar.querySelector(".mui-qf-btn.active");
-      const row = bar.querySelector(".mui-qf-row");
-      if (act && row && act.dataset.shown !== "1") {
-        act.dataset.shown = "1"; // bring it into view once, without scrolling the page
-        row.scrollLeft = act.offsetLeft - row.offsetLeft - (row.clientWidth - act.offsetWidth) / 2;
-      }
+      syncTagsToggle();
+      // on arriving at a list, bring the filter in use into view (never
+      // after a tap: the row would slide under the finger)
+      const act = row.querySelector(".mui-qf-btn.active");
+      if (fresh && act) row.scrollLeft = act.offsetLeft - row.offsetLeft - (row.clientWidth - act.offsetWidth) / 2;
     }
 
     async function waitFor(fn, ms) {
@@ -293,7 +369,7 @@
     }, true);
 
     function tick() {
-      if (body.contains("mui-has-quick-filters")) place();
+      if (body.contains("mui-has-quick-filters")) { place(); syncTagsToggle(); }
       if (location.href !== lastHref) {
         lastHref = location.href;
         const mode = modeNow();
