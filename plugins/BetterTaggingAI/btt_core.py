@@ -2714,18 +2714,22 @@ FACE_LOOKALIKE_MIN = 0.45  # "Might also be in" lists the whole library, so it's
 def face_helper(cfg, pictures):
     """Faces in each picture: [[{box, score, emb}], ...]."""
     body = json.dumps({"images": [base64.b64encode(p).decode() for p in pictures]}).encode()
-    req = urllib.request.Request(cfg["ai"]["face_url"] + "/faces", data=body, headers={"Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            return json.loads(resp.read())["results"]
-    except urllib.error.HTTPError as e:
-        raise ValueError(f"the face helper couldn't read it ({e.code})")  # this item only
-    except urllib.error.URLError as e:
-        reason = getattr(e, "reason", e)
-        if isinstance(reason, (BrokenPipeError, ConnectionResetError)):
-            raise ValueError(f"the face helper dropped it ({reason})")  # e.g. too big: this item only
-        raise RuntimeError(f"can't reach the face helper at {cfg['ai']['face_url']} ({reason}). "
-                           "Is it running? See the add-on's README.")
+    for attempt in range(4):  # a moment's network blip shouldn't stop a long task
+        req = urllib.request.Request(cfg["ai"]["face_url"] + "/faces", data=body, headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                return json.loads(resp.read())["results"]
+        except urllib.error.HTTPError as e:
+            raise ValueError(f"the face helper couldn't read it ({e.code})")  # this item only
+        except urllib.error.URLError as e:
+            reason = getattr(e, "reason", e)
+            if isinstance(reason, (BrokenPipeError, ConnectionResetError)):
+                raise ValueError(f"the face helper dropped it ({reason})")  # e.g. too big: this item only
+            if attempt < 3:
+                time.sleep(2 + attempt * 2)
+                continue
+            raise RuntimeError(f"can't reach the face helper at {cfg['ai']['face_url']} ({reason}). "
+                               "Is it running? See the add-on's README.")
 
 
 def _dot(a, b):
