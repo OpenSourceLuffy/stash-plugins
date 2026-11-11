@@ -1,8 +1,9 @@
 # Better Tagging AI Add-on
 
 An add-on for [Better Tagging Tools](../BetterTaggingTools) that does the work a local AI model is
-good at: tagging scenes and images, writing titles, and finding a scene's studio and performers
-from the accounts and studio watermarks it shows. The model runs on your own computer through
+good at: tagging scenes and images, writing titles, finding a scene's studio and performers from
+the accounts and studio watermarks it shows, recognising your performers' faces, and filling in
+performers' hair and eye colour. The model runs on your own computer through
 [Ollama](https://ollama.com); nothing is sent to the internet.
 
 Install it next to Better Tagging Tools. It then uses that plugin's **Tags to ignore**, **Special
@@ -15,11 +16,21 @@ works on its own.
 2. Download the model: `ollama pull gemma3:4b` (about 3 GB).
 3. If Stash runs in Docker on the same computer, the default address
    (`http://host.docker.internal:11434`) works as is. Otherwise set **AI: Ollama address**.
+4. For **Faces** only: run `sh face-helper/setup.sh` from this plugin's folder. It installs a small
+   face-recognition helper (Python with OpenCV and two small models from the OpenCV model zoo,
+   about 150 MB) that starts at login and only listens on your own computer (port 11535). Faces
+   are compared on your computer; nothing is sent anywhere.
 
 ## While editing
 
 - **AI** row under the **Tags** box (scenes and images): **Ask AI for tags** shows the model's picks
   as one-click chips. Nothing is added until you click them and save.
+- **Faces** row under the **Performers** box (scenes and images): **Find performers by face** compares
+  the faces in it (6 frames of a scene, or the image) with your performers' and shows the closest as
+  one-click chips with how alike they are, e.g. `+ Jane Doe 56% ✓`. ✓ marks a confident match;
+  without it, check it's really them. Nothing is added until you click and save.
+- **Ask AI for details** when editing a performer: suggests hair colour, eye colour, tattoos and
+  piercings from their pictures. Click one to put it in its box (then **Save**).
 - **AI titles** row under the **Title** box (scenes, images and galleries): **Ask AI for titles**
   shows a few titles, written after looking at the picture (or a few frames) and its performers,
   studio, tags and file name. Click one to put it in the box. Ask again for different ones.
@@ -55,11 +66,33 @@ close. Each section starts with a preview that only writes to the log.
   or profile link) add that performer. Performers are only ever added.
 - About 5–15 seconds per scene; scenes already looked at are skipped next time.
 
+**Faces**
+- **Learn performers' faces** turns each performer's profile picture (and up to 3 photos where
+  they're the only performer, if they look like the same person) into a face fingerprint. Only new
+  or changed performers are looked at; the other face tasks do this first anyway.
+- **Scenes without performers** / **images without performers** find who they look like. With
+  **Faces: add confident matches automatically** on, confident matches are added; otherwise the
+  suggestions are only written to the log, for you to pick with **Find performers by face**.
+- A *confident* match is very alike (50% by default, images 55%), at least 5 points ahead of anyone
+  else who looks similar (look-alikes score close together), and in a scene the closest match in at
+  least two frames and in the most. In testing, scenes got the right person first about 2 times in
+  3 and in the top three 5 times in 6; wrong confident matches were caught by the gap rule. Small,
+  side-on or blurry faces aren't matched at all.
+
+**Performer details**
+- **Fill in empty hair and eye colour**: the model looks at each performer's profile picture and
+  photos where they're alone, twice with different photos, and only fills a field (if it's empty)
+  when both looks agree. Tattoos and piercings are too hit-and-miss to save unseen, so they're only
+  offered by **Ask AI for details**. Height, measurements and the like can't be seen in a picture;
+  use Stash's scrapers (StashDB etc.) for those.
+
 ## New items after a scan
 
 - **AI: tag new scenes and images automatically**: AI tags only.
 - **AI: tag, title and find the studio of new scenes and images**: all three, in that order (tags,
   then a scene's studio and performers, then a title), so the title can use what was just found.
+- **Faces: add confident matches automatically** also checks new scenes and images (after the
+  studio step, before the title).
 
 ## Settings
 
@@ -75,6 +108,10 @@ Under **Settings → Plugins → Better Tagging AI Add-on**:
 | AI: most tags per item | Default 6. |
 | AI: don't auto tag from file names first | Skip the file-name matching before the AI looks at an item. |
 | AI: include organized items | Also AI-tag items marked as organized. |
+| Faces: add confident matches automatically | Let the Faces tasks (and new scans) add confident matches. |
+| Faces: likeness needed to add automatically (%) | Default 50 (images 5 more). |
+| Faces: likeness needed to suggest (%) | Default 36. |
+| Faces: helper address | Default `http://host.docker.internal:11535`. |
 
 AI settings you set in Better Tagging Tools before the AI had a plugin of its own still count until
 you change them here.
@@ -86,6 +123,7 @@ you change them here.
   about 15), so doing thousands of items takes hours. It gets most things right but not all: check
   the previews, and use the **Ask AI** buttons where accuracy matters.
 - ffmpeg for video frames (the one Stash uses; the official Docker image includes it).
+- The face helper (see Setup), only for **Faces**.
 - The code is in `btt_core.py`, the same file Better Tagging Tools ships, so each plugin works on
   its own. Small files in the plugin's folder remember what's been done; deleting them is safe.
 - Works with any theme.

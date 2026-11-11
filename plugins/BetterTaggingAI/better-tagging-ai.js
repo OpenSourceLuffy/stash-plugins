@@ -1,6 +1,7 @@
-// Better Tagging AI - the page side: an "AI" row under the Tags box and an
-// "AI titles" row under the Title box when editing a scene or image (titles
-// also on galleries), asking the local AI model (Ollama) through this
+// Better Tagging AI - the page side: an "AI" row under the Tags box, a
+// "Faces" row under the Performers box and an "AI titles" row under the
+// Title box when editing a scene or image (titles also on galleries), and
+// "Ask AI for details" when editing a performer, asking the local AI model (Ollama) through this
 // plugin. Works with or without Better Tagging Tools; if that's installed,
 // its suggestion rows and these sit one after another.
 (function () {
@@ -81,6 +82,137 @@
     if (!ITEM_PAGE.test(location.pathname)) return result;
     return h(React.Fragment, null, result, h(AiTags, { values: props.values, onSelect: props.onSelect }));
   });
+
+  // ---- "Find performers by face" under the Performers box ------------------
+  function FaceRow({ values, onSelect }) {
+    const m = location.pathname.match(ITEM_PAGE);
+    const [st, setSt] = React.useState({ state: "idle" });
+    const key = m ? m[1] + m[2] : "";
+    React.useEffect(() => setSt({ state: "idle" }), [key]);
+    if (!m) return null;
+
+    async function go() {
+      setSt({ state: "loading" });
+      try {
+        const out = await ask({ mode: "face_suggest", kind: m[1] === "scenes" ? "scene" : "image", id: m[2] });
+        setSt({ state: "done", cands: out || [] });
+      } catch (e) {
+        setSt({ state: "error", message: e.message });
+      }
+    }
+
+    const have = new Set((values || []).map((p) => String(p.id)));
+    const cands = st.state === "done" ? st.cands.filter((c) => !have.has(String(c.id))) : [];
+    const add = (c) =>
+      onSelect([...(values || []), { id: String(c.id), name: c.name, disambiguation: null, alias_list: [], image_path: null }]);
+    return h(
+      "div",
+      { className: "pts-suggest pts-ai bta-faces" },
+      h("span", { className: "pts-label" }, "Faces"),
+      st.state === "idle" &&
+        h("button", { type: "button", className: "pts-chip pts-ai-ask", onClick: go,
+          title: "Compare the faces in it with your performers' (needs the face helper)" }, "Find performers by face"),
+      st.state === "loading" && h("span", { className: "pts-ai-note" }, "Looking at the faces…"),
+      st.state === "error" &&
+        h("span", { className: "pts-ai-note" }, "Couldn't check faces: " + st.message + " ",
+          h("button", { type: "button", className: "pts-chip", onClick: go }, "Try again")),
+      st.state === "done" && !cands.length &&
+        h("span", { className: "pts-ai-note" }, st.cands.length ? "Everyone it found is already added" : "No one it knows"),
+      cands.map((c) =>
+        h("button", {
+          key: c.id, type: "button", className: "pts-chip" + (c.sure ? " bta-sure" : ""),
+          title: `${c.score}% alike` + (m[1] === "scenes" ? `, closest match in ${c.pictures} of the frames` : "") +
+            (c.sure ? " - a confident match" : " - check it's really them"),
+          onClick: () => add(c),
+        }, "+ " + c.name + " " + c.score + "%" + (c.sure ? " ✓" : ""))
+      )
+    );
+  }
+
+  api.patch.after("PerformerSelect", function (...args) {
+    const props = args[0] || {};
+    const result = args[args.length - 1];
+    if (!props.isMulti || !props.onSelect || props.isDisabled || !ITEM_PAGE.test(location.pathname)) return result;
+    return h(React.Fragment, null, result, h(FaceRow, { values: props.values, onSelect: props.onSelect }));
+  });
+
+  // ---- performer page: "Ask AI for details" ---------------------------------
+  // Hair / eye colour, tattoos and piercings from their pictures; each
+  // suggestion can be put into its (empty) box in the edit form.
+  const PERF_PAGE = /^\/performers\/(\d+)/;
+  const DETAIL_LABELS = { hair_color: "Hair colour", eye_color: "Eye colour", tattoos: "Tattoos", piercings: "Piercings" };
+
+  function setFieldValue(el, value) {
+    const proto = el.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    Object.getOwnPropertyDescriptor(proto, "value").set.call(el, value);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  function mountDetails(form, id) {
+    const box = document.createElement("div");
+    box.className = "pts-suggest bta-details";
+    box.dataset.performer = id;
+    const label = document.createElement("span");
+    label.className = "pts-label";
+    label.textContent = "AI";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "pts-chip pts-ai-ask";
+    btn.textContent = "Ask AI for details";
+    btn.title = "Look at their pictures and suggest hair colour, eye colour, tattoos and piercings";
+    const out = document.createElement("span");
+    out.className = "bta-chips";
+    box.append(label, btn, out);
+    const anchor = form.querySelector("#hair_color");
+    const row = anchor && anchor.closest(".form-group");
+    (row || form.firstElementChild).insertAdjacentElement("beforebegin", box);
+
+    btn.addEventListener("click", () => {
+      btn.disabled = true;
+      btn.textContent = "Looking at their pictures…";
+      out.textContent = "";
+      ask({ mode: "perf_details_one", id })
+        .then((r) => {
+          const keys = Object.keys(DETAIL_LABELS).filter((k) => r && r[k]);
+          if (!keys.length) out.textContent = "Nothing clear to suggest";
+          keys.forEach((k) => {
+            const field = form.querySelector("#" + k);
+            const b = document.createElement("button");
+            b.type = "button";
+            b.className = "pts-chip";
+            const filled = field && field.value.trim();
+            b.textContent = `${DETAIL_LABELS[k]}: ${r[k]}` + (filled ? " (has one)" : "");
+            b.title = filled ? `Replace "${field.value}" with this` : "Put this in the box (then Save)";
+            b.addEventListener("click", () => {
+              if (field) {
+                setFieldValue(field, r[k]);
+                b.classList.add("bta-used");
+              }
+            });
+            out.appendChild(b);
+          });
+          btn.textContent = "Ask again";
+        })
+        .catch((e) => {
+          out.textContent = "Couldn't ask the AI: " + e.message;
+          btn.textContent = "Try again";
+        })
+        .finally(() => (btn.disabled = false));
+    });
+  }
+
+  function checkPerformerForm() {
+    const m = location.pathname.match(PERF_PAGE);
+    if (!m) return;
+    const field = document.querySelector("form #hair_color");
+    if (!field) return;
+    const form = field.closest("form");
+    const old = form.querySelector(".bta-details");
+    if (old && old.dataset.performer === m[1]) return;
+    if (old) old.remove();
+    mountDetails(form, m[1]);
+  }
 
   // ---- "AI titles" under the Title box --------------------------------------
   const TITLE_PAGE = /^\/(scenes|images|galleries)\/(\d+)/;
@@ -178,6 +310,11 @@
       ["AI titles: preview on 10 items (no changes)", "AI titles: scenes without a title", "AI titles: images without a title"]],
     ["ai-studios", "Studios from accounts", "Studio and performers from the accounts and studio watermarks a scene shows",
       ["Studios from accounts: preview on 10 scenes (no changes)", "Studios from accounts: also read watermarks with the AI"]],
+    ["ai-faces", "Faces", "Who the people in scenes and images look like, from your performers' pictures",
+      ["Faces: learn performers' faces", "Faces: preview on 10 items (no changes)", "Faces: scenes without performers",
+       "Faces: images without performers"]],
+    ["ai-perf", "Performer details", "Hair and eye colour from performers' pictures",
+      ["Performer details: preview on 10 performers (no changes)", "Performer details: fill in empty hair and eye colour"]],
   ];
   const OPEN_KEY = "bta-task-groups-open";
   const GROUP_NAMES = new Set(TASK_GROUPS.flatMap((g) => g[3]));
@@ -237,6 +374,7 @@
     clearTimeout(titleTimer);
     titleTimer = setTimeout(() => {
       checkTitles();
+      checkPerformerForm();
       groupTasks();
     }, 200);
   }).observe(document.body, { childList: true, subtree: true });

@@ -1,5 +1,5 @@
 name: Better Tagging AI Add-on
-description: An add-on for Better Tagging Tools that tags scenes and images, writes titles, and finds a scene's studio and performers from the accounts and studio watermarks it shows - all with a local AI model (Ollama), on your own computer. Adds "Ask AI" buttons for tags and titles while editing, and can do all of it for new items after a scan. Install it next to Better Tagging Tools - it then uses that plugin's "Tags to ignore", special spellings and gallery-name tags, and its rows sit under Better Tagging Tools' suggestions. (It also works on its own.)
+description: An add-on for Better Tagging Tools that tags scenes and images, writes titles, finds a scene's studio and performers from the accounts and studio watermarks it shows, recognises performers' faces, and fills in performers' hair and eye colour, tattoos and piercings from their pictures - all with a local AI model (Ollama), on your own computer. Adds "Ask AI" buttons for tags and titles while editing, and can do all of it for new items after a scan. Install it next to Better Tagging Tools - it then uses that plugin's "Tags to ignore", special spellings and gallery-name tags, and its rows sit under Better Tagging Tools' suggestions. (It also works on its own.)
 version: "1.0"
 url: https://github.com/OpenSourceLuffy/stash-plugins/tree/main/plugins/BetterTaggingAI
 exec:
@@ -54,7 +54,48 @@ tasks:
     defaultArgs:
       mode: handle_studios
 
+  - name: "Faces: learn performers' faces"
+    description: Turns each performer's profile picture (and a few photos where they're the only performer) into a face fingerprint for the tasks below and the "Find performers by face" button. Only new or changed performers are looked at, so it's quick after the first time; the other face tasks do this first anyway. Needs the face helper (see the README).
+    defaultArgs:
+      mode: faces_learn
+  - name: "Faces: preview on 10 items (no changes)"
+    description: Picks 10 random scenes/images without performers and writes to the log who the people in them look like, without changing anything.
+    defaultArgs:
+      mode: faces_preview
+  - name: "Faces: scenes without performers"
+    description: Looks at 6 frames of every scene without performers and finds the performers they look like. With "Faces - add confident matches automatically" on, confident matches are added (a high likeness, and the closest match in at least two frames); otherwise the suggestions are only written to the log.
+    defaultArgs:
+      mode: faces_scenes
+  - name: "Faces: images without performers"
+    description: The same for images.
+    defaultArgs:
+      mode: faces_images
+  - name: "Performer details: preview on 10 performers (no changes)"
+    description: Picks 10 performers with no hair or eye colour and writes what the AI sees in their pictures to the log, without changing anything.
+    defaultArgs:
+      mode: perf_details_preview
+  - name: "Performer details: fill in empty hair and eye colour"
+    description: The local AI model looks at each performer's profile picture and photos where they're alone, twice with different photos, and fills in their hair and eye colour where both looks agree - only if the field is empty. Tattoos and piercings are offered by the "Ask AI for details" button when you edit a performer, for you to check. Height, measurements and the like can't be seen in a picture; use Stash's scrapers for those.
+    defaultArgs:
+      mode: perf_details
+
 settings:
+  faceAutoAssign:
+    displayName: "Faces: add confident matches automatically"
+    description: Lets the "Faces" tasks add performers they're confident about, and checks new scenes and images after a scan too. When off, the tasks only write suggestions to the log and you pick matches yourself with "Find performers by face" while editing.
+    type: BOOLEAN
+  faceAutoMin:
+    displayName: "Faces: likeness needed to add automatically (%)"
+    description: How alike a face must be to a performer's to be added without asking (images need 5 more, as one photo is less to go on than a scene's frames). It must also be clearly ahead of anyone else who looks similar. Default 50. Higher is stricter.
+    type: NUMBER
+  faceSuggestMin:
+    displayName: "Faces: likeness needed to suggest (%)"
+    description: How alike a face must be to show up as a suggestion. Default 36 (about where the face model says "probably the same person").
+    type: NUMBER
+  faceHelperUrl:
+    displayName: "Faces: helper address"
+    description: Where the face helper runs, as seen from Stash. Default http://host.docker.internal:11535 (the helper on the same computer as Stash's Docker container).
+    type: STRING
   aiAuto:
     displayName: "AI: tag new scenes and images automatically"
     description: Have the local AI model tag scenes and images as they're added by a scan.

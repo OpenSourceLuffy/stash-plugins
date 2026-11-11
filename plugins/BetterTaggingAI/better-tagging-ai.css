@@ -109,3 +109,14 @@
 .setting.bt-task-hidden {
   display: none !important;
 }
+
+.bta-faces .bta-sure {
+  border-style: solid;
+}
+.bta-details {
+  margin: 0 0 12px;
+}
+.bta-details .bta-used {
+  background: rgba(19, 124, 189, 0.25);
+  border-style: solid;
+}

@@ -399,7 +399,7 @@ def run_hook(stash, plugin_dir, hook):
         # Better Tagging AI: new scenes and images for the AI
         if action == "Create" and kind in ("Scene", "Image"):
             cfg = settings(stash, plugin_dir)
-            if cfg["ai"]["auto"] or cfg["ai"]["new_all"]:
+            if cfg["ai"]["auto"] or cfg["ai"]["new_all"] or cfg["ai"]["face_auto"]:
                 key = "ai_scenes" if kind == "Scene" else "ai_images"
                 enqueue(stash, plugin_dir, **{key: [str(hook["id"])]})
         return
@@ -575,22 +575,29 @@ def run_queued(stash, plugin_dir):
         except Exception as e:
             log("warning", f"Titles for new items skipped: {e}")
 
-    if (todo["ai_scenes"] or todo["ai_images"]) and (cfg["ai"]["auto"] or cfg["ai"]["new_all"]):
-        try:
-            run_ai_queued(stash, plugin_dir, todo["ai_scenes"], todo["ai_images"])
-        except Exception as e:
-            log("warning", f"AI tagging of new items skipped: {e}")
-        if cfg["ai"]["new_all"]:
-            # then the studio and performers from accounts / watermarks, then
-            # a title (which can use the tags and performers just found)
-            if todo["ai_scenes"]:
-                try:
-                    run_accounts_items(stash, plugin_dir, todo["ai_scenes"])
-                except Exception as e:
-                    log("warning", f"Studios from accounts for new scenes skipped: {e}")
+    if todo["ai_scenes"] or todo["ai_images"]:
+        ai = cfg["ai"]
+        new = {"scene": todo["ai_scenes"], "image": todo["ai_images"]}
+        # tags, then a scene's studio and performers from accounts, then who
+        # it looks like, then a title (which can use all of that)
+        if ai["auto"] or ai["new_all"]:
             try:
-                run_ai_titles(stash, plugin_dir, ["scene", "image"],
-                              ids={"scene": todo["ai_scenes"], "image": todo["ai_images"]})
+                run_ai_queued(stash, plugin_dir, todo["ai_scenes"], todo["ai_images"])
+            except Exception as e:
+                log("warning", f"AI tagging of new items skipped: {e}")
+        if ai["new_all"] and todo["ai_scenes"]:
+            try:
+                run_accounts_items(stash, plugin_dir, todo["ai_scenes"])
+            except Exception as e:
+                log("warning", f"Studios from accounts for new scenes skipped: {e}")
+        if ai["face_auto"]:
+            try:
+                run_faces(stash, plugin_dir, ["scene", "image"], ids=new)
+            except Exception as e:
+                log("warning", f"Faces for new items skipped: {e}")
+        if ai["new_all"]:
+            try:
+                run_ai_titles(stash, plugin_dir, ["scene", "image"], ids=new)
             except Exception as e:
                 log("warning", f"AI titles for new items skipped: {e}")
 
@@ -1838,6 +1845,15 @@ AI_SYSTEM = (
 )
 
 
+def num_pct(v, default):
+    """A percentage setting as a fraction (e.g. 36 -> 0.36)."""
+    try:
+        n = float(v)
+        return n / 100 if 1 <= n <= 100 else default / 100
+    except (TypeError, ValueError):
+        return default / 100
+
+
 def ai_settings(s):
     def num(key, default, lo):
         try:
@@ -1853,6 +1869,12 @@ def ai_settings(s):
         "auto": bool(s.get("aiAuto")),
         "new_all": bool(s.get("aiNewAll")),
         "autotag_first": not s.get("aiNoAutoTag"),
+        "face_url": (s.get("faceHelperUrl") or "http://host.docker.internal:11535").rstrip("/"),
+        "face_auto": bool(s.get("faceAutoAssign")),
+        # cosine likeness of two face fingerprints (SFace): about 0.36 and up
+        # is usually the same person
+        "face_min": num_pct(s.get("faceSuggestMin"), 36),
+        "face_auto_min": num_pct(s.get("faceAutoMin"), 50),
     }
 
 
@@ -2660,6 +2682,389 @@ def run_handle_studios(stash, plugin_dir, preview=False, limit=None, use_ai=True
     log("info", f"{'Preview: ' if preview else 'Done: '}{assigned} of {len(scenes)} scene(s) "
         + ("would get" if preview else "got") + f" a studio and/or performers from an account or watermark ({created} new studio(s))"
         + (". Nothing was saved." if preview else "."))
+
+
+# --- faces: who's in it ---------------------------------------------------
+# The face helper (a small local service, see the add-on's face-helper
+# folder) finds faces and turns each into a fingerprint. Performers'
+# fingerprints come from their profile picture (plus a few photos where
+# they're the only performer, if they look like the same person) and are
+# kept in face_index.json. A scene's frames / an image's faces are compared
+# with all of them; the closest performers are the suggestions.
+
+FACE_FRAME_POINTS = (0.1, 0.25, 0.4, 0.55, 0.7, 0.85)
+FACE_EXTRA_PHOTOS = 3
+
+
+def face_helper(cfg, pictures):
+    """Faces in each picture: [[{box, score, emb}], ...]."""
+    body = json.dumps({"images": [base64.b64encode(p).decode() for p in pictures]}).encode()
+    req = urllib.request.Request(cfg["ai"]["face_url"] + "/faces", data=body, headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            return json.loads(resp.read())["results"]
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"can't reach the face helper at {cfg['ai']['face_url']} ({e.reason if hasattr(e, 'reason') else e}). "
+                           "Is it running? See the add-on's README.")
+
+
+def _dot(a, b):
+    return sum(x * y for x, y in zip(a, b))
+
+
+def _biggest(faces):
+    return max(faces, key=lambda f: f["box"][2] * f["box"][3]) if faces else None
+
+
+def locked_face_index(plugin_dir):
+    return locked_json(os.path.join(plugin_dir, "face_index.json"))
+
+
+def update_face_index(stash, cfg, plugin_dir, only=None, quiet=False):
+    """Learn the faces of performers that are new or got a new picture.
+    Returns the index {performer id: {"name", "img", "embs"}}."""
+    perfs = stash.call("{ findPerformers(filter: {per_page: -1}) { performers { id name image_path } } }")["findPerformers"]["performers"]
+    if only:
+        perfs = [p for p in perfs if p["id"] in only]
+    with locked_face_index(plugin_dir) as index:
+        live = {p["id"] for p in perfs}
+        if not only:
+            for pid in list(index):
+                if pid not in live:
+                    del index[pid]
+        todo = [p for p in perfs if p.get("image_path") and "default=true" not in p["image_path"]
+                and (index.get(p["id"]) or {}).get("img") != p["image_path"]]
+        learned = 0
+        for n, p in enumerate(todo):
+            if not quiet:
+                progress(n / max(len(todo), 1))
+            try:
+                data, ctype = stash.fetch(p["image_path"])
+                main = _biggest(face_helper(cfg, [data])[0]) if ctype.startswith("image/") else None
+                embs = [main["emb"]] if main else []
+                if main:
+                    # a few photos where they're the only performer, if the
+                    # face there looks like the profile picture
+                    imgs = stash.call(
+                        "query($p: ImageFilterType) { findImages(image_filter: $p, filter: {per_page: 12, sort: \"random\"}) "
+                        "{ images { paths { thumbnail } } } }",
+                        {"p": {"performers": {"value": [p["id"]], "modifier": "INCLUDES"},
+                               "performer_count": {"value": 1, "modifier": "EQUALS"}}})["findImages"]["images"]
+                    pics = []
+                    for im in imgs[:6]:
+                        try:
+                            d, ct = stash.fetch(im["paths"]["thumbnail"])
+                            if ct.startswith("image/"):
+                                pics.append(d)
+                        except Exception:
+                            pass
+                    for faces in (face_helper(cfg, pics) if pics else []):
+                        f = _biggest(faces)
+                        if f and _dot(f["emb"], main["emb"]) >= 0.45 and len(embs) < 1 + FACE_EXTRA_PHOTOS:
+                            embs.append(f["emb"])
+                index[p["id"]] = {"name": p["name"], "img": p["image_path"], "embs": embs}
+                learned += bool(embs)
+            except RuntimeError:
+                raise
+            except Exception as e:
+                log("debug", f"{p['name']}: {e}")
+        for p in perfs:  # keep names current
+            if p["id"] in index:
+                index[p["id"]]["name"] = p["name"]
+        if todo and not quiet:
+            log("info", f"Learned the faces of {learned} of {len(todo)} new or changed performer(s) "
+                f"({sum(1 for v in index.values() if v['embs'])} known in all)")
+        return dict(index)
+
+
+def item_face_pictures(stash, kind, item):
+    """Pictures to look for faces in: a few frames of a scene, or an image."""
+    if kind == "image":
+        if not all(f["__typename"] == "ImageFile" for f in item.get("visual_files") or []):
+            return []
+        data, ctype = stash.fetch(item["paths"]["image"])
+        return [data] if ctype.startswith("image/") else []
+    f = (item.get("files") or [None])[0]
+    if not f or not (f.get("duration") or 0) > 1:
+        return []
+    out = []
+    for at in FACE_FRAME_POINTS:
+        try:
+            out.append(grab_frame(stash, f["path"], f["duration"] * at, width=1280)[0])
+        except Exception as e:
+            log("debug", f"frame at {at:.0%}: {e}")
+    return out
+
+
+FACE_ITEM_FIELDS = {
+    "scene": "id title performers { id } files { path duration }",
+    "image": "id title performers { id } paths { image thumbnail } "
+             "visual_files { __typename ... on ImageFile { path } ... on VideoFile { path } }",
+}
+
+
+def face_candidates(stash, cfg, index, kind, item):
+    """Performers who look like the people in it, best first:
+    [{"id", "name", "score", "pictures"}] - score is the best likeness (0-1),
+    pictures how many frames / faces they were the closest match in."""
+    pics = item_face_pictures(stash, kind, item)
+    if not pics:
+        return []
+    known = [(pid, v["name"], v["embs"]) for pid, v in index.items() if v.get("embs")]
+    best = {}  # performer id -> [score, pictures]
+    for faces in face_helper(cfg, pics):
+        seen_here = set()
+        for f in faces:
+            scored = sorted(((max(_dot(f["emb"], e) for e in embs), pid, name) for pid, name, embs in known), reverse=True)
+            for score, pid, name in scored[:3]:
+                if score < cfg["ai"]["face_min"]:
+                    break
+                b = best.setdefault(pid, {"id": pid, "name": name, "score": 0.0, "pictures": 0})
+                b["score"] = max(b["score"], score)
+                if pid not in seen_here and score == scored[0][0]:
+                    b["pictures"] += 1
+                    seen_here.add(pid)
+    return sorted(best.values(), key=lambda b: (-b["pictures"] if kind == "scene" else 0, -b["score"]))
+
+
+FACE_MARGIN = 0.05  # ahead of every other candidate by this much
+
+
+def confident(cfg, kind, c, cands):
+    """Good enough to add without asking: a high likeness, clearly ahead of
+    everyone else who looks similar (look-alikes are close together), and in
+    a scene the closest match in at least two frames, and in the most."""
+    others = [o for o in cands if o["id"] != c["id"]]
+    # one photo is weaker evidence than several frames of a scene
+    if c["score"] < cfg["ai"]["face_auto_min"] + (0.05 if kind == "image" else 0):
+        return False
+    if others and c["score"] - max(o["score"] for o in others) < FACE_MARGIN:
+        return False
+    if kind == "scene" and (c["pictures"] < 2 or any(o["pictures"] >= c["pictures"] for o in others)):
+        return False
+    return True
+
+
+def run_face_suggest(stash, plugin_dir, kind, item_id):
+    """Asked by the edit page: who it looks like. Nothing is saved."""
+    cfg = settings(stash, plugin_dir)
+    index = update_face_index(stash, cfg, plugin_dir, quiet=True)
+    query = "findScene" if kind == "scene" else "findImage"
+    item = stash.call(f"query($id: ID!) {{ {query}(id: $id) {{ {FACE_ITEM_FIELDS[kind]} }} }}", {"id": str(item_id)})[query]
+    if not item:
+        raise RuntimeError(f"{kind} {item_id} not found")
+    cands = face_candidates(stash, cfg, index, kind, item)
+    sure = {c["id"] for c in cands if confident(cfg, kind, c, cands)}
+    out = []
+    for c in cands[:6]:
+        out.append({**c, "score": round(c["score"] * 100), "sure": c["id"] in sure})
+    return out
+
+
+def add_performers(stash, kind, item, ids):
+    have = {p["id"] for p in item.get("performers") or []}
+    mutation, input_type = AUTOTAG_UPDATE[kind]
+    stash.call(f"mutation($i: {input_type}!) {{ {mutation}(input: $i) {{ id }} }}",
+               {"i": {"ids": [item["id"]], "performer_ids": {"ids": sorted(set(ids) - have, key=int), "mode": "ADD"}}})
+
+
+def run_faces(stash, plugin_dir, kinds, preview=False, limit=None, ids=None):
+    """Task: find who's in scenes / images without performers. Confident
+    matches are added when "Faces: add confident matches automatically" is
+    on; otherwise (or in a preview) they're only written to the log."""
+    cfg = settings(stash, plugin_dir)
+    index = update_face_index(stash, cfg, plugin_dir, quiet=ids is not None)
+    if not any(v.get("embs") for v in index.values()):
+        log("warning", "No performer faces known yet - performers need a profile picture with a face in it.")
+        return
+    apply = cfg["ai"]["face_auto"] and not preview
+    todo = []
+    for kind in kinds:
+        query, field, farg, ftype = {"scene": ("findScenes", "scenes", "scene_filter", "SceneFilterType"),
+                                     "image": ("findImages", "images", "image_filter", "ImageFilterType")}[kind]
+        if ids is not None:
+            if ids.get(kind):
+                todo += [(kind, i) for i in stash.call(
+                    f"query($ids: [ID!]) {{ {query}(ids: $ids, filter: {{per_page: -1}}) {{ {field} {{ {FACE_ITEM_FIELDS[kind]} }} }} }}",
+                    {"ids": ids[kind]})[query][field]]
+            continue
+        page = 1
+        while True:
+            items = stash.call(
+                f"query($p: {ftype}, $f: FindFilterType) {{ {query}({farg}: $p, filter: $f) {{ {field} {{ {FACE_ITEM_FIELDS[kind]} }} }} }}",
+                {"p": {"performer_count": {"value": 0, "modifier": "EQUALS"}},
+                 "f": {"page": page, "per_page": 500, "sort": "created_at", "direction": "DESC"}})[query][field]
+            todo += [(kind, i) for i in items]
+            if len(items) < 500:
+                break
+            page += 1
+    if limit:
+        import random
+        todo = random.sample(todo, min(limit, len(todo)))
+    if ids is None:
+        log("info", f"Looking for known faces in {len(todo)} item(s)" + (" without performers" if not ids else "")
+            + (" (preview, nothing is saved)" if preview else "" if apply else
+               " - only writing suggestions to the log, as \"Faces: add confident matches automatically\" is off"))
+    added = found = 0
+    for n, (kind, item) in enumerate(todo):
+        if ids is None:
+            progress(n / max(len(todo), 1))
+        name = os.path.basename(item_path(kind, item)) or f"{kind} {item['id']}"
+        try:
+            cands = face_candidates(stash, cfg, index, kind, item)
+        except RuntimeError:
+            raise
+        except Exception as e:
+            log("warning", f"{name}: skipped ({e})")
+            continue
+        if not cands:
+            continue
+        found += 1
+        sure = [c for c in cands if confident(cfg, kind, c, cands)]
+        text = ", ".join(f'{c["name"]} {round(c["score"] * 100)}%' + (f' in {c["pictures"]} frames' if kind == "scene" else "")
+                         for c in cands[:3])
+        if sure and apply:
+            add_performers(stash, kind, item, [c["id"] for c in sure])
+            added += 1
+            log("info", f'{name}: added {", ".join(c["name"] for c in sure)} (looks like: {text})')
+        else:
+            log("info", f'{name}: looks like {text}' + (f' - would add {", ".join(c["name"] for c in sure)}' if sure else ""))
+    if ids is None:
+        progress(1)
+        log("info", f"{'Preview: ' if preview else 'Done: '}found a likeness in {found} of {len(todo)} item(s)"
+            + (f"; added performers to {added}" if apply else "") + ("." if apply else ". Nothing was saved."))
+
+
+# --- performer details from their pictures ---------------------------------
+# What can be seen in a performer's pictures: hair and eye colour, tattoos,
+# piercings. Only empty fields are filled; height, measurements and the like
+# can't be seen in a picture (use Stash's scrapers for those).
+
+PERFORMER_DETAIL_FIELDS = ("hair_color", "eye_color", "tattoos", "piercings")
+HAIR_COLORS = ["Blonde", "Brunette", "Black", "Red", "Auburn", "Grey", "White", "Bald", "Various", "unknown"]
+EYE_COLORS = ["Blue", "Brown", "Green", "Grey", "Hazel", "unknown"]
+
+
+def performer_pictures(stash, perf, extra=2, skip=0):
+    """Their profile picture and a couple of photos where they're alone (the
+    same ones each time; `skip` takes the next few instead)."""
+    pics = []
+    if perf.get("image_path") and "default=true" not in perf["image_path"]:
+        d, ct = stash.fetch(perf["image_path"])
+        if ct.startswith("image/"):
+            pics.append(d)
+    imgs = stash.call(
+        "query($p: ImageFilterType) { findImages(image_filter: $p, filter: {per_page: 12, sort: \"created_at\", direction: DESC}) { images { paths { thumbnail } } } }",
+        {"p": {"performers": {"value": [perf["id"]], "modifier": "INCLUDES"}, "performer_count": {"value": 1, "modifier": "EQUALS"}}},
+    )["findImages"]["images"]
+    for im in imgs[skip:]:
+        if len(pics) >= 1 + extra:
+            break
+        try:
+            d, ct = stash.fetch(im["paths"]["thumbnail"])
+            if ct.startswith("image/"):
+                pics.append(d)
+        except Exception:
+            pass
+    return pics
+
+
+def ollama_performer_details(cfg, pictures, name):
+    ai = cfg["ai"]
+    # no example values in the prompt: a small model tends to copy them
+    prompt = (
+        f"These pictures all show the same person ({name}). Report only what you can clearly see in these pictures. "
+        "hair_color: their hair colour. eye_color: their eye colour, or unknown if the eyes aren't clearly visible. "
+        "tattoos: each tattoo you can actually see, as 'body part: what it shows', separated by semicolons; an empty "
+        "string if you see none. piercings: each piercing you can actually see, by body part, separated by semicolons; "
+        "an empty string if you see none. Do not guess and do not make anything up."
+    )
+    body = {
+        "model": ai["model"], "stream": False, "keep_alive": "15m", "options": {"temperature": 0},
+        "messages": [{"role": "user", "content": prompt, "images": [base64.b64encode(p).decode() for p in pictures]}],
+        "format": {"type": "object", "properties": {
+            "hair_color": {"type": "string", "enum": HAIR_COLORS},
+            "eye_color": {"type": "string", "enum": EYE_COLORS},
+            "tattoos": {"type": "string"}, "piercings": {"type": "string"}},
+            "required": ["hair_color", "eye_color", "tattoos", "piercings"]},
+    }
+    req = urllib.request.Request(ai["url"] + "/api/chat", data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=300) as resp:
+        reply = json.loads(resp.read())
+    try:
+        out = json.loads((reply.get("message") or {}).get("content") or "{}")
+    except ValueError:
+        return {}
+    clean = {}
+    for k in PERFORMER_DETAIL_FIELDS:
+        v = (out.get(k) or "").strip().strip(".")
+        if k in ("tattoos", "piercings"):
+            # drop parts like "ear: none" or "Unknown"
+            parts = [x.strip() for x in v.split(";")]
+            v = "; ".join(x for x in parts if x and not re.search(r"\b(none|unknown|not visible|n/a)\b", x, re.I)
+                          and "body part" not in x.lower())
+        low = v.lower()
+        if not v or low in ("unknown", "none", "n/a", "no", "not visible", "none visible"):
+            continue
+        clean[k] = v[:200]
+    return clean
+
+
+PERFORMER_DETAIL_QUERY = "id name image_path " + " ".join(PERFORMER_DETAIL_FIELDS)
+
+
+def run_performer_details_one(stash, plugin_dir, perf_id):
+    """Asked by the performer edit page: what the AI sees. Nothing is saved."""
+    cfg = settings(stash, plugin_dir)
+    ai_check(cfg)
+    perf = stash.call(f"query($id: ID!) {{ findPerformer(id: $id) {{ {PERFORMER_DETAIL_QUERY} }} }}", {"id": str(perf_id)})["findPerformer"]
+    pics = performer_pictures(stash, perf)
+    if not pics:
+        raise RuntimeError("they have no pictures to look at")
+    return ollama_performer_details(cfg, pics, perf["name"])
+
+
+def run_performer_details(stash, plugin_dir, preview=False, limit=None):
+    """Task: fill in performers' empty hair / eye colour, tattoos and
+    piercings from their pictures."""
+    cfg = settings(stash, plugin_dir)
+    ai_check(cfg)
+    perfs = stash.call(f"{{ findPerformers(filter: {{per_page: -1}}) {{ performers {{ {PERFORMER_DETAIL_QUERY} }} }} }}")["findPerformers"]["performers"]
+    perfs = [p for p in perfs if any(not (p.get(k) or "").strip() for k in ("hair_color", "eye_color"))]
+    if limit:
+        import random
+        perfs = random.sample(perfs, min(limit, len(perfs)))
+    log("info", f"Looking at {len(perfs)} performer(s) with no hair or eye colour"
+        + (" (preview, nothing is saved)" if preview else ""))
+    changed = 0
+    for n, p in enumerate(perfs):
+        progress(n / max(len(perfs), 1))
+        try:
+            pics = performer_pictures(stash, p)
+            if not pics:
+                continue
+            # asked twice, with two different sets of their photos; only what
+            # both answers agree on counts
+            first = ollama_performer_details(cfg, pics, p["name"])
+            other = performer_pictures(stash, p, skip=2)
+            second = ollama_performer_details(cfg, other, p["name"]) if other[1:] != pics[1:] else first
+            # (tattoos and piercings are too hit-and-miss to save unseen; the
+            # "Ask AI for details" button offers them for you to check)
+            seen = {k: first[k] for k in ("hair_color", "eye_color")
+                    if first.get(k) and first.get(k, "").lower() == second.get(k, "").lower()}
+        except Exception as e:
+            log("warning", f"{p['name']}: skipped ({e})")
+            continue
+        fill = {k: v for k, v in seen.items() if not (p.get(k) or "").strip()}
+        if not fill:
+            continue
+        changed += 1
+        log("info", f'{p["name"]}: {"would set" if preview else "set"} ' + "; ".join(f"{k.replace('_', ' ')} = {v}" for k, v in fill.items()))
+        if not preview:
+            stash.call("mutation($i: PerformerUpdateInput!) { performerUpdate(input: $i) { id } }", {"i": {"id": p["id"], **fill}})
+    progress(1)
+    log("info", f"{'Preview: ' if preview else 'Done: '}{changed} of {len(perfs)} performer(s) "
+        + ("would get" if preview else "got") + " details from their pictures" + (". Nothing was saved." if preview else "."))
 
 
 BULK_MUTATIONS = {

@@ -59,6 +59,20 @@ def main():
             c.run_handle_studios(stash, plugin_dir, use_ai=True)
         elif mode == "handle_studios_preview":
             c.run_handle_studios(stash, plugin_dir, preview=True, limit=10)
+        elif mode == "faces_learn":
+            c.update_face_index(stash, c.settings(stash, plugin_dir), plugin_dir)
+        elif mode == "faces_preview":
+            c.run_faces(stash, plugin_dir, ["scene", "image"], preview=True, limit=10)
+        elif mode in ("faces_scenes", "faces_images"):
+            c.run_faces(stash, plugin_dir, [mode.split("_")[1][:-1]])
+        elif mode == "face_suggest":
+            print(json.dumps({"output": c.run_face_suggest(stash, plugin_dir, args["kind"], args["id"])}))
+        elif mode == "perf_details":
+            c.run_performer_details(stash, plugin_dir)
+        elif mode == "perf_details_preview":
+            c.run_performer_details(stash, plugin_dir, preview=True, limit=10)
+        elif mode == "perf_details_one":
+            print(json.dumps({"output": c.run_performer_details_one(stash, plugin_dir, args["id"])}))
         elif mode == "title_ideas":
             print(json.dumps({"output": c.run_title_ideas(stash, plugin_dir, args["kind"], args["id"], True)}))
         else:
