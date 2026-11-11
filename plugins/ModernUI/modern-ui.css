@@ -2944,35 +2944,42 @@ body.mui .saved-filter-list-menu .input-group-append > .btn:not(:disabled) {
    list's toolbar and the filters in use
    ------------------------------------------------------------------ */
 .mui-quick-filters {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
   max-width: 100%;
-  margin: 0 auto 10px;
-  padding: 0 4px;
+  margin: 0 auto 8px;
 }
-.mui-qf-label {
-  flex: none;
-  font-size: 0.75rem;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-  opacity: 0.6;
-  white-space: nowrap;
-}
-.mui-qf-row {
+/* the quick filters and the filters in use: one line each that scrolls
+   sideways, centred while it fits (the auto margins, unlike centring,
+   keep the start reachable once it's wider than the screen) */
+.mui-qf-row,
+body.mui .main .filter-tags {
   display: flex;
+  flex-wrap: nowrap;
+  justify-content: flex-start;
   gap: 6px;
   min-width: 0;
-  padding: 2px;
+  max-width: 100%;
+  padding: 2px 4px;
   overflow-x: auto;
+  overflow-y: hidden;
   overscroll-behavior-x: contain;
   -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
 }
-.mui-qf-row::-webkit-scrollbar {
+.mui-qf-row::-webkit-scrollbar,
+body.mui .main .filter-tags::-webkit-scrollbar {
   display: none;
+}
+.mui-qf-row > :first-child,
+body.mui .main .filter-tags > :first-child {
+  margin-left: auto !important;
+}
+.mui-qf-row > :last-child,
+body.mui .main .filter-tags > :last-child {
+  margin-right: auto !important;
+}
+body.mui .main .filter-tags > * {
+  flex: none;
+  white-space: nowrap;
 }
 .mui-qf-btn {
   flex: none;
@@ -3000,10 +3007,6 @@ body.mui .saved-filter-list-menu .input-group-append > .btn:not(:disabled) {
   outline-offset: 2px;
 }
 @media (max-width: 576px) {
-  .mui-quick-filters {
-    justify-content: flex-start;
-    gap: 8px;
-  }
   .mui-qf-btn {
     padding: 6px 14px;
   }

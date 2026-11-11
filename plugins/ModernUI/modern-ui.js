@@ -113,11 +113,16 @@
 
     let lists = {}; // mode -> [names], loaded per page visit
     let shownFor = "";
-    let pending = null; // { mode, name, at } while a filter is loading
     let lastHref = "";
+    let wanted = null; // the latest tapped filter not yet started
+    let running = false; // a filter is being loaded
+    let showing = null; // { mode, name } highlighted straight away on a tap
+    let fromMenu = null; // { mode, name, until } picked in Stash's own menu
 
     const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
     const modeNow = () => MODES[location.pathname.replace(/\/+$/, "")] || null;
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const menuOpen = () => document.querySelector(".saved-filter-list-menu.show");
     // the parts of the address that make up the filter itself
     function filterKey(search) {
       const params = new URLSearchParams(search);
@@ -164,11 +169,12 @@
       body.toggle("mui-has-quick-filters", on);
       if (!on) { shownFor = ""; bar.remove(); return; }
       const pick = chosen()[mode];
-      const active = pick && pick.key === filterKey(location.search) ? pick.name : null;
+      const active = showing && showing.mode === mode ? showing.name
+        : pick && pick.key === filterKey(location.search) ? pick.name : null;
       const sig = mode + "|" + names.join("\n") + "|" + active;
       if (sig !== shownFor) {
         shownFor = sig;
-        bar.innerHTML = '<span class="mui-qf-label">Quick filters</span><div class="mui-qf-row">' +
+        bar.innerHTML = '<div class="mui-qf-row">' +
           names.map((n) => `<button type="button" class="mui-qf-btn${n === active ? " active" : ""}"` +
             `${n === active ? ' aria-pressed="true"' : ""} data-name="${esc(n)}">${esc(n)}</button>`).join("") +
           "</div>";
@@ -182,60 +188,107 @@
       }
     }
 
-    function waitFor(fn, ms) {
-      return new Promise((resolve) => {
-        const end = Date.now() + ms;
-        (function check() {
-          const v = fn();
-          if (v || Date.now() > end) return resolve(v);
-          setTimeout(check, 50);
-        })();
-      });
+    async function waitFor(fn, ms) {
+      const end = Date.now() + ms;
+      for (;;) {
+        const v = fn();
+        if (v || Date.now() > end) return v;
+        await sleep(50);
+      }
     }
 
-    async function apply(name) {
-      const mode = modeNow();
-      const toggle = document.querySelector(".main .saved-filter-dropdown .dropdown-toggle");
-      if (!mode || !toggle) return;
+    // Choose one saved filter in Stash's menu: "changed" once the list's
+    // address has changed, "same" if Stash took the click but the address
+    // stayed (it was already this filter), false if it didn't work.
+    async function chooseInMenu(name) {
+      const toggle = await waitFor(() => document.querySelector(".main .saved-filter-dropdown .dropdown-toggle"), 3000);
+      if (!toggle) return false;
+      if (!menuOpen()) toggle.click();
+      const find = () => menuOpen() && [...menuOpen().querySelectorAll(".saved-filter-list a.dropdown-item")]
+        .find((a) => (a.getAttribute("title") || a.textContent.trim()) === name);
+      // Stash shows the menu's old items for a moment and then draws them
+      // again: only click an item that has stayed put
+      let item = null;
+      const end = Date.now() + 2500;
+      while (Date.now() < end) {
+        const first = find();
+        if (first) {
+          await sleep(150);
+          if (find() === first && first.isConnected) { item = first; break; }
+        } else {
+          await sleep(50);
+        }
+      }
+      if (!item) {
+        if (menuOpen()) toggle.click();
+        return false;
+      }
+      const before = location.search;
+      // the item is a href="#" link: only Stash's handler should run, not
+      // the browser following it (with Stash's <base href="/"> that's the
+      // home page)
+      item.addEventListener("click", (e) => e.preventDefault(), { once: true });
+      item.click();
+      await waitFor(() => !menuOpen(), 500);
+      if (menuOpen()) toggle.click();
+      return (await waitFor(() => location.search !== before, 1500)) ? "changed" : "same";
+    }
+
+    // Taps are handled one at a time, the latest winning, so quick taps
+    // don't fight over Stash's menu
+    async function run() {
+      if (running) return;
+      running = true;
       body.add("mui-qf-busy"); // keeps Stash's menu out of sight while it's used
       try {
-        if (!document.querySelector(".saved-filter-list-menu.show")) toggle.click();
-        const item = await waitFor(() => [...document.querySelectorAll(".saved-filter-list-menu.show .saved-filter-list a.dropdown-item")]
-          .find((a) => (a.getAttribute("title") || a.textContent.trim()) === name), 1500);
-        if (!item) {
-          if (document.querySelector(".saved-filter-list-menu.show")) toggle.click();
-          return;
+        while (wanted) {
+          const { mode, name } = wanted;
+          wanted = null;
+          if (modeNow() !== mode) continue;
+          let result = await chooseInMenu(name);
+          if (!result && !wanted) result = await chooseInMenu(name); // once more if it didn't work
+          if (wanted) continue; // tapped another meanwhile
+          if (!result) continue; // couldn't: leave the highlight as it was
+          // Stash can adjust the address once more (e.g. a random sort's
+          // seed): wait for it to settle before remembering it
+          let last = location.search;
+          let still = Date.now();
+          const end = Date.now() + 2000;
+          while (!wanted && Date.now() < end && Date.now() - still < 400) {
+            await sleep(50);
+            if (location.search !== last) { last = location.search; still = Date.now(); }
+          }
+          if (!wanted && modeNow() === mode) remember(mode, name);
         }
-        pending = { mode, name, at: Date.now() };
-        // the item is a href="#" link: only Stash's handler should run, not
-        // the browser following it (with Stash's <base href="/"> that's the
-        // home page)
-        item.addEventListener("click", (e) => e.preventDefault(), { once: true });
-        item.click();
-        await waitFor(() => !document.querySelector(".saved-filter-list-menu.show"), 400);
-        if (document.querySelector(".saved-filter-list-menu.show")) toggle.click();
       } finally {
+        running = false;
+        showing = null;
         setTimeout(() => body.remove("mui-qf-busy"), 100);
+        render();
       }
-      // the address may already be this filter's (nothing changes then)
-      setTimeout(() => {
-        if (pending && pending.name === name) { remember(mode, name); pending = null; render(); }
-      }, 1200);
     }
 
     bar.addEventListener("click", (e) => {
       const btn = e.target.closest(".mui-qf-btn");
+      const mode = modeNow();
+      if (!btn || !mode) return;
+      const pick = chosen()[mode];
+      // already the filter in use (and nothing else waiting): nothing to do
+      if (!running && pick && pick.name === btn.dataset.name && pick.key === filterKey(location.search)) return;
+      wanted = { mode, name: btn.dataset.name };
+      showing = { mode, name: btn.dataset.name };
+      render();
       // after this click is done: Stash closes its menu on clicks outside it
-      if (btn) setTimeout(() => apply(btn.dataset.name), 0);
+      setTimeout(run, 0);
     });
 
     // filters chosen (or saved / deleted) in Stash's own menu
     document.addEventListener("click", (e) => {
       const menu = e.target.closest && e.target.closest(".saved-filter-list-menu");
-      if (!menu || body.contains("mui-qf-busy")) return;
+      if (!menu || running) return;
       const item = e.target.closest(".saved-filter-list a.dropdown-item");
       const mode = modeNow();
-      if (item && mode) pending = { mode, name: item.getAttribute("title") || item.textContent.trim(), at: Date.now() };
+      if (item && mode) fromMenu = { mode, name: item.getAttribute("title") || item.textContent.trim(), until: Date.now() + 2500 };
       else if (mode && e.target.closest("button")) setTimeout(() => load(mode), 800);
     }, true);
 
@@ -244,9 +297,10 @@
       if (location.href !== lastHref) {
         lastHref = location.href;
         const mode = modeNow();
-        if (pending && pending.mode === mode && Date.now() - pending.at < 3000) {
-          remember(mode, pending.name);
-          pending = null;
+        // (every change for a moment: Stash may adjust the address again)
+        if (fromMenu && fromMenu.mode === mode && Date.now() < fromMenu.until) {
+          remember(mode, fromMenu.name);
+          fromMenu.until = Date.now() + 1000;
         }
         render();
         if (mode) load(mode); // (again each time, to pick up filters saved elsewhere)
