@@ -98,12 +98,12 @@ tasks:
     description: Gives every image in every gallery a tag named after its gallery (its title, or the zip or folder name), creating the tags as needed. Use it once to catch up existing galleries; the setting below keeps new ones tagged.
     defaultArgs:
       mode: gallerynames
-  - name: Preview gallery tags on images (no changes)
-    description: Writes what "Tag gallery images with the gallery's tags" would add to the log, without changing anything.
+  - name: Preview gallery tags, performers and studio on images (no changes)
+    description: Writes what "Tag gallery images with the gallery's tags, performers and studio" would add to the log, without changing anything.
     defaultArgs:
       mode: gallerytags_preview
-  - name: Tag gallery images with the gallery's tags
-    description: Gives every image in a gallery the tags that gallery has. Tags are only added, never removed. Top tags this plugin added to a gallery (counted from its images) aren't copied back down.
+  - name: Tag gallery images with the gallery's tags, performers and studio
+    description: Gives every image in a gallery the gallery's tags and performers, and its studio if the image has no studio yet (a studio already set is kept). Nothing is removed. Top tags this plugin added to a gallery (counted from its images) aren't copied back down.
     defaultArgs:
       mode: gallerytags
 

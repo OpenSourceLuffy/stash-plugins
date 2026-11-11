@@ -795,44 +795,56 @@ UNDERAGE_TAGS = {"lolicon", "loli", "shotacon", "shota", "toddlercon"}
 
 
 def run_gallery_tags_to_images(stash, plugin_dir, preview=False):
-    """Task: give every image in a gallery the tags on that gallery. Top tags
-    this plugin put on the gallery (counted from its images) aren't copied
-    back down, or a tag on a few images would spread to all of them."""
+    """Task: give every image in a gallery the gallery's tags and performers,
+    and its studio if the image has none (a studio already set is kept).
+    Top tags this plugin put on the gallery (counted from its images) aren't
+    copied back down, or a tag on a few images would spread to all of them."""
     with locked_record(plugin_dir) as record:
         auto = {k.split(":", 1)[1]: set(v) for k, v in record.items() if k.startswith("gallery:")}
     galleries = stash.call(
-        "{ findGalleries(gallery_filter: {tag_count: {value: 0, modifier: GREATER_THAN}}, filter: {per_page: -1})"
-        " { galleries { id title files { basename } folder { path } image_count tags { id name } } } }"
+        "{ findGalleries(filter: {per_page: -1}) { galleries { id title files { basename } folder { path }"
+        " tags { id name } performers { id name } studio { id name } } } }"
     )["findGalleries"]["galleries"]
-    total, changed = 0, 0
+    galleries = [g for g in galleries if g["tags"] or g["performers"] or g["studio"]]
+    totals = Counter()
+    changed = 0
     for n, g in enumerate(galleries):
+        progress((n + 1) / max(len(galleries), 1))
         name = gallery_name(g) or f"gallery {g['id']}"
         if any(t["name"].strip().lower() in UNDERAGE_TAGS for t in g["tags"]):
             log("warning", f'"{name}": skipped - tagged as sexual content involving minors')
             continue
+        in_gallery = {"galleries": {"value": [g["id"]], "modifier": "INCLUDES"}}
         skip = auto.get(str(g["id"]), set())
         added = []
-        for t in g["tags"]:
-            if t["id"] in skip:
-                continue
-            missing = item_ids(stash, "images", {
-                "galleries": {"value": [g["id"]], "modifier": "INCLUDES"},
-                "tags": {"value": [t["id"]], "modifier": "EXCLUDES"},
-            })
+        # (what, field to filter on, its id, label, bulk update input)
+        work = [("tag", "tags", t["id"], t["name"], {"tag_ids": {"ids": [t["id"]], "mode": "ADD"}})
+                for t in g["tags"] if t["id"] not in skip]
+        work += [("performer", "performers", p["id"], p["name"], {"performer_ids": {"ids": [p["id"]], "mode": "ADD"}})
+                 for p in g["performers"]]
+        if g["studio"]:
+            work.append(("studio", "studios", None, f'studio {g["studio"]["name"]}', {"studio_id": g["studio"]["id"]}))
+        for what, field, oid, label, update in work:
+            crit = {"modifier": "IS_NULL"} if oid is None else {"value": [oid], "modifier": "EXCLUDES"}
+            missing = item_ids(stash, "images", {**in_gallery, field: crit})
             if not missing:
                 continue
             if not preview:
-                bulk_images(stash, missing, t["id"], "ADD")
-            added.append(f"{t['name']} ({len(missing)})")
-            total += len(missing)
+                for i in range(0, len(missing), BULK_BATCH):
+                    stash.call(
+                        "mutation($i: BulkImageUpdateInput!) { bulkImageUpdate(input: $i) { id } }",
+                        {"i": {"ids": missing[i:i + BULK_BATCH], **update}},
+                    )
+            added.append(f"{label} ({len(missing)})")
+            totals[what] += len(missing)
         if added:
             changed += 1
             log("info", f'"{name}": {"would add" if preview else "added"} {", ".join(added)}')
-        progress((n + 1) / max(len(galleries), 1))
+    what = f"{totals['tag']} tag(s), {totals['performer']} performer(s) and {totals['studio']} studio(s)"
     if preview:
-        log("info", f"Preview done: {changed} of {len(galleries)} tagged galleries would add {total} tag(s) to their images. Nothing was saved.")
+        log("info", f"Preview done: {changed} of {len(galleries)} galleries would add {what} to their images. Nothing was saved.")
     else:
-        log("info", f"Done: {changed} of {len(galleries)} tagged galleries added {total} tag(s) to their images.")
+        log("info", f"Done: {changed} of {len(galleries)} galleries added {what} to their images.")
 
 
 # --- tag pictures ---------------------------------------------------------
