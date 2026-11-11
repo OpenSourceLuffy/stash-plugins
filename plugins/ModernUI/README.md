@@ -47,7 +47,8 @@ A cleaner, app-like look for Stash, built to feel good on a phone as well as a c
 
 **Images and galleries**
 - Image details (title, rating, tabs) sit under the picture on wide screens, like scenes. You can change this in the settings.
-- Gallery pages show the gallery's name at the top. The details panel starts closed; you can change this in the settings.
+- Gallery pages show the gallery's name at the top, with its cover next to it and a **← Galleries** button that takes you back to the list of galleries (as you left it). The details panel starts closed; you can change this in the settings.
+- An image that's in a gallery has a **← gallery name** button (with the gallery's cover) above it, back to the gallery you came from (or its gallery, if you opened the image some other way).
 
 **Suggested and Similar rows**
 - The "Suggested", "Similar photos", "More with…" and "Similar Performers" rows now live in their own plugin, [Stash Suggestions](../StashSuggestions), which also works without Modern UI. Install it alongside Modern UI to keep them; they pick up Modern UI's look, and swiping between photos follows the row you picked from.

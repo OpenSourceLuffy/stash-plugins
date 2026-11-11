@@ -1918,6 +1918,9 @@ body.mui.mui-light .preview-button .fa-icon {
 
 body.mui .mui-gallery-title {
   margin: 14px 0 6px;
+}
+body.mui .mui-gallery-title h2 {
+  margin: 0;
   font-size: 1.6rem;
   font-weight: 700;
   line-height: 1.2;
@@ -1926,6 +1929,71 @@ body.mui .mui-gallery-title {
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
+}
+
+/* gallery name with its cover and "← Galleries" (details panel and above
+   the images) */
+body.mui .mui-gallery-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+body.mui .mui-gallery-head > h2,
+body.mui .mui-gallery-head > h3 {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-bottom: 0;
+}
+body.mui .mui-gallery-cover {
+  width: 64px;
+  height: 64px;
+  flex: none;
+  object-fit: cover;
+  border-radius: 10px;
+  background: rgba(128, 128, 128, 0.2);
+}
+body.mui .mui-exit {
+  flex: none;
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  padding: 6px 14px;
+  border: 1px solid rgba(128, 128, 128, 0.45);
+  border-radius: 999px;
+  background: rgba(128, 128, 128, 0.14);
+  color: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  line-height: 1.3;
+  white-space: nowrap;
+  cursor: pointer;
+}
+body.mui .mui-exit:hover {
+  background: rgba(128, 128, 128, 0.26);
+}
+
+/* image page: "← <gallery>" above everything (the page is a flex row) */
+body.mui .mui-image-crumb {
+  order: -10;
+  flex: 0 0 100%;
+  max-width: 100%;
+  padding: 8px 15px 6px;
+}
+body.mui .mui-image-crumb .mui-exit {
+  margin-left: 0;
+  padding: 4px 14px 4px 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+body.mui .mui-crumb-cover {
+  width: 32px;
+  height: 32px;
+  flex: none;
+  object-fit: cover;
+  border-radius: 50%;
+  background: rgba(128, 128, 128, 0.2);
 }
 
 /* Phones/tablets: the details panel (with the name) is already right

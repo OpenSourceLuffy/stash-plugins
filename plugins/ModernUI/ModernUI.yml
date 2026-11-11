@@ -1,6 +1,6 @@
 name: Modern UI
 description: Cleaner scene, performer, image, gallery, studio, group and tag cards, plus a mobile-friendly layout.
-version: "0.50"
+version: "0.51"
 ui:
   javascript:
     - modern-ui.js

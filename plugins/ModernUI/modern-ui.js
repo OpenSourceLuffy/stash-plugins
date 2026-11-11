@@ -340,38 +340,175 @@
   // Stash only shows it in the details panel on the left, which can be
   // collapsed. We copy it into a heading at the top of the picture area.
 
+  // Gallery page: the gallery's cover next to its name, and "← Galleries"
+  // to go back to the list of galleries. Image page: "← <gallery>" (with its
+  // cover) to go back to the gallery the image is in.
+  // On wide screens the name (with cover and button) is also shown above the
+  // images, since the details panel starts closed.
   function setupGalleryTitle() {
-    function sync() {
-      const container = document.querySelector(".gallery-container");
-      let heading = document.querySelector(".mui-gallery-title");
-      if (!container) {
-        heading?.remove();
-        return;
-      }
+    const GALLERY_PAGE = /^\/galleries\/(\d+)/;
+    const IMAGE_PAGE = /^\/images\/(\d+)/;
+    const LIST_KEY = "mui-galleries-list"; // the galleries list as you left it
+    const LAST_KEY = "mui-last-gallery"; // {id, url} of the gallery you were in
+    const store = {
+      get(k) {
+        try {
+          return JSON.parse(sessionStorage.getItem(k));
+        } catch (e) {
+          return null;
+        }
+      },
+      set(k, v) {
+        try {
+          sessionStorage.setItem(k, JSON.stringify(v));
+        } catch (e) {}
+      },
+    };
+    const here = () => window.location.pathname + window.location.search;
+    let current = here();
+    let previous = null;
+    function track() {
+      const now = here();
+      if (now === current) return;
+      previous = current;
+      current = now;
+    }
+    window.addEventListener("popstate", track);
+    window.addEventListener("mui:locationchange", track);
+
+    // back to `url`: the browser's Back when that's where you came from
+    // (keeps your place in the list), else go there
+    function goBack(url, samePage) {
+      if (previous && samePage(previous.split("?")[0])) window.history.back();
+      else routerNavigate(url);
+    }
+
+    function cover(id, cls) {
+      const img = document.createElement("img");
+      img.className = cls;
+      img.alt = "";
+      img.loading = "lazy";
+      img.src = "/gallery/" + id + "/cover";
+      img.onerror = () => (img.style.visibility = "hidden");
+      return img;
+    }
+
+    function exitButton(label, title, onClick) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "mui-exit";
+      b.title = title;
+      b.textContent = label;
+      b.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onClick();
+      });
+      return b;
+    }
+
+    const toGalleries = () =>
+      goBack(store.get(LIST_KEY) || "/galleries", (path) => path === "/galleries");
+
+    function syncGallery(id) {
+      store.set(LAST_KEY, { id, url: here() });
       const source = document.querySelector(".gallery-tabs .gallery-header");
       const name = (source?.textContent || "").trim();
-      if (!name) return;
-      if (!heading || heading.parentElement !== container) {
+
+      // in the details panel (phones, and wide screens with it open)
+      const box = source?.parentElement;
+      if (box && box.dataset.muiGallery !== id) {
+        box.querySelectorAll(".mui-gallery-cover, .mui-exit").forEach((e) => e.remove());
+        box.dataset.muiGallery = id;
+        box.classList.add("mui-gallery-head");
+        box.insertBefore(cover(id, "mui-gallery-cover"), source);
+        box.appendChild(exitButton("← Galleries", "Back to all galleries", toGalleries));
+      }
+
+      // above the images (wide screens)
+      const container = document.querySelector(".gallery-container");
+      let heading = document.querySelector(".mui-gallery-title");
+      if (!container || !name) return;
+      if (!heading || heading.parentElement !== container || heading.dataset.id !== id) {
         heading?.remove();
-        heading = document.createElement("h2");
-        heading.className = "mui-gallery-title";
+        heading = document.createElement("div");
+        heading.className = "mui-gallery-title mui-gallery-head";
+        heading.dataset.id = id;
+        const text = document.createElement("h2");
+        heading.append(cover(id, "mui-gallery-cover"), text, exitButton("← Galleries", "Back to all galleries", toGalleries));
         container.insertBefore(heading, container.firstChild);
       }
-      if (heading.textContent !== name) {
-        heading.textContent = name;
-        heading.title = name;
+      const text = heading.querySelector("h2");
+      if (text.textContent !== name) {
+        text.textContent = name;
+        text.title = name;
       }
     }
 
+    // the image page: which gallery to go back to (the one you came from,
+    // if the image is in it, else its first gallery)
+    const galleriesOf = new Map(); // image id -> [{id, title}]
+    function syncImage(imageId) {
+      const row = document.querySelector(".image-container")?.parentElement;
+      if (!row) return;
+      let bar = row.querySelector(":scope > .mui-image-crumb");
+      if (bar && bar.dataset.image === imageId) return;
+      bar?.remove();
+      const list = galleriesOf.get(imageId);
+      if (!list) {
+        galleriesOf.set(imageId, null);
+        fetch("/graphql", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query: "query($id: ID!) { findImage(id: $id) { galleries { id title files { path } folder { path } } } }", variables: { id: imageId } }),
+        })
+          .then((r) => r.json())
+          .then((d) => {
+            const gs = (d.data.findImage?.galleries || []).map((g) => ({
+              id: g.id,
+              title: g.title || ((g.files?.[0]?.path || g.folder?.path || "").split("/").pop()) || "Gallery",
+            }));
+            galleriesOf.set(imageId, gs);
+            schedule();
+          })
+          .catch(() => galleriesOf.set(imageId, []));
+        return;
+      }
+      if (!list.length) return;
+      const last = store.get(LAST_KEY);
+      const g = list.find((x) => last && x.id === last.id) || list[0];
+      const url = last && last.id === g.id ? last.url : "/galleries/" + g.id;
+      bar = document.createElement("div");
+      bar.className = "mui-image-crumb";
+      bar.dataset.image = imageId;
+      const btn = exitButton("", "Back to the gallery " + g.title, () =>
+        goBack(url, (path) => path === "/galleries/" + g.id));
+      btn.append(cover(g.id, "mui-crumb-cover"), document.createTextNode("← " + g.title));
+      bar.appendChild(btn);
+      row.insertBefore(bar, row.firstChild);
+    }
+
+    function sync() {
+      const path = window.location.pathname;
+      if (path === "/galleries") store.set(LIST_KEY, here());
+      const g = path.match(GALLERY_PAGE);
+      const i = path.match(IMAGE_PAGE);
+      if (g) syncGallery(g[1]);
+      else document.querySelector(".mui-gallery-title")?.remove();
+      if (i) syncImage(i[1]);
+      else document.querySelectorAll(".mui-image-crumb").forEach((e) => e.remove());
+    }
+
     let queued = false;
-    new MutationObserver(() => {
+    function schedule() {
       if (queued) return;
       queued = true;
       requestAnimationFrame(() => {
         queued = false;
         sync();
       });
-    }).observe(document.body, { childList: true, subtree: true, characterData: true });
+    }
+    new MutationObserver(schedule).observe(document.body, { childList: true, subtree: true, characterData: true });
     sync();
   }
 
