@@ -130,7 +130,11 @@
         },
           h("img", { className: "bta-face-pic", src: `/performer/${c.id}/image`, alt: "", loading: "lazy" }),
           h("span", null, "+ " + c.name + " " + c.score + "%" + (c.sure ? " ✓" : "")))
-      )
+      ),
+      // put the suggestions away again (the button comes back)
+      (st.state === "done" || st.state === "error") &&
+        h("button", { type: "button", className: "pts-chip bta-hide", onClick: () => setSt({ state: "idle" }),
+          title: "Hide these suggestions" }, "✕ Hide")
     );
   }
 
