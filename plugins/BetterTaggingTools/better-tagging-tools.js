@@ -200,6 +200,89 @@
     };
   });
 
+  // One tag -> how often each other tag is on the same items (of this kind):
+  // { total, share: Map(tag id -> fraction of the tag's items) }
+  const coTagsOf = cached(60000, async (kind, id) => {
+    const [query, arg, type, field] = KINDS[kind];
+    const [d, skip] = await Promise.all([
+      gql(`query($f: ${type}) { ${query}(${arg}, filter: {per_page: -1}) { count ${field} { tags { id } } } }`, {
+        f: { tags: { value: [id], modifier: "INCLUDES" } },
+      }),
+      galleryNameTagIds(),
+    ]);
+    const counts = new Map();
+    d[query][field].forEach((it) =>
+      it.tags.forEach((t) => {
+        const tid = String(t.id);
+        if (tid !== id && !skip.has(tid)) counts.set(tid, (counts.get(tid) || 0) + 1);
+      })
+    );
+    const total = d[query].count || 0;
+    return { total, share: new Map([...counts].map(([tid, n]) => [tid, total ? n / total : 0])) };
+  });
+
+  // Chosen tags -> other tags that often go with them, one chosen tag at a
+  // time (an item doesn't need all of them): a tag scores by how often it's
+  // with each chosen tag, added up, so one that goes with several ranks
+  // first. Up to the 12 most recently chosen. [{ tag, why }]
+  const COTAG_FROM = 12, COTAG_MIN = 0.15; // shown if with one of them 15%+ of the time
+  // With Better Tagging AI installed, body tags (Tits, Ass, their sizes...)
+  // are added by its body-part detector from what's shown: they're left out
+  // here, both as tags to go by and as suggestions (same names as btt_core's
+  // BODY_TAG_NAMES)
+  const BODY_TAGS = new Set([
+    "tits", "ass", "pussy", "cock",
+    "small tits", "tiny tits", "medium tits", "medium boobs", "big tits", "huge tits",
+    "small ass", "medium ass", "big ass", "bubble butt", "average dick", "big dick",
+    "natural tits", "fake tits", "fake boobs", "defined abs", "muscular", "muscular man",
+  ]);
+  const aiInstalled = cached(600000, async () => {
+    const d = await gql("{ plugins { id enabled } }");
+    return (d.plugins || []).some((p) => p.id === "BetterTaggingAI" && p.enabled);
+  });
+  const isBody = (t) => BODY_TAGS.has(String((t && t.name) || "").trim().toLowerCase());
+  // "Tags to ignore" (this plugin's setting): never suggested either
+  const ignoredNames = cached(30000, async () => {
+    const d = await gql("{ configuration { plugins } }");
+    const mine = (d.configuration.plugins || {})[PLUGIN_ID] || {};
+    return new Set(String(mine.excludeTags || "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean));
+  });
+  async function tagsAround(kind, chosen) {
+    const noBody = await aiInstalled("ai").catch(() => false);
+    const ignored = await ignoredNames("ignored").catch(() => new Set());
+    const from = chosen
+      .filter((t) => !(noBody && isBody(t)) && !ignored.has(String(t.name || "").trim().toLowerCase()))
+      .slice(-COTAG_FROM);
+    const lists = await Promise.all(from.map((t) => coTagsOf(kind + ":" + t.id, kind, t.id)));
+    const score = new Map(); // tag id -> { sum, best, why: [] }
+    lists.forEach((l, i) => {
+      if (l.total < 2) return; // a tag on one item says nothing
+      l.share.forEach((share, tid) => {
+        const e = score.get(tid) || { sum: 0, best: 0, why: [] };
+        e.sum += share;
+        e.best = Math.max(e.best, share);
+        e.why.push([share, from[i].name]);
+        score.set(tid, e);
+      });
+    });
+    const own = new Set(chosen.map((t) => t.id));
+    const top = [...score]
+      .filter(([tid, e]) => !own.has(tid) && e.best >= COTAG_MIN)
+      .sort((a, b) => b[1].sum - a[1].sum)
+      .slice(0, 60);
+    const details = await tagDetails(top.map(([tid]) => tid));
+    return top
+      .filter(([tid]) => details.has(tid) && !(noBody && isBody(details.get(tid))))
+      .map(([tid, e]) => ({
+        tag: details.get(tid),
+        why: e.why
+          .sort((a, b) => b[0] - a[0])
+          .slice(0, 3)
+          .map(([sh, name]) => `with ${name} ${Math.round(sh * 100)}% of the time`)
+          .join(" · "),
+      }));
+  }
+
   // The most used image or scene tags in the whole library
   const libraryCommon = cached(60000, async (kind) => {
     const one = KINDS[kind][4];
@@ -260,7 +343,15 @@
         // studio, and last the library's most used tags. The performers' top
         // tags are shown whenever there are performers.
         const out = [];
-        const found = () => out.some((r) => r.items.length);
+        // body tags come from Better Tagging AI's detector, when it's here
+        const noBody = await aiInstalled("ai").catch(() => false);
+        const ignored = await ignoredNames("ignored").catch(() => new Set());
+        const skip = (t) => (noBody && isBody(t)) || ignored.has(String((t && t.name) || "").trim().toLowerCase());
+        const push = (row) => out.push({ ...row, items: row.items.filter((e) => !skip(e.tag)) });
+        // something found = a tag the item doesn't have yet (a row of only
+        // tags it already has mustn't stop the next source being asked)
+        const have = new Set(chosen.map((t) => t.id));
+        const found = () => out.some((r) => r.items.some((e) => !have.has(String(e.tag.id))));
         const kind = editingKind();
         const plural = KINDS[kind][3];
         const nounOf = (n) => KINDS[kind][n === 1 ? 4 : 3];
@@ -268,16 +359,14 @@
         const poss = (name) => name + (/s$/i.test(name) ? "'" : "'s");
 
         if (chosen.length && !fixed) {
-          const ids = chosen.map((t) => t.id).sort();
-          const common = await tagsCommon(kind + ":" + tSig, kind, ids);
+          // each chosen tag's usual companions, not just the few items that
+          // have every chosen tag
+          const items = await tagsAround(kind, chosen);
           const names = chosen.map((t) => t.name);
-          out.push({
+          push({
             key: "tags",
-            label: !common.all ? "Often with these tags" : names.length <= 2 ? `Goes with ${both(names)}` : "Goes with these tags",
-            items: common.items.map((e) => ({
-              tag: e.tag,
-              title: `On ${e.uses} of the ${common.total} ${nounOf(common.total)} with ${common.all ? (names.length > 1 ? "all these tags" : names[0]) : "any of these tags"}`,
-            })),
+            label: names.length <= 2 ? `Goes with ${both(names)}` : "Goes with these tags",
+            items: items.map((e) => ({ tag: e.tag, title: e.why[0].toUpperCase() + e.why.slice(1) })),
           });
         }
 
@@ -285,7 +374,7 @@
           const ids = galleries.map((g) => g.id).sort();
           const common = await galleryCommon(ids.join(","), ids);
           const gNames = galleries.map((g) => g.name).filter(Boolean);
-          out.push({
+          push({
             key: "galleries",
             label: gNames.length === galleries.length && gNames.length <= 2 ? `Common in ${both(gNames)}` : "Common in these galleries",
             items: common.items.map((e) => ({ tag: e.tag, title: `On ${e.uses} of ${common.total} images` })),
@@ -297,7 +386,7 @@
           const common = await tagsCommon(kind + ":p:" + pSig, kind, ids, "performers");
           const names = performers.map((p) => p.name);
           const who = !common.all ? "any of these performers" : names.length <= 2 ? both(names) : "all these performers";
-          out.push({
+          push({
             key: "perfcommon",
             label: !common.all
               ? `Common on these performers' ${plural}`
@@ -313,7 +402,7 @@
           const common = await tagsCommon(kind + ":s:" + sSig, kind, ids, "studios");
           const names = studios.map((x) => x.name).filter(Boolean);
           const which = names.length === 1 ? names[0] : "these studios";
-          out.push({
+          push({
             key: "studio",
             label: `Common on ${poss(which)} ${plural}`,
             items: common.items.map((e) => ({ tag: e.tag, title: `On ${e.uses} of the ${common.total} ${nounOf(common.total)} from ${which}` })),
@@ -334,7 +423,7 @@
             .sort((a, b) => b.from.length - a.from.length || a.tag.name.localeCompare(b.tag.name))
             .map((e) => ({ tag: e.tag, title: "Tagged on " + e.from.join(", ") }));
           const names = performers.map((p) => p.name);
-          out.push({
+          push({
             key: "performers",
             label: label || (names.length === 1 ? `${poss(names[0])} top tags` : names.length === 2 ? `Top tags of ${both(names)}` : "Performers' top tags"),
             items,
@@ -352,7 +441,7 @@
             common = await libraryCommon(lk, lk);
           }
           const one = KINDS[lk][4];
-          out.push({
+          push({
             key: "library",
             label: `Most used ${one} tags`,
             items: common.map((e) => ({ tag: e.tag, title: `Used on ${e.uses} ${KINDS[lk][e.uses === 1 ? 4 : 3]}` })),
@@ -440,6 +529,126 @@
       result,
       h(Suggestions, { values: props.values, onSelect: props.onSelect })
     );
+  });
+
+  // ---- Galleries box on an image's edit page: suggested galleries ----------
+  // Only galleries made in Stash (a photo can't be put in a zip or folder
+  // gallery). Each scores by: the share of the other photos in the same
+  // folder that are in it (x3), the share of the same performers' photos in
+  // it (x2), and a gallery named like one of the photo's tags (+2).
+  const IMAGE_EDIT = /^\/images\/(\d+)/;
+  const madeGalleries = cached(60000, async () => {
+    const d = await gql("{ findGalleries(filter: {per_page: -1}) { galleries { id title files { path } folder { path } } } }");
+    return d.findGalleries.galleries.filter((g) => !g.files.length && !g.folder && (g.title || "").trim());
+  });
+  const libraryRoots = cached(600000, async () => {
+    const d = await gql("{ configuration { general { stashes { path } } } }");
+    return d.configuration.general.stashes.map((x) => x.path);
+  });
+  const gallerySuggestionsFor = cached(30000, async (imageId) => {
+    const [made, d] = await Promise.all([
+      madeGalleries("made"),
+      gql(`query ($id: ID!) { findImage(id: $id) { id visual_files { ... on ImageFile { path } ... on VideoFile { path } }
+             tags { name } performers { id name } galleries { id } } }`, { id: imageId }),
+    ]);
+    const image = d.findImage;
+    if (!image || !made.length) return [];
+    const madeIds = new Set(made.map((g) => g.id));
+    const score = new Map(); // gallery id -> { k, why: [] }
+    const bump = (gid, k, why) => {
+      const e = score.get(gid) || { k: 0, why: [] };
+      e.k += k;
+      e.why.push(why);
+      score.set(gid, e);
+    };
+    const shareIn = (list) => {
+      const counts = new Map();
+      list.forEach((x) => x.galleries.forEach((g) => madeIds.has(g.id) && counts.set(g.id, (counts.get(g.id) || 0) + 1)));
+      return counts;
+    };
+    const path = ((image.visual_files || [])[0] || {}).path || "";
+    const folder = path.replace(/[\\/][^\\/]*$/, "");
+    const parent = folder.replace(/[\\/][^\\/]*$/, "");
+    const reEsc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    // photos straight in a folder (an exact match: Stash's "includes"
+    // splits a path into words, so it would match far too much)
+    const inFolder = (dir, deep) =>
+      gql(`query ($f: ImageFilterType) { findImages(image_filter: $f, filter: {per_page: ${deep ? 2000 : 400}}) { images { id galleries { id } } } }`,
+        { f: { path: { value: "^" + reEsc(dir) + "[\\\\/]" + (deep ? "" : "[^\\\\/]+$"), modifier: "MATCHES_REGEX" } } })
+        .then((r) => r.findImages.images.filter((x) => x.id !== image.id));
+    const lookups = [];
+    if (folder) {
+      lookups.push(inFolder(folder, false).then((mates) => {
+        if (!mates.length) return;
+        shareIn(mates).forEach((n, gid) => n / mates.length >= 0.1 && bump(gid, 3 * n / mates.length, `${n} of the ${mates.length} other photos in its folder are in it`));
+      }));
+    }
+    // the folder it's in sits inside, e.g. "Celebs/<name>" -> all of Celebs
+    const roots = await libraryRoots("roots");
+    const trim = (x) => x.replace(/[\\/]+$/, "");
+    if (parent && !roots.some((r) => trim(r).startsWith(parent) || trim(r) === parent)) {
+      lookups.push(inFolder(parent, true).then((mates) => {
+        if (!mates.length) return;
+        shareIn(mates).forEach((n, gid) => n / mates.length >= 0.15 && bump(gid, 1.5 * n / mates.length, `${n} of the ${mates.length} photos in the folder around it are in it`));
+      }));
+    }
+    if (image.performers.length) {
+      lookups.push(gql(`query ($f: ImageFilterType) { findImages(image_filter: $f, filter: {per_page: 400}) { images { id galleries { id } } } }`,
+        { f: { performers: { value: image.performers.map((p) => p.id), modifier: "INCLUDES" } } })
+        .then((r) => {
+          const theirs = r.findImages.images.filter((x) => x.id !== image.id);
+          if (!theirs.length) return;
+          const who = image.performers.length === 1 ? image.performers[0].name + "'s" : "these performers'";
+          shareIn(theirs).forEach((n, gid) => bump(gid, 2 * n / theirs.length, `${n} of ${who} ${theirs.length} other photos are in it`));
+        }));
+    }
+    await Promise.all(lookups);
+    const tagNames = new Set(image.tags.map((t) => t.name.trim().toLowerCase()));
+    made.forEach((g) => tagNames.has(g.title.trim().toLowerCase()) && bump(g.id, 2, `it's tagged ${g.title}`));
+    const inAlready = new Set(image.galleries.map((g) => g.id));
+    return made
+      .filter((g) => score.has(g.id) && !inAlready.has(g.id) && score.get(g.id).k >= 0.3)
+      .map((g) => ({ gallery: g, k: score.get(g.id).k, why: score.get(g.id).why }))
+      .sort((a, b) => b.k - a.k)
+      .slice(0, 6);
+  });
+
+  function GallerySuggestions({ values, onSelect }) {
+    const m = location.pathname.match(IMAGE_EDIT);
+    const [list, setList] = React.useState([]);
+    React.useEffect(() => {
+      if (!m) return;
+      let live = true;
+      gallerySuggestionsFor(m[1], m[1]).then((l) => live && setList(l)).catch((e) => console.warn("[Better Tagging Tools]", e));
+      return () => (live = false);
+    }, [m && m[1]]);
+    const chosen = new Set((values || []).map((g) => String(g.id)));
+    const shown = list.filter((x) => !chosen.has(String(x.gallery.id)));
+    if (!m || !shown.length) return null;
+    const asOption = (g) => ({ id: g.id, title: g.title, files: [], folder: null });
+    return h(
+      "div",
+      { className: "pts-suggest-rows" },
+      h(
+        "div",
+        { className: "pts-suggest" },
+        h("span", { className: "pts-label" }, "Suggested"),
+        shown.map((x) =>
+          h("button", {
+            key: x.gallery.id, type: "button", className: "pts-chip",
+            title: x.why.join(" · "),
+            onClick: () => onSelect([...(values || []), asOption(x.gallery)]),
+          }, "+ " + x.gallery.title)
+        )
+      )
+    );
+  }
+
+  api.patch.after("GallerySelect", function (...args) {
+    const props = args[0] || {};
+    const result = args[args.length - 1];
+    if (!props.isMulti || !props.onSelect || props.isDisabled || !IMAGE_EDIT.test(location.pathname)) return result;
+    return h(React.Fragment, null, result, h(GallerySuggestions, { values: props.values, onSelect: props.onSelect }));
   });
 
   // ---- bulk tagging (performer pages and gallery pages) --------------------
@@ -633,6 +842,162 @@
     const props = args[0] || {};
     const result = args[args.length - 1];
     return h(React.Fragment, null, result, h(BulkTagButton, { performer: props.performer }));
+  });
+
+  // -- studio pages: give the studio's scenes, images and galleries the
+  // studio's own tags. The window lists each tag (untick any you don't want)
+  // and how many items would get it.
+  const STUDIO_KINDS = [["scenes", "Scenes"], ["images", "Images"], ["galleries", "Galleries"]];
+
+  function StudioTagsModal({ studio, onClose }) {
+    const { Modal, Button, Form } = api.libraries.Bootstrap;
+    const Toast = api.hooks.useToast();
+    const [plan, setPlan] = React.useState(null); // null = loading
+    const [error, setError] = React.useState(null);
+    const [offTags, setOffTags] = React.useState({});
+    const [offKinds, setOffKinds] = React.useState({});
+    const [busy, setBusy] = React.useState(false);
+    React.useEffect(() => {
+      let live = true;
+      gql("mutation($p: ID!, $a: Map) { runPluginOperation(plugin_id: $p, args: $a) }", {
+        p: PLUGIN_ID,
+        a: { mode: "studiotagplan", studio_id: String(studio.id) },
+      })
+        .then((d) => live && setPlan(d.runPluginOperation || { tags: [], totals: {} }))
+        .catch((e) => live && setError(String(e.message || e)));
+      return () => (live = false);
+    }, [studio.id]);
+
+    const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+    const tags = plan ? plan.tags : [];
+    const kinds = STUDIO_KINDS.filter(([k]) => plan && plan.totals[k] > 0 && !offKinds[k]).map(([k]) => k);
+    const chosen = tags.filter((t) => !offTags[t.id]);
+    const missingFor = (t) => kinds.reduce((n, k) => n + (t.missing[k] || 0), 0);
+    const additions = chosen.reduce((n, t) => n + missingFor(t), 0);
+    const itemTotal = kinds.reduce((n, k) => n + (plan ? plan.totals[k] : 0), 0);
+
+    async function run() {
+      setBusy(true);
+      try {
+        await gql(
+          `mutation($p: ID!, $d: String, $a: Map) {
+             runPluginTask(plugin_id: $p, description: $d, args_map: $a) }`,
+          {
+            p: PLUGIN_ID,
+            d: `Better Tagging Tools: tag ${studio.name}'s items with its tags`,
+            a: {
+              mode: "studiotags",
+              studio_ids: String(studio.id),
+              tag_ids: chosen.map((t) => t.id).join(","),
+              kinds: kinds.join(","),
+            },
+          }
+        );
+        Toast.success(`Tagging ${studio.name}'s items. You can follow it under Settings → Tasks.`);
+        onClose();
+      } catch (e) {
+        Toast.error(e);
+        setBusy(false);
+      }
+    }
+
+    let body;
+    if (error) body = h("div", { className: "text-danger" }, "Couldn't load the studio's tags: " + error);
+    else if (!plan) body = h("div", { className: "text-muted" }, "Counting…");
+    else if (plan.blocked) body = h("div", { className: "text-muted" }, "This studio can't be used for this.");
+    else if (!tags.length)
+      body = h(
+        "div",
+        { className: "text-muted" },
+        "This studio has no tags yet. Add some on its Edit page, or run \"Tag studios with their top tags\" under Settings → Tasks."
+      );
+    else
+      body = h(
+        React.Fragment,
+        null,
+        h(Form.Label, null, "Apply to"),
+        h(
+          "div",
+          { className: "pts-bulk-kinds" },
+          STUDIO_KINDS.map(([k, label]) =>
+            h(Form.Check, {
+              key: k,
+              id: "pts-studio-kind-" + k,
+              type: "checkbox",
+              disabled: !plan.totals[k],
+              label: `${label} (${plan.totals[k] || 0})`,
+              checked: !!plan.totals[k] && !offKinds[k],
+              onChange: (e) => setOffKinds({ ...offKinds, [k]: !e.target.checked }),
+            })
+          )
+        ),
+        h(Form.Label, null, "Tags (untick any you don't want)"),
+        h(
+          "div",
+          { className: "pts-studio-tags" },
+          tags.map((t) => {
+            const n = missingFor(t);
+            return h(Form.Check, {
+              key: t.id,
+              id: "pts-studio-tag-" + t.id,
+              type: "checkbox",
+              checked: !offTags[t.id],
+              onChange: (e) => setOffTags({ ...offTags, [t.id]: !e.target.checked }),
+              label: h(
+                "span",
+                null,
+                t.name,
+                h("span", { className: "pts-studio-count" }, n ? ` adds to ${n} of ${itemTotal}` : " already on all")
+              ),
+            });
+          })
+        ),
+        h(
+          "div",
+          { className: "pts-bulk-note" },
+          "Only this studio's own items (not its sub-studios'). Nothing is removed."
+        )
+      );
+
+    return h(
+      Modal,
+      { show: true, onHide: onClose, className: "pts-bulk-modal" },
+      h(Modal.Header, { closeButton: true }, h(Modal.Title, null, `Tag ${studio.name}'s items with its tags`)),
+      h(Modal.Body, null, body),
+      h(
+        Modal.Footer,
+        null,
+        h(Button, { variant: "secondary", onClick: onClose }, "Cancel"),
+        h(
+          Button,
+          { variant: "primary", disabled: busy || !additions, onClick: run },
+          additions
+            ? `Add ${plural(chosen.filter((t) => missingFor(t)).length, "tag")} (${plural(additions, "addition")})`
+            : "Nothing to add"
+        )
+      )
+    );
+  }
+
+  function StudioTagsButton({ studio }) {
+    const [open, setOpen] = React.useState(false);
+    if (!studio || !studio.id) return null;
+    return h(
+      "div",
+      { className: "pts-bulk" },
+      h(
+        "button",
+        { type: "button", className: "btn btn-secondary btn-sm", onClick: () => setOpen(true) },
+        "Tag all items with this studio's tags…"
+      ),
+      open && h(StudioTagsModal, { studio, onClose: () => setOpen(false) })
+    );
+  }
+
+  api.patch.after("StudioDetailsPanel", function (...args) {
+    const props = args[0] || {};
+    const result = args[args.length - 1];
+    return h(React.Fragment, null, result, h(StudioTagsButton, { studio: props.studio }));
   });
 
   // -- gallery pages: a "Bulk tag" button in the image list's toolbar. The
@@ -1292,18 +1657,21 @@
   // remembers which you opened). The task rows themselves stay where Stash
   // put them, only hidden or shown.
   const TASK_GROUPS = [
-    ["toptags", "Top tags", "Tag performers, studios and galleries with their most used tags",
+    ["toptags", "Top tags", "Performers, studios and galleries get their most used tags; a studio's items get its tags",
       ["Preview top tags (no changes)", "Tag performers with their top tags", "Tag studios with their top tags",
-       "Tag galleries with their top tags"]],
+       "Tag galleries with their top tags", "Preview studio tags on their items (no changes)",
+       "Tag studios' items with the studio's tags"]],
     ["titles", "Titles", "Titles from file names",
       ["Preview titles from file names (no changes)", "Fill in titles from file names", "Redo titles made from file names"]],
-    ["studios", "Studios from accounts", "Studios for the OnlyFans / Fansly / Instagram / TikTok account in a scene's file name or links",
+    ["studios", "Studios from accounts", "Studios for the OnlyFans / Fansly / Patreon / Instagram / TikTok account in a scene's file name or links",
       ["Studios from accounts: from file names and links only"]],
     ["dates", "Dates", "Dates from file names",
       ["Preview dates from file names (no changes)", "Fill in dates from file names"]],
     ["pictures", "Tag pictures", "Give tags a picture from your library",
       ["Give tags without a picture one from your library", "Give tags that share a picture their own",
        "Give every tag a new picture (replaces existing ones)"]],
+    ["descs", "Tag descriptions", "Descriptions from StashDB, the E-Hentai wiki and Danbooru",
+      ["Preview tag descriptions on 30 tags (no changes)", "Fill in empty tag descriptions"]],
     ["tidy", "Tidy up tags", "Capitalisation and gallery-name tags",
       ["Preview tag name capitalisation (no changes)", "Capitalise tag names", "Tag gallery images with the gallery's name",
        "Preview gallery tags, performers and studio on images (no changes)",
@@ -1368,6 +1736,76 @@
   let groupTimer = null;
   new MutationObserver(() => {
     clearTimeout(groupTimer);
-    groupTimer = setTimeout(groupTasks, 100);
+    groupTimer = setTimeout(() => {
+      groupTasks();
+      ignoreSuggestions();
+    }, 100);
   }).observe(document.body, { childList: true, subtree: true });
+
+  // ---- Settings → Plugins: suggestions under "Tags to ignore" -------------
+  // Big tags that look like housekeeping (their name, or that they group
+  // other tags; with Better Tagging AI also that their items don't look
+  // alike). Tapping one adds it to the setting.
+  let ignoreState = null; // { at, list } for this visit to the page
+  function ignoreSuggestions() {
+    const row = document.getElementById("plugin-" + PLUGIN_ID + "-excludeTags");
+    if (!row) {
+      ignoreState = null;
+      return;
+    }
+    if (row.querySelector(".bt-ignore-suggest")) return;
+    const box = document.createElement("div");
+    box.className = "bt-ignore-suggest";
+    (row.firstElementChild || row).appendChild(box);
+    const load = ignoreState
+      ? Promise.resolve(ignoreState.list)
+      : gql("mutation($p: ID!, $a: Map) { runPluginOperation(plugin_id: $p, args: $a) }", { p: PLUGIN_ID, a: { mode: "ignore_suggest" } })
+          .then((d) => d.runPluginOperation || []);
+    load.then((list) => {
+      ignoreState = { list };
+      render();
+    }).catch((e) => (box.textContent = "Couldn't look for housekeeping tags: " + e.message));
+
+    function render() {
+      box.innerHTML = "";
+      const list = ignoreState.list;
+      if (!list.length) return;
+      const label = document.createElement("span");
+      label.className = "bt-ignore-label";
+      label.textContent = "Look like housekeeping:";
+      box.appendChild(label);
+      list.forEach((t) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "pts-chip";
+        b.textContent = "+ " + t.name;
+        b.title = `On ${t.uses.toLocaleString()} items (${t.share}%) - ${t.why.join("; ")}`;
+        b.addEventListener("click", () => add(t.name, b));
+        box.appendChild(b);
+      });
+    }
+
+    async function add(name, button) {
+      button.disabled = true;
+      try {
+        const d = await gql("{ configuration { plugins } }");
+        const mine = Object.assign({}, (d.configuration.plugins || {})[PLUGIN_ID] || {});
+        const now = String(mine.excludeTags || "").split(",").map((x) => x.trim()).filter(Boolean);
+        if (!now.some((x) => x.toLowerCase() === name.toLowerCase())) now.push(name);
+        mine.excludeTags = now.join(", ");
+        await gql("mutation($p: ID!, $i: Map!) { configurePlugin(plugin_id: $p, input: $i) }", { p: PLUGIN_ID, i: mine });
+        ignoreState.list = ignoreState.list.filter((t) => t.name !== name);
+        const shown = row.querySelector(".value span");
+        if (shown) shown.textContent = mine.excludeTags;
+        render();
+        // so the page's own copy of the settings has it too (and editing
+        // another setting doesn't put the old list back)
+        const client = api.utils && api.utils.StashService && api.utils.StashService.getClient && api.utils.StashService.getClient();
+        if (client && client.refetchQueries) client.refetchQueries({ include: "active" });
+      } catch (e) {
+        button.disabled = false;
+        button.title = "Couldn't add it: " + e.message;
+      }
+    }
+  }
 })();

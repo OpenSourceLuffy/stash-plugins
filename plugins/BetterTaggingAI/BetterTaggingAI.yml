@@ -1,6 +1,6 @@
 name: Better Tagging AI Add-on
 description: An add-on for Better Tagging Tools that tags scenes and images, writes titles, finds a scene's studio and performers from the accounts and studio watermarks it shows, recognises performers' faces, and fills in performers' hair and eye colour, tattoos and piercings from their pictures - all with a local AI model (Ollama), on your own computer. Adds "Ask AI" buttons for tags and titles while editing, and can do all of it for new items after a scan. Install it next to Better Tagging Tools - it then uses that plugin's "Tags to ignore", special spellings and gallery-name tags, and its rows sit under Better Tagging Tools' suggestions. (It also works on its own.)
-version: "1.4.2"
+version: "1.5"
 url: https://github.com/OpenSourceLuffy/stash-plugins/tree/main/plugins/BetterTaggingAI
 exec:
   - python
@@ -49,14 +49,30 @@ tasks:
     description: Gives scenes and images with no tags the tags their look-alikes are sure of (no AI model needed, well under a second each). Only adds; skips organized items unless "AI - include organized items" is on. Tags you later remove from most items they were added to aren't added any more.
     defaultArgs:
       mode: looks_untagged
+  - name: "Tag pictures: preview the most typical ones (no changes)"
+    description: Writes the picture each tag would get to the log - the scene or photo that looks most like everything else with that tag (from the look-alike fingerprints) - without changing anything.
+    defaultArgs:
+      mode: typical_preview
+  - name: "Tag pictures: most typical one for tags without a picture"
+    description: Gives every tag that has no picture the scene or photo that looks most like everything else with that tag, never one another tag already has (if there's no unused one, it gets none). Tags used on fewer than 3 fingerprinted items get the usual pick (Better Tagging Tools' rules) instead.
+    defaultArgs:
+      mode: typical_missing
+  - name: "Tag pictures: most typical one for every tag (replaces existing ones)"
+    description: Gives EVERY tag that's on at least 3 fingerprinted items its most typical scene or photo, one no other tag has - including tags whose picture you chose yourself. Tags without a typical picture of their own keep theirs. Old pictures can't be brought back, so make a backup first.
+    defaultArgs:
+      mode: typical_all
   - name: "Body tags: preview on 10 items (no changes)"
     description: Picks 10 random scenes/images and writes to the log the body tags each would get - what's shown (Tits, Ass, Pussy, Cock) and, for that part, the size the performer is usually tagged with (or their cup size), natural/fake from their details, and Defined Abs/Muscular when a belly is shown and that's usual for them - without changing anything. Needs the face helper's body-part model (setup.sh --body).
     defaultArgs:
       mode: body_preview
   - name: "Body tags: scenes and images"
-    description: Adds body tags to every scene and image not done yet (only adds; a size is only added when that part is shown and the item has no size tag yet). Scenes take a few seconds (4 frames), images under one; cancel and run again to carry on. AI tagging (and new items after a scan) adds them too.
+    description: Adds body tags to every scene and image not done yet that has no body tag yet (only adds; a size is only added when that part is shown and the item has no size tag yet). Scenes take a few seconds (4 frames), images under one; cancel and run again to carry on. AI tagging (and new items after a scan) adds them too.
     defaultArgs:
       mode: body_all
+  - name: "Body tags: check everything again"
+    description: Checks EVERY scene and image again - organized ones too, and ones done before - e.g. after making a new body tag or tagging performers' sizes. Only adds, like the task above. Items without performers get the parts shown but no sizes. Takes a while; cancel and run it again to carry on where it stopped.
+    defaultArgs:
+      mode: body_redo
   - name: "AI titles: preview on 10 items (no changes)"
     description: Picks 10 random scenes/images without a title and writes the title each would get to the log - from the file name when that makes a good one, else from the local AI model (Ollama) - without changing anything. Try this first.
     defaultArgs:
@@ -70,13 +86,25 @@ tasks:
     defaultArgs:
       mode: ai_titles_images
   - name: "Studios from accounts: preview on 10 scenes (no changes)"
-    description: Picks 10 random scenes without a studio and writes to the log which OnlyFans / Fansly / Instagram / TikTok account each comes from and the studio it would get, without changing anything. Try this first.
+    description: Picks 10 random scenes without a studio and writes to the log which OnlyFans / Fansly / Patreon / Instagram / TikTok account each comes from and the studio it would get, without changing anything. Try this first.
     defaultArgs:
       mode: handle_studios_preview
   - name: "Studios from accounts: also read watermarks with the AI"
-    description: Gives scenes without a studio a studio for the OnlyFans / Fansly / Instagram / TikTok account they come from - from links in the file name, title, details or URLs, and from the watermark and on-screen text the local AI model (Ollama) reads in up to 6 frames (it only counts if two frames agree). Existing studios whose name is in the watermark are used first; otherwise a studio is made for the account, under a parent studio for the platform. Account names (and names in the watermark) that match a performer add that performer. About 5-15 seconds per scene; scenes already checked are skipped next time. Scenes that have a studio never get a different one.
+    description: Gives scenes without a studio a studio for the OnlyFans / Fansly / Patreon / Instagram / TikTok account they come from - from links in the file name, title, details or URLs, and from the watermark and on-screen text the local AI model (Ollama) reads in up to 6 frames (it only counts if two frames agree). Existing studios whose name is in the watermark are used first; otherwise a studio is made for the account, under a parent studio for the platform. Account names (and names in the watermark) that match a performer add that performer. About 5-15 seconds per scene; scenes already checked are skipped next time. Scenes that have a studio never get a different one.
     defaultArgs:
       mode: handle_studios
+  - name: "Studios from watermarks: preview on 10 photos without a studio (no changes)"
+    description: Picks 10 random photos without a studio and writes to the log which account or studio the local AI model reads in each one's watermark and the studio it would get, without changing anything. Try this first.
+    defaultArgs:
+      mode: photo_studios_preview
+  - name: "Studios from watermarks: photos without a studio, not in a gallery"
+    description: Gives photos without a studio that aren't in a gallery a studio for the OnlyFans / Fansly / Patreon / Instagram / TikTok account (or the existing studio) whose watermark the local AI model reads in them, plus performers whose name or account it reads. A brand-new account only gets a studio once it's been read in a second photo or scene. A few seconds per photo, so a big library takes hours; you can cancel it under Settings → Tasks and run it again to carry on (photos already read are skipped). Photos that have a studio never get a different one.
+    defaultArgs:
+      mode: photo_studios
+  - name: "Studios from watermarks: photos without a studio, galleries too"
+    description: The same for every photo without a studio, including the ones in galleries (comic pages and sets rarely have an account watermark, so this mostly adds time).
+    defaultArgs:
+      mode: photo_studios_all
 
   - name: "Faces: learn performers' faces"
     description: Turns each performer's profile picture (and a few photos where they're the only performer) into a face fingerprint for the tasks below and the "Find performers by face" button. Only new or changed performers are looked at, so it's quick after the first time; the other face tasks do this first anyway. Needs the face helper (see the README).
@@ -140,6 +168,18 @@ settings:
     displayName: "AI: tag, title and find the studio of new scenes and images"
     description: "When a scan adds a scene or image, the local AI model does all three: tags it (like \"AI: tag new scenes and images automatically\"), finds a scene's studio and performers from the accounts and studio watermarks it shows (like the \"Studios from accounts\" tasks), and gives it a title if it has none (from the file name, else the AI). Runs in the background once the scan is done; a few seconds to a minute per item."
     type: BOOLEAN
+  aiTagKinds:
+    displayName: "AI tagging: which items"
+    description: "Which items the AI model tags - in the AI tagging tasks, for new items after a scan and in the nightly run: scenes, images, or both (empty means both). The quick steps (tags from file names, look-alike tags, body tags, faces) still run on all of them."
+    type: STRING
+  aiTitleKinds:
+    displayName: "AI titles: which items"
+    description: "Which new items get an AI title after a scan and in the nightly run: scenes, images, or both (empty means both). The \"AI titles: scenes / images without a title\" tasks still do what they say."
+    type: STRING
+  aiNewPhotoStudios:
+    displayName: "AI: read watermarks on new photos"
+    description: "When a scan adds a photo without a studio, the local AI model reads its watermark and gives it the studio and performers it finds (like the \"Studios from watermarks\" tasks). A few seconds per photo; with \"AI: wait until night for new items\" on, it's done in tonight's run."
+    type: BOOLEAN
   aiNightly:
     displayName: "AI: wait until night for new items"
     description: "After a scan, new scenes and images only get the quick steps straight away (tags from file names, studios from links in them, look-alike tags, body tags and faces - about a second each, no AI model). The AI model's steps (AI tags, studios from watermarks, AI titles) are saved and done once at night, so scans finish quickly and other tasks aren't held up. Off: everything right after the scan."
@@ -176,3 +216,15 @@ settings:
     displayName: "AI: include organized items"
     description: Also AI-tag scenes and images you've marked as organized (they're skipped by default).
     type: BOOLEAN
+  aiNightBody:
+    displayName: "AI: body tags every night"
+    description: At the night time (the night time setting below), run the body tags task for every scene and image not checked yet - ones with a body tag already are skipped, so after the first night it's quick. Works whether or not the AI tags new items. Needs the face helper's body-part model.
+    type: BOOLEAN
+  aiLookSuggest:
+    displayName: "AI: look-alike suggestions from (%)"
+    description: On the edit page, "Tags from look-alikes" shows a tag when at least this share of the most alike items you've tagged have it. Default 20 - lower shows more (and more wrong ones); you choose what to add. The tasks only ever add tags at 50% or more.
+    type: NUMBER
+  aiSkipTagged:
+    displayName: "AI: skip items with more tags than"
+    description: Scenes and images that already have more tags than this (counting ones added from the file name just before) don't go through the AI model - they're well tagged already, and it saves time. Body tags still run. Default 5; 0 never skips. Ask AI for tags on the edit page always asks.
+    type: NUMBER

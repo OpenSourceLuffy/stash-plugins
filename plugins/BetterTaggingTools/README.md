@@ -31,16 +31,37 @@ The first row comes from the first of these the item has:
 If one finds nothing new to suggest, the next one is used. With performers picked, **[Name]'s top
 tags** is shown as well.
 
-- **Goes with** looks at every item of the same kind (scenes on a scene, images on an image, and so on)
-  that has *all* the tags already chosen, and suggests the other tags those items have most often.
-  With one tag it uses everything with that tag. If no other item has all of them, it uses items with
-  any of them instead (**Often with these tags**). Hover over a tag to see how many items it's on.
+- **Goes with** looks at each tag already chosen (up to the 12 added last) on its own: which other
+  tags usually come with it, on items of the same kind (scenes on a scene, images on an image, and so
+  on). Tags that go with several of the chosen ones come first; a tag shows if it's with one of them
+  at least 15% of the time. Hover over a tag to see why ("with Missionary 73% of the time · ...").
 - The performer row works the same way: items with all the picked performers, else any of them.
   Once you add a tag, **Goes with** takes over.
 - Click a tag to add it, or **Add all**. They go into the form like any other tag, so you still press **Save**.
 - The rows update as soon as you change the tags, galleries, performers or studio in the form. Adding a
   suggested tag narrows the next suggestions.
 - Tags already on the item aren't suggested.
+- **Tags to ignore** are never suggested, and aren't used for **Goes with**.
+- With [Better Tagging AI](../BetterTaggingAI) installed, body tags (the ones its body-part detector
+  adds from what's shown, and their size tags) are left out of every row: they're neither suggested
+  nor used for **Goes with**.
+
+## Suggested galleries
+
+Under the **Galleries** box when you edit an image, **Suggested** shows up to 6 galleries it
+might belong in. Only galleries made in Stash are suggested, since a photo can't be put in a zip or
+folder gallery. Each gallery scores points for:
+
+- the share of the other photos **in the same folder** that are in it (up to 3 points; at least 10%
+  of them must be),
+- the share of the photos in the folder **around** that one that are in it (up to 1.5; at least 15%;
+  not counted when that's a library folder from Settings → Library),
+- the share of the **same performers'** other photos that are in it (up to 2),
+- a tag on the photo with **the gallery's name** (2).
+
+Hover over one to see why. Tap one to add it (then **Save**). Galleries it's already in aren't
+suggested. With [Better Tagging AI](../BetterTaggingAI) installed, an **AI** row adds galleries
+that the photo's look-alikes are in.
 
 ## Top tags for performers, studios and galleries
 
@@ -53,9 +74,19 @@ tags** gives each gallery the most used tags of its photos (gallery-name tags ne
   the performers in it are recounted. Batch edits are handled once at the end, in a background job.
   Turn on **Refresh studios' top tags on edit** and **Refresh galleries' top tags on edit** to keep
   studios and galleries up to date the same way.
+- Performers only get tags that fit their gender: a woman isn't given male body or "(Male)"
+  tags because her scenes have them, nor a man female body tags. (Only for performers marked
+  Female or Male; tags naming both, like "Older Man / Younger Woman", and action tags are fine.)
 - Tags the plugin added are taken off again when they drop out of the top list.
   **Tags you added yourself are never removed.**
 - **Preview top tags** writes what the three tasks would change to the log without changing anything.
+
+### Tags to ignore
+
+Under the **Tags to ignore** setting, the plugin suggests tags that look like housekeeping rather than
+what's shown: ones named like a note or a process ("Categories", "Site_Process", "To Review"...) or
+that group other tags. With [Better Tagging AI](../BetterTaggingAI), "its items don't look alike" backs
+a suggestion up. Hover for how many items each is on and why; tap to add it to the list.
 
 ## Bulk tagging
 
@@ -65,6 +96,17 @@ tags** gives each gallery the most used tags of its photos (gallery-name tags ne
 - **Gallery pages:** the tags button in the image toolbar (also in its **…** menu) tags every photo in the gallery, just the ones you've selected, and/or the gallery itself.
 - The performer's top tags are suggested in the window, and you can create new tags there.
 - It runs as a background job, so you can follow it under **Settings → Tasks**.
+
+## Tag descriptions
+
+**Fill in empty tag descriptions** gives every tag without a description one, looking in order at:
+the stash-box the tag is linked to (StashDB, ThePornDB...), StashDB by exact name or alias, the
+E-Hentai wiki (comic and doujinshi tags), and Danbooru's wiki (only its general tags, not artists or
+characters). **Preview tag descriptions on 30 tags** shows what it would write first.
+
+- Only empty descriptions are filled. Names, aliases and descriptions you've written stay as they are.
+- Story or chapter names that start with a number ("12. Family Values 1 - ...") are skipped.
+- A second or two per tag; cancel and run again to carry on.
 
 ## Gallery-name tags
 
@@ -76,8 +118,24 @@ the gallery's name** task once for the galleries you already have.
 - An existing tag with the same name is reused.
 - The gallery's studio is left out of the name ("[Studio] Beach Day" → "Beach Day"), unless the name is only the studio. Image titles made from gallery names do the same.
 - Renaming a gallery swaps its photos over to the new name's tag.
-- These tags never count towards performers' top tags or "most used" suggestions.
+- Tags that are just a gallery's name - named after it and (almost) only on its photos, like a comic's
+  title - never count towards top tags, suggestions or look-alikes. A category folder's tag that's also used
+  elsewhere ("Outdoor") counts like any other.
 - Photos added from a gallery's **Add** tab don't trigger anything in Stash, so re-run the task to pick those up.
+
+## A studio's tags on its items
+
+Gives a studio's **scenes, images and galleries** the tags on the studio itself (the top tags this
+plugin added and any you added by hand).
+
+- **One studio:** **Tag all items with this studio's tags…** on the studio's page. The window lists
+  each of the studio's tags and how many items would get it; untick any you don't want, and choose
+  scenes, images and/or galleries.
+- **Every studio:** the **Tag studios' items with the studio's tags** task (run **Preview studio
+  tags on their items** first to see what it would add in the log).
+- Only a studio's own items, not its sub-studios'. Nothing is removed. **Tags to ignore** are
+  never copied.
+- A top tag can be one only some of the studio's items have, so check the list before adding.
 
 ## A gallery's tags, performers and studio on its images
 
@@ -104,11 +162,15 @@ rated). If there's no photo, it uses a scene screenshot, then a marker or galler
 on **Give tags a picture automatically** to do the same whenever a tag without a picture gets used.
 Tags that already have a picture are never changed.
 
-Every tag gets a picture of its own where possible. Related tags often share their best photo, so
+**A picture is never used for two tags.** Related tags often share their best photo, so
 the plugin compares each candidate with the pictures other tags already have and moves on to the
 next one if it's taken. The rarest tags pick first, since they have the fewest pictures to choose
 from. When a tag only appears on scenes that lots of other tags share, it takes a different frame
-from one of those videos instead (using Stash's own ffmpeg).
+from one of those videos instead (using Stash's own ffmpeg). If every picture a tag has is already
+another tag's, it's left without one (or keeps its old one) rather than sharing. With the
+[AI add-on](../BetterTaggingAI)'s face helper running, pictures that look the same (variants of a
+comic page, near-identical shots) count as the same picture too. Tags that are only on a gallery
+can use the pages inside it, not just its cover.
 
 ### Don't like a tag's picture?
 
@@ -171,16 +233,17 @@ also match by their aliases. A studio is only set when the item has none. Anythi
 
 Many downloaded clips name the account they come from in the file name or link. **Studios from
 accounts: from file names and links only** gives scenes **without a studio** a studio for the
-`onlyfans.com/…`, `fansly.com/…`, `instagram.com/…` or `tiktok.com/@…` account in their file name,
+`onlyfans.com/…`, `fansly.com/…`, `patreon.com/…` (or `Patreon: name`), `instagram.com/…` or
+`tiktok.com/@…` account in their file name,
 title, details or URLs:
 
 - An existing studio with that name, alias or profile link is used; otherwise a new one is made,
   with the profile link, under a parent studio for the platform (**OnlyFans**, **Fansly**,
-  **Instagram** or **TikTok**, made if needed). A scene that already has a studio is never changed.
+  **Patreon**, **Instagram** or **TikTok**, made if needed). A scene that already has a studio is never changed.
 - An account name that matches a performer's name or alias (ignoring case, spaces and dots, so
   `janedoe` matches *Jane Doe*) or one of their profile links adds that performer to the scene.
 
-The [AI add-on](../BetterTaggingAI) can also read the account from the watermark in the video.
+The [AI add-on](../BetterTaggingAI) can also read the account from the watermark in a video or photo.
 
 ## Dates from file names
 
@@ -283,7 +346,7 @@ Under **Settings → Plugins → Better Tagging Tools**:
 | Top tags per performer, studio or gallery | How many tags to add to each. Default 10. |
 | Minimum uses | A tag must be on at least this many of the performer's, studio's or gallery's items. Default 3. |
 | Don't count images | Count only scenes and galleries for performers and studios. |
-| Tags to ignore | Comma-separated tags never added as top tags, e.g. `Organized, To Review`. Doesn't affect Auto Tag. |
+| Tags to ignore | Comma-separated tags never added as top tags or suggested while editing, e.g. `Organized, To Review`. Doesn't affect Auto Tag. |
 | Don't refresh on edit | Only update top tags when you run the tasks. |
 | Refresh studios' top tags on edit | Recount a studio when tags or the studio change on its scenes, images or galleries. |
 | Refresh galleries' top tags on edit | Recount a gallery when its photos' tags change or photos move into it. |

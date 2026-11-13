@@ -33,6 +33,20 @@ def main():
         elif mode in ("gallerytags", "gallerytags_preview"):
             ids = [i for i in str(args.get("gallery_ids") or "").split(",") if i]
             c.run_gallery_tags_to_images(stash, plugin_dir, preview=mode == "gallerytags_preview", gallery_ids=ids or None)
+        elif mode in ("studiotags", "studiotags_preview"):
+            split = lambda key: [i for i in str(args.get(key) or "").split(",") if i]
+            c.run_studio_tags_to_items(stash, plugin_dir, preview=mode == "studiotags_preview",
+                                       studio_ids=split("studio_ids") or None, tag_ids=split("tag_ids") or None,
+                                       kinds=split("kinds") or None)
+        elif mode == "studiotagplan":
+            # Asked by the studio page (runPluginOperation)
+            print(json.dumps({"output": c.studio_tag_plan(stash, plugin_dir, args["studio_id"])}))
+        elif mode in ("tagdescs", "tagdescs_preview"):
+            c.run_tag_descriptions(stash, plugin_dir, preview=mode == "tagdescs_preview",
+                                   limit=30 if mode == "tagdescs_preview" else None)
+        elif mode == "ignore_suggest":
+            # Asked by the settings page (runPluginOperation)
+            print(json.dumps({"output": c.ignore_suggestions(stash, plugin_dir)}))
         elif mode == "tagpictures":
             c.run_tag_pictures(stash, plugin_dir)
         elif mode == "uniquepictures":
@@ -62,9 +76,9 @@ def main():
             result = c.run_autotag_items(stash, plugin_dir, args["kind"], ids, bool(args.get("with_images")))
             print(json.dumps({"output": result}))
         elif mode == "gallerytagids":
-            # Asked by the page (runPluginOperation): the plugin's
-            # gallery-name tags, so suggestions can leave them out
-            print(json.dumps({"output": sorted(c.gallery_name_tag_ids(plugin_dir), key=int)}))
+            # Asked by the page (runPluginOperation): tags that are just a
+            # gallery's name, so suggestions can leave them out
+            print(json.dumps({"output": sorted(c.gallery_only_tag_ids(stash, plugin_dir), key=int)}))
         elif mode in ("apply_studios", "apply_galleries"):
             c.run_all(stash, plugin_dir, dry_run=False, owners=(mode.split("_")[1],))
         elif mode == "dryrun_all":

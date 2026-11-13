@@ -17,6 +17,7 @@ import contextlib
 import fcntl
 import hashlib
 import heapq
+import http.client
 import json
 import math
 import operator
@@ -26,6 +27,7 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.parse
 import urllib.request
 from collections import Counter, defaultdict
 
@@ -73,6 +75,25 @@ class Stash:
         cookie = conn.get("SessionCookie") or {}
         if cookie.get("Name"):
             self.headers["Cookie"] = f"{cookie['Name']}={cookie['Value']}"
+        # The session a task is given runs out after about an hour, and from
+        # then on Stash answers with its login page (long tasks then skipped
+        # everything). Stash's own API key, from its settings file next to
+        # the plugins, doesn't run out: used when there is one.
+        key = self._api_key()
+        if key:
+            self.headers["ApiKey"] = key
+
+    def _api_key(self):
+        for d in (self.config_dir, "/root/.stash", os.path.expanduser("~/.stash")):
+            if not d:
+                continue
+            with contextlib.suppress(OSError):
+                with open(os.path.join(d, "config.yml"), encoding="utf-8") as f:
+                    for line in f:
+                        m = re.match(r"^api_key:\s*['\"]?([^'\"\s]+)", line)
+                        if m:
+                            return m.group(1)
+        return None
 
     def call(self, query, variables=None):
         body = json.dumps({"query": query, "variables": variables or {}}).encode()
@@ -85,9 +106,28 @@ class Stash:
 
     def fetch(self, url):
         """Download a file from Stash (thumbnails etc.): (bytes, content type)."""
-        headers = {k: v for k, v in self.headers.items() if k == "Cookie"}
+        headers = {k: v for k, v in self.headers.items() if k in ("Cookie", "ApiKey")}
         with urllib.request.urlopen(urllib.request.Request(url, headers=headers)) as resp:
             return resp.read(), resp.headers.get_content_type()
+
+
+def find_by_ids(stash, query, field, ids, fields):
+    """findScenes / findImages (ids: ...) that doesn't fail when some of the
+    ids are gone (deleted since a scan remembered them): Stash refuses the
+    whole lookup then, so the missing ones are left out and it's asked again."""
+    ids = [str(i) for i in ids]
+    for _ in range(len(ids) + 1):
+        if not ids:
+            return []
+        try:
+            return stash.call(f"query($ids: [ID!]) {{ {query}(ids: $ids, filter: {{per_page: -1}}) {{ {field} {{ {fields} }} }} }}",
+                              {"ids": ids})[query][field]
+        except RuntimeError as e:
+            gone = set(re.findall(r"with id (\d+) not found", str(e)))
+            if not gone or not gone & set(ids):
+                raise
+            ids = [i for i in ids if i not in gone]
+    return []
 
 
 SETTINGS_CACHE_SECONDS = 30
@@ -166,7 +206,7 @@ def tag_lookup(stash, cfg, plugin_dir):
     excluded = {t["id"] for t in tags if t["name"].lower() in cfg["exclude"]}
     # Gallery-name tags this plugin made would otherwise become everyone's
     # "top tags" (a 200-photo gallery = 200 uses), so they never count
-    excluded |= gallery_name_tag_ids(plugin_dir)
+    excluded |= gallery_only_tag_ids(stash, plugin_dir)
     missing = set(cfg["exclude"]) - {names[i].lower() for i in excluded}
     if missing:
         log("warning", f"Tags to ignore not found: {', '.join(sorted(missing))}")
@@ -189,7 +229,7 @@ KINDS = {
 OWNERS = {
     "performers": {
         "one": "performer", "find": "findPerformers", "update": "performerUpdate",
-        "input": "PerformerUpdateInput", "fields": "id name tags { id }",
+        "input": "PerformerUpdateInput", "fields": "id name gender tags { id }",
         "filter": "performers", "item": "performers { id }",
         "ids": lambda it: [p["id"] for p in it.get("performers") or []], "prefix": "",
     },
@@ -286,7 +326,7 @@ def locked_json(path):
         except (OSError, ValueError):
             data = {}
         yield data
-        tmp = path + ".tmp"
+        tmp = f"{path}.{os.getpid()}.tmp"  # (two requests at once mustn't share it)
         with open(tmp, "w") as f:
             json.dump(data, f, indent=1, sort_keys=True)
         os.replace(tmp, path)
@@ -302,6 +342,34 @@ def locked_queue(plugin_dir):
     return locked_json(os.path.join(plugin_dir, "queue.json"))
 
 
+# Tags that describe one gender's body (or person): a woman isn't given "Big
+# Dick" because her scenes have it, nor a man "Big Tits". Only for performers
+# marked Female or Male (trans, non-binary and unknown are left alone).
+_SIZE = r"(?:(?:big|small|tiny|medium|huge|large|average|thick|long|short|massive|monster|fat|curved|perky|saggy|natural|fake|real|small-?ish|hairy|shaved|smooth|uncut|cut|black|white|pink)\s+)*"
+MALE_BODY_TAG = re.compile(
+    rf"^{_SIZE}(?:dick|dicks|cock|cocks|penis|penises|balls)$|^(?:un)?circumcised$|^(?:bbc|bwc)$"
+    r"|\b(?:man|men|male|males|guy|guys|boy|boys|dude)$|\((?:male|man)\)$", re.I)
+FEMALE_BODY_TAG = re.compile(
+    rf"^{_SIZE}(?:tits|titties|boobs|breasts|breast)$|^(?:\w+\s+)+pussy$|^pussy$|^milfs?$"
+    r"|\b(?:woman|women|female|females|girl|girls)$|\((?:female|woman)\)$", re.I)
+
+
+MALE_WORD = re.compile(r"\b(?:man|men|male|males|guy|guys|boy|boys|dude|dick|cock|penis)\b", re.I)
+FEMALE_WORD = re.compile(r"\b(?:woman|women|female|females|girl|girls|tits|boobs|breasts|pussy)\b", re.I)
+
+
+def wrong_gender_tag(name, gender):
+    """True if the tag describes the other gender's body (for a performer
+    who's FEMALE or MALE). Tags naming both ("Older Man / Younger Woman")
+    are fine for either."""
+    name = (name or "").strip()
+    if gender == "FEMALE":
+        return bool(MALE_BODY_TAG.search(name)) and not FEMALE_WORD.search(name)
+    if gender == "MALE":
+        return bool(FEMALE_BODY_TAG.search(name)) and not MALE_WORD.search(name)
+    return False
+
+
 def refresh_owner(stash, cfg, owner, obj, counts, record, names, excluded, dry_run):
     """Bring one performer's / studio's / gallery's auto tags in line with
     its top tags.
@@ -314,6 +382,8 @@ def refresh_owner(stash, cfg, owner, obj, counts, record, names, excluded, dry_r
     prev_auto = set(record.get(key, [])) & current_set  # still on it
 
     ranked = [tid for tid, uses in counts.most_common() if uses >= cfg["min"] and tid not in excluded]
+    if owner == "performers" and obj.get("gender"):
+        ranked = [tid for tid in ranked if not wrong_gender_tag(names.get(tid), obj["gender"])]
     top = ranked[: cfg["top"]]
     top_set = set(top)
 
@@ -404,7 +474,8 @@ def run_hook(stash, plugin_dir, hook):
         # Better Tagging AI: new scenes and images for the AI
         if action == "Create" and kind in ("Scene", "Image"):
             cfg = settings(stash, plugin_dir)
-            if cfg["ai"]["auto"] or cfg["ai"]["new_all"] or cfg["ai"]["face_auto"]:
+            if cfg["ai"]["auto"] or cfg["ai"]["new_all"] or cfg["ai"]["face_auto"] or \
+                    (kind == "Image" and cfg["ai"]["photo_studios"]):
                 key = "ai_scenes" if kind == "Scene" else "ai_images"
                 enqueue(stash, plugin_dir, **{key: [str(hook["id"])]})
         return
@@ -590,6 +661,7 @@ def run_queued(stash, plugin_dir):
                     run_quick_new(stash, plugin_dir, cfg, new)
                 except Exception as e:
                     log("warning", f"Quick steps for new items skipped: {e}")
+            if ai["auto"] or ai["new_all"] or (ai["photo_studios"] and todo["ai_images"]):
                 save_for_tonight(stash, plugin_dir, cfg, new)
         else:
             # tags, then a scene's studio and performers from accounts, then
@@ -604,6 +676,11 @@ def run_queued(stash, plugin_dir):
                     run_accounts_items(stash, plugin_dir, todo["ai_scenes"])
                 except Exception as e:
                     log("warning", f"Studios from accounts for new scenes skipped: {e}")
+            if ai["photo_studios"] and todo["ai_images"]:
+                try:
+                    run_accounts_items(stash, plugin_dir, todo["ai_images"], kind="image")
+                except Exception as e:
+                    log("warning", f"Studios from watermarks for new photos skipped: {e}")
         # who it looks like: quick (face helper), so always right away
         if ai["face_auto"]:
             try:
@@ -654,6 +731,58 @@ def gallery_name_tag_ids(plugin_dir):
     except (OSError, ValueError):
         return set()
     return {v["tag"] for v in record.values() if v.get("created")}
+
+
+GALLERY_ONLY_SHARE = 0.95  # a gallery-named tag this much on its gallery's photos is just the gallery's name
+_GALLERY_ONLY = None
+
+
+def gallery_only_tag_ids(stash, plugin_dir):
+    """Tags that are just a gallery's name: named after a gallery (its title,
+    zip or folder - whoever made the tag) and (almost) only on that
+    gallery's photos, like a comic's title. Category folders ("BDSM",
+    "Celeb"...) whose tag is also used elsewhere are real tags and aren't
+    included. Kept for an hour (gallery_only_tags.json)."""
+    global _GALLERY_ONLY
+    if _GALLERY_ONLY is not None:
+        return _GALLERY_ONLY
+    path = os.path.join(base_dir(plugin_dir), "gallery_only_tags.json")
+    with contextlib.suppress(Exception):
+        with open(path) as f:
+            saved = json.load(f)
+        if time.time() - saved.get("at", 0) < 3600:
+            _GALLERY_ONLY = set(saved["ids"])
+            return _GALLERY_ONLY
+    try:
+        gals = stash.call("{ findGalleries(filter: {per_page: -1}) { galleries { id title image_count files { basename } "
+                          "folder { path } studio { name aliases } } } }")["findGalleries"]["galleries"]
+        by_name = defaultdict(list)
+        for g in gals:
+            n = gallery_name(g)
+            if n:
+                by_name[n.strip().lower()].append(g)
+        tags = stash.call("{ findTags(filter: {per_page: -1}) { tags { id name scene_count image_count } } }")["findTags"]["tags"]
+        ids = set()
+        for t in tags:
+            gs = by_name.get(t["name"].strip().lower())
+            uses = (t.get("scene_count") or 0) + (t.get("image_count") or 0)
+            if not gs or not uses:
+                continue
+            inside = stash.call("query($t: [ID!], $g: [ID!]) { findImages(image_filter: {tags: {value: $t, modifier: INCLUDES}, "
+                                "galleries: {value: $g, modifier: INCLUDES}}, filter: {per_page: 0}) { count } }",
+                                {"t": [t["id"]], "g": [g["id"] for g in gs]})["findImages"]["count"]
+            if inside >= uses * GALLERY_ONLY_SHARE:
+                ids.add(t["id"])
+    except Exception as e:
+        log("debug", f"gallery-name tags: {e}")
+        ids = set(gallery_name_tag_ids(plugin_dir))
+    _GALLERY_ONLY = ids
+    with contextlib.suppress(Exception):
+        tmp = f"{path}.{os.getpid()}.tmp"  # (two requests at once mustn't share it)
+        with open(tmp, "w") as f:
+            json.dump({"at": time.time(), "ids": sorted(ids, key=int)}, f)
+        os.replace(tmp, path)
+    return ids
 
 
 def without_studio(name, studio):
@@ -877,6 +1006,327 @@ def run_gallery_tags_to_images(stash, plugin_dir, preview=False, gallery_ids=Non
         log("info", f"Done: {changed} of {len(galleries)} galleries added {what} to their images.")
 
 
+# --- studio tags to its items --------------------------------------------
+# Every scene, image and gallery of a studio gets the studio's own tags (the
+# top tags this plugin added and any you added). Only this studio's items,
+# not its sub-studios'. Nothing is removed.
+
+STUDIO_KINDS = ("scenes", "images", "galleries")
+
+
+def item_count(stash, kind, item_filter):
+    query_name, _field, farg, ftype = KINDS[kind]
+    return stash.call(
+        f"query($p: {ftype}) {{ {query_name}({farg}: $p, filter: {{per_page: 0}}) {{ count }} }}",
+        {"p": item_filter},
+    )[query_name]["count"]
+
+
+def of_studio(sid):
+    return {"studios": {"value": [str(sid)], "modifier": "INCLUDES", "depth": 0}}
+
+
+def studio_tags_to_copy(stash, plugin_dir, studio):
+    """The studio's tags, less the ones to ignore (and gallery-name tags)."""
+    cfg = settings(stash)
+    excluded = {t["id"] for t in studio["tags"] if t["name"].lower() in cfg["exclude"]}
+    excluded |= gallery_only_tag_ids(stash, plugin_dir)
+    return [t for t in studio["tags"] if t["id"] not in excluded]
+
+
+def studio_tag_plan(stash, plugin_dir, studio_id):
+    """For the studio page: each of the studio's tags and how many of its
+    scenes, images and galleries don't have it yet."""
+    st = stash.call(
+        "query($id: ID!) { findStudio(id: $id) { id name tags { id name } } }", {"id": str(studio_id)}
+    )["findStudio"]
+    if not st:
+        raise RuntimeError(f"studio {studio_id} not found")
+    if any(t["name"].strip().lower() in UNDERAGE_TAGS for t in st["tags"]):
+        return {"name": st["name"], "blocked": True, "tags": [], "totals": {}}
+    base = of_studio(st["id"])
+    totals = {k: item_count(stash, k, base) for k in STUDIO_KINDS}
+    tags = []
+    for t in studio_tags_to_copy(stash, plugin_dir, st):
+        missing = {
+            k: (item_count(stash, k, {**base, "tags": {"value": [t["id"]], "modifier": "EXCLUDES"}}) if totals[k] else 0)
+            for k in STUDIO_KINDS
+        }
+        tags.append({"id": t["id"], "name": t["name"], "missing": missing})
+    return {"name": st["name"], "tags": tags, "totals": totals}
+
+
+def run_studio_tags_to_items(stash, plugin_dir, preview=False, studio_ids=None, tag_ids=None, kinds=None):
+    """Task / studio page: give a studio's scenes, images and galleries the
+    studio's tags. studio_ids: only these studios (else every studio with
+    tags); tag_ids: only these of its tags; kinds: scenes / images / galleries."""
+    kinds = [k for k in (kinds or STUDIO_KINDS) if k in STUDIO_KINDS]
+    studios = stash.call(
+        "query($ids: [ID!]) { findStudios(ids: $ids, filter: {per_page: -1}) { studios { id name tags { id name } } } }",
+        {"ids": studio_ids or None},
+    )["findStudios"]["studios"]
+    studios = [st for st in studios if st["tags"]]
+    if not studios:
+        log("info", "Nothing to do: " + ("the studio has no tags." if studio_ids else "no studio has tags."))
+        return
+    totals = Counter()
+    changed = 0
+    for n, st in enumerate(studios):
+        progress(n / max(len(studios), 1))
+        if any(t["name"].strip().lower() in UNDERAGE_TAGS for t in st["tags"]):
+            log("warning", f'"{st["name"]}": skipped - tagged as sexual content involving minors')
+            continue
+        tags = studio_tags_to_copy(stash, plugin_dir, st)
+        if tag_ids:
+            tags = [t for t in tags if t["id"] in tag_ids]
+        base = of_studio(st["id"])
+        added = []
+        for t in tags:
+            for k in kinds:
+                missing = item_ids(stash, k, {**base, "tags": {"value": [t["id"]], "modifier": "EXCLUDES"}})
+                if not missing:
+                    continue
+                if not preview:
+                    mutation, input_type = BULK_MUTATIONS[k]
+                    for i in range(0, len(missing), BULK_BATCH):
+                        stash.call(
+                            f"mutation($i: {input_type}!) {{ {mutation}(input: $i) {{ id }} }}",
+                            {"i": {"ids": missing[i:i + BULK_BATCH], "tag_ids": {"ids": [t["id"]], "mode": "ADD"}}},
+                        )
+                added.append(f"{t['name']} → {len(missing)} {k}")
+                totals[k] += len(missing)
+        if added:
+            changed += 1
+            log("info", f'"{st["name"]}": {"would add" if preview else "added"} {"; ".join(added)}')
+    progress(1)
+    what = ", ".join(f"{totals[k]} {k}" for k in STUDIO_KINDS if k in kinds)
+    if preview:
+        log("info", f"Preview done: {changed} of {len(studios)} studios would add their tags to {what}. Nothing was saved.")
+    else:
+        log("info", f"Done: {changed} of {len(studios)} studios added their tags to {what} (tags added per item).")
+
+
+# --- "Tags to ignore" suggestions ----------------------------------------------
+# Big tags that look like housekeeping rather than what's shown: their name
+# (process, review, categories, underscores...), that they group other tags,
+# or - with Better Tagging AI's picture fingerprints - that their items don't
+# look alike at all. Shown under the setting; you choose what to add.
+
+HOUSEKEEPING_WORDS = re.compile(
+    r"\b(?:process(?:ed|ing)?|categor(?:y|ies)|to[ -]?review|review(?:ed)?|to[ -]?do|todo|unsorted|sorted|"
+    r"organi[sz]ed|unorgani[sz]ed|missing|needs?|scraped|imported|import|export(?:ed)?|hidden|private|personal|"
+    r"temp|test|misc|uncategori[sz]ed|wip|done|checked|tagged|untagged|queue|duplicates?|delete|ai|auto|"
+    r"favou?rites?|watched|unwatched|downloaded|new|old|archive|collection|batch|import(?:ed)? from)\b", re.I)
+
+
+def _coherence(vectors):
+    """How alike a set of picture fingerprints are: the mean cosine of each
+    to their average (0 = all different)."""
+    if len(vectors) < 5:
+        return None
+    dims = len(vectors[0])
+    mean = [sum(v[i] for v in vectors) / len(vectors) for i in range(dims)]
+    norm = math.sqrt(sum(x * x for x in mean)) or 1.0
+    return sum(sum(a * b for a, b in zip(v, mean)) / norm for v in vectors) / len(vectors)
+
+
+def ignore_suggestions(stash, plugin_dir, limit=10):
+    """Asked by the settings page: [{name, uses, share, why: [...]}], the
+    likeliest housekeeping tags first (not ones already ignored)."""
+    cfg = settings(stash, plugin_dir)
+    tags = stash.call(f"{{ findTags(filter: {{per_page: -1}}) {{ tags {{ id name {TAG_USES_FIELDS} child_count }} }} }}")["findTags"]["tags"]
+    counts = stash.call("{ findScenes(filter: {per_page: 0}) { count } findImages(filter: {per_page: 0}) { count } }")
+    total = max(counts["findScenes"]["count"] + counts["findImages"]["count"], 1)
+    skip = set(cfg["exclude"])
+    gallery_tags = gallery_only_tag_ids(stash, plugin_dir)
+    big = sorted((t for t in tags if t["id"] not in gallery_tags and t["name"].lower() not in skip),
+                 key=lambda t: -(t.get("scene_count", 0) + t.get("image_count", 0)))[:200]
+    big = [t for t in big if (t.get("scene_count", 0) + t.get("image_count", 0)) >= 20]
+
+    # with the AI add-on's fingerprints: how alike each big tag's items look
+    looks = {}
+    ai_dir = os.path.join(os.path.dirname(os.path.abspath(plugin_dir)), AI_ID)
+    with contextlib.suppress(Exception):
+        fp = LookCache(ai_dir).data
+        if fp:
+            def unit(v):
+                n = math.sqrt(sum(x * x for x in v)) or 1.0
+                return [x / n for x in v]
+            members = defaultdict(list)
+            wanted = {t["id"] for t in big}
+            for key, ts in all_item_tags(stash).items():
+                e = fp.get(key)
+                if e and e.get("e"):
+                    for t in ts & wanted:
+                        if len(members[t]) < 150:
+                            members[t].append(key)
+            cache = {}
+            for t in big:
+                vs = [cache.setdefault(k, unit(_ints(fp[k]["e"]))) for k in members.get(t["id"], [])]
+                c = _coherence(vs)
+                if c is not None:
+                    looks[t["id"]] = c
+    cut = sorted(looks.values())[len(looks) // 4] if len(looks) >= 8 else None  # the least alike quarter
+
+    out = []
+    for t in big:
+        n = t.get("scene_count", 0) + t.get("image_count", 0)
+        why, score = [], 0
+        # a name like a note or a process ("To Review", "Site_Process"), or a
+        # tag that groups others; that its items don't look alike only backs
+        # these up (whole pictures of e.g. feet in different settings don't)
+        if HOUSEKEEPING_WORDS.search(t["name"]) or re.search(r"[A-Za-z0-9]_[A-Za-z0-9]", t["name"]):
+            why.append("its name sounds like housekeeping")
+            score += 2
+        if (t.get("child_count") or 0) >= 3:
+            why.append(f"it groups {t['child_count']} other tags")
+            score += 2
+        if not why:
+            continue
+        if cut is not None and t["id"] in looks and looks[t["id"]] <= cut:
+            why.append("its items don't look alike")
+            score += 1
+        share = n / total
+        out.append({"name": t["name"], "uses": n, "share": round(share * 100), "why": why, "_k": score + share})
+    out.sort(key=lambda x: -x["_k"])
+    for x in out:
+        x.pop("_k")
+    return out[:limit]
+
+
+# --- tag descriptions -------------------------------------------------------
+# Tags without a description get one: from the stash-box they're linked to
+# (StashDB...), else StashDB by exact name / alias, else the E-Hentai wiki
+# (comic and doujinshi tags), else Danbooru's wiki. Only empty descriptions
+# are filled; names, aliases and descriptions you've written are never touched.
+
+WEB_HEADERS = {"User-Agent": "BetterTaggingTools/2.3 (Stash plugin; tag descriptions)"}
+STASHDB = "https://stashdb.org/graphql"
+CHAPTER_NAME = re.compile(r"^\d+(?:\.\d+)?\.?\s")  # "12. Family Values 1 - ..." (a story, not a tag to look up)
+
+
+def _web_json(url):
+    with urllib.request.urlopen(urllib.request.Request(url, headers=WEB_HEADERS), timeout=20) as r:
+        return json.loads(r.read())
+
+
+def _clean_desc(text):
+    """Wiki markup -> plain text: links, bold / italics, DText tags."""
+    t = re.sub(r"\[\[([^\]|]+)\|([^\]]+)\]\]", r"\2", text)
+    t = re.sub(r"\[\[([^\]]+)\]\]", r"\1", t)
+    t = re.sub(r"'{2,}", "", t)
+    t = re.sub(r"\[/?[a-z]+(?:=[^\]]*)?\]", "", t)          # DText [b], [i], [url=...]
+    t = re.sub(r'"([^"]+)":\[?\S+?\]?(?=\s|$)', r"\1", t)  # DText "text":url
+    t = re.sub(r"\s+", " ", t).strip()
+    return t[:1000]
+
+
+def _stashbox_desc(stash, endpoint, query, names=None):
+    """A stash-box tag's description, by its id - or by name, then only when
+    its name or an alias is one of `names` (lower case)."""
+    try:
+        found = stash.call(
+            "query($s: ScraperSourceInput!, $i: ScrapeSingleTagInput!) { scrapeSingleTag(source: $s, input: $i) { name description alias_list } }",
+            {"s": {"stash_box_endpoint": endpoint}, "i": {"query": query}},
+        )["scrapeSingleTag"] or []
+    except Exception:
+        return None
+    for t in found:
+        if names is not None and not ({t["name"].lower()} | {a.lower() for a in t.get("alias_list") or []}) & names:
+            continue
+        if (t.get("description") or "").strip():
+            return _clean_desc(t["description"])
+    return None
+
+
+def _ehwiki_desc(name):
+    title = name.strip().lower()
+    try:
+        d = _web_json("https://ehwiki.org/api.php?action=query&prop=revisions&rvprop=content&rvslots=main&format=json&titles="
+                      + urllib.parse.quote(title))
+    except Exception:
+        return None
+    page = next(iter(d.get("query", {}).get("pages", {}).values()), {})
+    text = ((page.get("revisions") or [{}])[0].get("slots", {}).get("main", {}).get("*")) or ""
+    m = re.search(r"\|\s*description\s*=(.*?)(?:\n\s*\||\n\}\})", text, re.S)
+    return _clean_desc(m.group(1)) if m and m.group(1).strip() else None
+
+
+def _danbooru_desc(name):
+    """Danbooru's wiki - only for its general tags (what's shown), not
+    artists, characters or series, and not one-line stubs."""
+    key = name.strip().lower().replace(" ", "_")
+    try:
+        tags = _web_json("https://danbooru.donmai.us/tags.json?limit=1&search[name]=" + urllib.parse.quote(key))
+        if not tags or tags[0].get("category") != 0:  # 0 = general
+            return None
+        d = _web_json("https://danbooru.donmai.us/wiki_pages.json?limit=1&search[title_normalize]=" + urllib.parse.quote(key))
+    except Exception:
+        return None
+    if not d or not (d[0].get("body") or "").strip() or d[0].get("is_deleted"):
+        return None
+    first = _clean_desc(re.split(r"\r?\n\s*\r?\n|\r?\nh\d\.", d[0]["body"].strip())[0])
+    return first if len(first) >= 40 else None
+
+
+def tag_description(stash, tag):
+    """(description, where it came from) or (None, None)."""
+    names = {tag["name"].strip().lower()} | {a.strip().lower() for a in tag.get("aliases") or []}
+    links = sorted(tag.get("stash_ids") or [], key=lambda x: x["endpoint"] != STASHDB)
+    for link in links:  # the stash-box it's linked to (StashDB first)
+        d = _stashbox_desc(stash, link["endpoint"], link["stash_id"])
+        if d:
+            return d, link["endpoint"].split("//")[-1].split("/")[0]
+    if not any(l["endpoint"] == STASHDB for l in links):
+        for n in [tag["name"], *(tag.get("aliases") or [])][:3]:
+            d = _stashbox_desc(stash, STASHDB, n, names)
+            if d:
+                return d, "stashdb.org (by name)"
+    for n in [tag["name"], *(tag.get("aliases") or [])][:3]:
+        d = _ehwiki_desc(n)
+        if d:
+            return d, "E-Hentai wiki"
+        time.sleep(0.2)
+    d = _danbooru_desc(tag["name"])
+    if d:
+        return d, "Danbooru wiki"
+    return None, None
+
+
+def run_tag_descriptions(stash, plugin_dir, preview=False, limit=None):
+    """Task: every tag with an empty description gets one (see above).
+    preview: only log what would be set (on `limit` tags)."""
+    tags = stash.call("{ findTags(filter: {per_page: -1}) { tags { id name aliases description stash_ids { endpoint stash_id } } } }")["findTags"]["tags"]
+    todo = [t for t in tags if not (t.get("description") or "").strip() and not CHAPTER_NAME.match(t["name"])]
+    if limit:
+        import random
+        todo = random.sample(todo, min(limit, len(todo)))
+    log("info", f"{len(todo)} tag(s) without a description" + (" (preview, nothing is saved)" if preview else
+        " - looking each one up (a second or two each); cancel and run again to carry on"))
+    found, sources, missing = 0, Counter(), []
+    for n, t in enumerate(todo):
+        progress(n / max(len(todo), 1))
+        try:
+            desc, where = tag_description(stash, t)
+        except Exception as e:
+            log("debug", f'"{t["name"]}": {e}')
+            desc = None
+        if not desc:
+            missing.append(t["name"])
+            continue
+        found += 1
+        sources[where] += 1
+        log("info" if preview else "debug", f'"{t["name"]}" [{where}]: {desc[:200]}')
+        if not preview:
+            stash.call("mutation($i: TagUpdateInput!) { tagUpdate(input: $i) { id } }", {"i": {"id": t["id"], "description": desc}})
+    progress(1)
+    where = ", ".join(f"{n} from {w}" for w, n in sources.most_common())
+    log("info", f"{'Preview done' if preview else 'Done'}: {found} of {len(todo)} tag(s) {'would get' if preview else 'got'} a description"
+        + (f" ({where})" if where else "") + ("." if not preview else ". Nothing was saved."))
+    if missing:
+        log("info", f"No description found for {len(missing)}: {short_list(missing)}")
+
+
 # --- tag pictures ---------------------------------------------------------
 # Tags without a picture get one from the library: the best photo with that
 # tag (highest rated of the ones with the fewest other tags, i.e. most
@@ -944,12 +1394,26 @@ def candidates(stash, tag_id):
 
     galleries = stash.call(
         "query($t: GalleryFilterType) { findGalleries(gallery_filter: $t, filter: {per_page: 10}) "
-        "{ galleries { image_count paths { cover } } } }",
+        "{ galleries { id image_count paths { cover } } } }",
         {"t": {"tags": has_tag}},
     )["findGalleries"]["galleries"]
     for g in galleries:
         if g["image_count"] and g["paths"].get("cover"):
             yield g["paths"]["cover"], "a gallery cover"
+
+    # Pages inside the tag's galleries: tags that are only on a gallery (a
+    # comic's tags, say) would otherwise all have just its cover
+    for g in galleries:
+        if not g["image_count"]:
+            continue
+        pages = stash.call(
+            "query($g: ImageFilterType, $f: FindFilterType) { findImages(image_filter: $g, filter: $f) "
+            "{ images { paths { thumbnail } visual_files { __typename } } } }",
+            {"g": {"galleries": {"value": [g["id"]], "modifier": "INCLUDES"}}, "f": {"per_page": 60, "sort": "title"}},
+        )["findImages"]["images"]
+        for i in pages:
+            if all(f["__typename"] == "ImageFile" for f in i["visual_files"]) and i["paths"].get("thumbnail"):
+                yield i["paths"]["thumbnail"], "a page of one of its galleries"
 
     # Frames from the tag's scenes: tags that only appear on scenes shared
     # with many other tags can each get a different moment of the video
@@ -1029,13 +1493,18 @@ def picture_hashes(stash, cache, tags):
     return out
 
 
-def give_picture(stash, tag, taken, cache, allow_shared=True, avoid=()):
-    """Give one tag a picture no other tag has (by file hash). `taken` maps
-    hash -> tag id and is updated; pictures in `avoid` (by hash) are never
-    used. If every candidate is taken, the best one is used anyway when
-    allow_shared. Returns (source, shared?) or None."""
-    fallback = None
-    for n, (where, source) in enumerate(candidates(stash, tag["id"])):
+def give_picture(stash, tag, taken, cache, avoid=(), cands=None, keep=None, looks=None):
+    """Give one tag a picture no other tag has (by file hash) - a picture is
+    never used for two tags; if every candidate is another tag's, the tag
+    gets nothing. `taken` maps hash -> tag id and is updated; pictures in
+    `avoid` (by hash) are never used. cands: the pictures to try, best
+    first (default: the usual ones). keep: the hash of the tag's current
+    picture - if that's the one picked, nothing is saved. looks (TagLooks,
+    when the face helper is running): a picture that looks the same as
+    another tag's (a variant of the same page, a near-identical shot)
+    counts as that tag's too. Returns (source, False) or None; source is
+    None when the tag already had that picture."""
+    for n, (where, source) in enumerate(cands if cands is not None else candidates(stash, tag["id"])):
         if n >= MAX_TRIES:
             break
         try:
@@ -1051,16 +1520,122 @@ def give_picture(stash, tag, taken, cache, allow_shared=True, avoid=()):
         if h in avoid:
             continue
         if taken.get(h, tag["id"]) != tag["id"]:
-            if fallback is None:
-                fallback = (data, ctype, h, source)
-            continue
+            continue  # another tag's picture
+        fp = None
+        if looks:
+            fp = looks.fingerprint(data)
+            if fp and looks.clash(fp, tag["id"]):
+                continue  # looks the same as another tag's picture
+        if keep and h == keep:
+            taken[h] = tag["id"]
+            if looks and fp:
+                looks.claim(tag["id"], fp, cache)
+            return None, False
         set_picture(stash, tag, data, ctype, h, taken, cache)
+        if looks and fp:
+            looks.claim(tag["id"], fp, cache)
         return source, False
-    if fallback and allow_shared:
-        data, ctype, h, source = fallback
-        set_picture(stash, tag, data, ctype, h, taken, cache)
-        return source, True
     return None
+
+
+SAME_LOOK = 0.96  # picture fingerprints this alike are the same picture
+# (variants of one comic page scored 0.988-0.998; different photos never
+# above 0.94)
+
+
+class TagLooks:
+    """What every tag's picture looks like (a picture fingerprint from the
+    face helper, cached in picture_hashes.json next to the file hash), so a
+    picture that only differs a little from another tag's - a variant of the
+    same page, a near-identical shot - isn't used again."""
+
+    def __init__(self, stash, cfg, cache, tags):
+        self.cfg = cfg
+        self.fp = {}  # tag id -> unit fingerprint
+        todo = []
+        for t in tags:
+            e = cache.get(t["id"])
+            if not has_picture(t) or not e:
+                continue
+            if e.get("fp") and e.get("fp_link") == e.get("link"):
+                self.fp[t["id"]] = self._unit(_ints(e["fp"]))
+            else:
+                todo.append(t)
+        if todo:
+            log("info", f"Fingerprinting {len(todo)} tag picture(s) to compare their looks (once)...")
+        for i in range(0, len(todo), 16):
+            batch, pics = [], []
+            for t in todo[i:i + 16]:
+                with contextlib.suppress(Exception):
+                    pics.append(stash.fetch(cache[t["id"]]["link"])[0])
+                    batch.append(t)
+            if not pics:
+                continue
+            for t, emb in zip(batch, picture_helper(cfg, pics)):
+                if emb:
+                    cache[t["id"]]["fp"] = q8(emb)
+                    cache[t["id"]]["fp_link"] = cache[t["id"]]["link"]
+                    self.fp[t["id"]] = self._unit(emb)
+
+    @staticmethod
+    def _unit(v):
+        n = math.sqrt(sum(x * x for x in v)) or 1.0
+        return [x / n for x in v]
+
+    @classmethod
+    def maybe(cls, stash, plugin_dir, cache, tags):
+        """TagLooks if the face helper (with its picture model) is running,
+        else None (then only identical files count as the same)."""
+        try:
+            cfg = settings(stash, plugin_dir)
+            with urllib.request.urlopen(cfg["ai"]["face_url"] + "/health", timeout=4) as resp:
+                if not json.loads(resp.read()).get("embed"):
+                    return None
+            return cls(stash, cfg, cache, tags)
+        except Exception as e:
+            log("debug", f"Tag pictures: not comparing looks ({e})")
+            return None
+
+    def fingerprint(self, data):
+        try:
+            emb = picture_helper(self.cfg, [data])[0]
+        except Exception:
+            return None
+        return self._unit(emb) if emb else None
+
+    def clash(self, fp, tag_id):
+        """Another tag whose picture looks the same, or None."""
+        for tid, other in self.fp.items():
+            if tid != tag_id and sum(map(operator.mul, fp, other)) >= SAME_LOOK:
+                return tid
+        return None
+
+    def claim(self, tag_id, fp, cache):
+        self.fp[tag_id] = fp
+        e = cache.get(tag_id)
+        if e is not None:
+            e["fp"] = q8(fp)
+            e["fp_link"] = e.get("link")
+
+    def groups(self, tag_ids):
+        """Tags whose pictures look the same: [[tag ids]] (2 or more each)."""
+        ids = [t for t in tag_ids if t in self.fp]
+        parent = {t: t for t in ids}
+
+        def root(t):
+            while parent[t] != t:
+                parent[t] = parent[parent[t]]
+                t = parent[t]
+            return t
+        for i, a in enumerate(ids):
+            va = self.fp[a]
+            for b in ids[i + 1:]:
+                if sum(map(operator.mul, va, self.fp[b])) >= SAME_LOOK:
+                    parent[root(b)] = root(a)
+        out = defaultdict(list)
+        for t in ids:
+            out[root(t)].append(t)
+        return [g for g in out.values() if len(g) > 1]
 
 
 def set_picture(stash, tag, data, ctype, h, taken, cache):
@@ -1114,13 +1689,14 @@ def give_pictures(stash, plugin_dir, tag_ids):
         return
     with locked_picture_hashes(plugin_dir) as cache:
         taken = taken_map(picture_hashes(stash, cache, tags))
+        looks = TagLooks.maybe(stash, plugin_dir, cache, tags)
         for t in todo:
             try:
-                result = give_picture(stash, t, taken, cache)
+                result = give_picture(stash, t, taken, cache, looks=looks)
                 if result:
-                    source, shared = result
-                    note = " (shared - every picture of it is already another tag's)" if shared else ""
-                    log("info", f'Gave tag "{t["name"]}" a picture from {source}{note}')
+                    log("info", f'Gave tag "{t["name"]}" a picture from {result[0]}')
+                else:
+                    log("info", f'Tag "{t["name"]}": no picture of its own (every one is already another tag\'s)')
             except Exception as e:
                 log("warning", f'Tag "{t["name"]}": could not set a picture: {e}')
 
@@ -1130,28 +1706,26 @@ def run_tag_pictures(stash, plugin_dir):
     tags = all_tags_for_pictures(stash)
     todo = sorted((t for t in tags if not has_picture(t)), key=uses)  # rarest first
     log("info", f"{len(todo)} of {len(tags)} tags have no picture")
-    given, shared, nothing = 0, [], []
+    given, nothing = 0, []
     with locked_picture_hashes(plugin_dir) as cache:
         taken = taken_map(picture_hashes(stash, cache, tags))
+        looks = TagLooks.maybe(stash, plugin_dir, cache, tags)
         for n, t in enumerate(todo):
             try:
-                result = give_picture(stash, t, taken, cache)
+                result = give_picture(stash, t, taken, cache, looks=looks)
             except Exception as e:
                 log("warning", f'Tag "{t["name"]}": could not set a picture: {e}')
                 result = None
             if result:
                 given += 1
-                if result[1]:
-                    shared.append(t["name"])
                 log("debug", f'"{t["name"]}": picture from {result[0]}')
             else:
                 nothing.append(t["name"])
             progress((n + 1) / max(len(todo), 1))
     log("info", f"Done: gave {given} tag(s) a picture.")
-    if shared:
-        log("info", f"{len(shared)} of them had to share a picture with another tag (no unused picture left): {short_list(shared)}")
     if nothing:
-        log("info", f"{len(nothing)} tag(s) aren't used on anything with a picture, so they were left as they are: {short_list(nothing)}")
+        log("info", f"{len(nothing)} tag(s) were left without one: they aren't used on anything with a picture, or "
+            f"every picture they have is already another tag's (a picture is never used twice): {short_list(nothing)}")
 
 
 def run_unique_pictures(stash, plugin_dir):
@@ -1162,17 +1736,35 @@ def run_unique_pictures(stash, plugin_dir):
     with locked_picture_hashes(plugin_dir) as cache:
         log("info", "Comparing tag pictures (the first run downloads each tag's picture once)...")
         hashes = picture_hashes(stash, cache, tags)
-        groups = {}
-        for tid, h in hashes.items():
-            groups.setdefault(h, []).append(by_id[tid])
-        groups = [sorted(g, key=uses) for g in groups.values() if len(g) > 1]
+        looks = TagLooks.maybe(stash, plugin_dir, cache, tags)
+        if looks:
+            # same file, or pictures that look the same (variants of a page)
+            same = {}
+            for tid, h in hashes.items():
+                same.setdefault(h, []).append(tid)
+            for g in looks.groups(list(hashes)):
+                for tid in g:
+                    same.setdefault(hashes[tid], [])
+                merged = set(g)
+                for h in {hashes[t] for t in g}:
+                    merged |= set(same.pop(h, []))
+                same["look:" + min(merged)] = sorted(merged)
+            groups = [sorted((by_id[t] for t in g), key=uses) for g in same.values() if len(g) > 1]
+        else:
+            groups = {}
+            for tid, h in hashes.items():
+                groups.setdefault(h, []).append(by_id[tid])
+            groups = [sorted(g, key=uses) for g in groups.values() if len(g) > 1]
         movers = [t for g in groups for t in g[1:]]
         log("info", f"{len(groups)} picture(s) are shared by more than one tag ({len(movers) + len(groups)} tags).")
         taken = taken_map(hashes, prefer=[g[0]["id"] for g in groups])
         changed, stuck = 0, []
+        if looks:  # the movers' current pictures don't count as theirs
+            for t in movers:
+                looks.fp.pop(t["id"], None)
         for n, t in enumerate(sorted(movers, key=uses)):
             try:
-                result = give_picture(stash, t, taken, cache, allow_shared=False)
+                result = give_picture(stash, t, taken, cache, looks=looks)
             except Exception as e:
                 log("warning", f'Tag "{t["name"]}": could not set a picture: {e}')
                 result = None
@@ -1196,17 +1788,22 @@ def run_new_pictures(stash, plugin_dir):
     given, kept, nothing = 0, [], 0
     with locked_picture_hashes(plugin_dir) as cache:
         current = picture_hashes(stash, cache, tags)
-        taken = {}  # pictures handed out in this run
+        # every tag's current picture stays its own until that tag has moved
+        # on, so a picture never ends up on two tags
+        taken = taken_map(current)
+        looks = TagLooks.maybe(stash, plugin_dir, cache, tags)
         for n, t in enumerate(tags):
             old = current.get(t["id"])
             try:
-                result = give_picture(stash, t, taken, cache, allow_shared=False,
-                                      avoid={old} if old else ())
+                result = give_picture(stash, t, taken, cache,
+                                      avoid={old} if old else (), looks=looks)
             except Exception as e:
                 log("warning", f'Tag "{t["name"]}": could not set a picture: {e}')
                 result = None
             if result:
                 given += 1
+                if old and taken.get(old) == t["id"]:
+                    del taken[old]  # its old picture is free for the tags after it
                 log("debug", f'"{t["name"]}": new picture from {result[0]}')
             elif old:
                 taken.setdefault(old, t["id"])
@@ -1219,6 +1816,220 @@ def run_new_pictures(stash, plugin_dir):
         log("info", f"{len(kept)} tag(s) kept their picture because there's no other unused one: {short_list(kept)}")
     if nothing:
         log("info", f"{nothing} tag(s) still have no picture (not used on anything with one).")
+
+
+# --- most typical tag pictures (AI add-on) ----------------------------------
+# A tag's "typical look" is the average picture fingerprint (look_items.json)
+# of the scenes and photos that carry it - leaving out ones where the add-on
+# added the tag itself, so its own guesses don't count. The tag's photo or
+# scene closest to that average is its most typical picture. The usual rules
+# still apply: a picture is never used for two tags.
+
+TYPICAL_MIN = 3    # fingerprinted items with the tag needed for a typical look
+TYPICAL_TRY = 40   # best-matching pictures tried per tag (for a unique one)
+# The fewer other tags an item has, the more likely it's about this one: its
+# score drops by this much times log(number of tags on it), so 1 -> 5 tags
+# matters more than 30 -> 35. (Gallery-name tags don't count.)
+TYPICAL_FOCUS = 0.15
+
+
+class TypicalPictures:
+    def __init__(self, stash, plugin_dir, item_tags=None, focus=TYPICAL_FOCUS):
+        """item_tags: {"scene:ID"/"image:ID": {tag ids}} for every item (the
+        whole library); looked up when not given."""
+        self.stash = stash
+        self.base = stash.url.rsplit("/graphql", 1)[0]
+        def unit(v):
+            n = math.sqrt(sum(x * x for x in v)) or 1.0
+            return [x / n for x in v]
+        raw = {k: unit(_ints(e["e"])) for k, e in LookCache(plugin_dir).data.items() if e.get("e")}
+        # Take away the library's average look (photos and scenes apart):
+        # otherwise the most "average" pictures win for every tag they're
+        # on, rather than the ones that show what's special about the tag
+        self.vectors = {}
+        for kind in ("image:", "scene:"):
+            ks = [k for k in raw if k.startswith(kind)]
+            if not ks:
+                continue
+            avg = [sum(col) / len(ks) for col in zip(*(raw[k] for k in ks))]
+            for k in ks:
+                self.vectors[k] = unit([a - b for a, b in zip(raw[k], avg)])
+        try:
+            with open(os.path.join(plugin_dir, "machine_tags.json")) as f:
+                self.machine = {k: set(v) for k, v in json.load(f).items()}
+        except (OSError, ValueError):
+            self.machine = {}
+        if item_tags is None:
+            item_tags = all_item_tags(stash)
+        self.focus = focus
+        gallery_tags = gallery_only_tag_ids(stash, plugin_dir)
+        self.members = defaultdict(list)
+        self.tag_count = {}
+        for key, tags in item_tags.items():
+            if key in self.vectors:
+                self.tag_count[key] = max(len(tags - gallery_tags), 1)
+                for t in tags:
+                    self.members[t].append(key)
+
+    def _members(self, tag_id):
+        return self.members.get(tag_id, [])
+
+    def ranked(self, tag_id):
+        """[(match 0-1, "scene:ID"/"image:ID")], most typical first; [] when
+        too few of the tag's items have a fingerprint."""
+        keys = self._members(tag_id)
+        learn = [self.vectors[k] for k in keys if tag_id not in self.machine.get(k, ())]
+        if len(learn) < TYPICAL_MIN:
+            return []
+        # each item against the average of the tag's OTHER items, so an item
+        # doesn't count towards its own score
+        total = [sum(col) for col in zip(*learn)]
+        tt = sum(x * x for x in total)
+        learned = {k for k in keys if tag_id not in self.machine.get(k, ())}
+        out = []
+        for k in keys:
+            v = self.vectors[k]
+            dot = sum(map(operator.mul, v, total))
+            if k in learned:  # (total - v): dot = dot - 1, length^2 = tt - 2 dot + 1
+                dot, length = dot - 1.0, math.sqrt(max(tt - 2 * dot + 1.0, 1e-9))
+            else:
+                length = math.sqrt(tt) or 1.0
+            # fewer other tags: more likely to be about this one
+            out.append((dot / length - self.focus * math.log(self.tag_count.get(k, 1)), k))
+        # A scene's fingerprint is an average of several frames, so it's
+        # always "closer to the middle" than a single photo: rank photos and
+        # scenes apart, and try first the kind the tag is mostly on
+        photos = sum(1 for k in keys if k.startswith("image:"))
+        first = "image:" if photos * 2 >= len(keys) else "scene:"
+        out.sort(key=lambda sk: (not sk[1].startswith(first), -sk[0]))
+        return out
+
+    def link(self, key):
+        kind, iid = key.split(":", 1)
+        return f"{self.base}/image/{iid}/thumbnail" if kind == "image" else f"{self.base}/scene/{iid}/screenshot"
+
+    def candidates(self, tag_id, ranked=None, fallback=True):
+        """Pictures for give_picture: the most typical ones first, then (if
+        fallback) the usual ones."""
+        for score, key in (ranked if ranked is not None else self.ranked(tag_id))[:TYPICAL_TRY]:
+            what = "photo" if key.startswith("image:") else "scene"
+            yield self.link(key), f"the most typical {what} ({key.split(':')[0]} {key.split(':')[1]}, score {score:.2f}, {self.tag_count.get(key, 1)} tags)"
+        if fallback:
+            yield from candidates(self.stash, tag_id)
+
+
+def run_typical_pictures(stash, plugin_dir, mode):
+    """Tasks (AI add-on): give tags their most typical picture.
+    mode "preview": only write what each tag would get to the log;
+    "missing": tags without a picture; "all": every tag with enough
+    fingerprinted items, replacing its picture (tags without enough keep
+    theirs)."""
+    log("info", "Working out each tag's typical look from the picture fingerprints...")
+    tags = all_tags_for_pictures(stash)
+    typical = TypicalPictures(stash, plugin_dir, all_item_tags(stash))
+    if not typical.vectors:
+        log("warning", 'No picture fingerprints yet: run "Look-alike tags: scan scenes and images" first.')
+        return
+    ranked = {}
+    for n, t in enumerate(tags):
+        r = typical.ranked(t["id"])
+        if r:
+            ranked[t["id"]] = r
+        progress(0.5 * (n + 1) / max(len(tags), 1))
+    if mode == "missing":
+        todo = [t for t in tags if not has_picture(t)]
+    else:
+        todo = [t for t in tags if t["id"] in ranked]
+    todo.sort(key=uses)  # rarest first: they have the fewest pictures to pick from
+    few = sum(1 for t in tags if t["id"] not in ranked)
+    log("info", f"{len(ranked)} of {len(tags)} tags have a typical look ({few} are on fewer than {TYPICAL_MIN} "
+        "fingerprinted items; run the look-alike scan to include newer items).")
+
+    if mode == "preview":
+        for t in todo[:400]:
+            r = ranked.get(t["id"])
+            if r:
+                score, key = r[0]
+                log("info", f'"{t["name"]}": {key.replace(":", " ")} (score {score:.2f}, {typical.tag_count.get(key, 1)} tags) - {typical.link(key)}')
+        log("info", f"Preview done: {len(todo)} tag(s) listed. Nothing was saved. (The tasks also make sure each tag's "
+            "picture is its own, so a tag can end up with its next most typical picture.)")
+        return
+
+    given, kept, nothing, stuck = 0, 0, [], []
+    with locked_picture_hashes(base_dir(plugin_dir)) as cache:
+        hashes = picture_hashes(stash, cache, tags)
+        # every tag's current picture stays its own until that tag moves to
+        # another one, so a picture never ends up on two tags
+        taken = taken_map(hashes)
+        looks = TagLooks.maybe(stash, plugin_dir, cache, tags)
+        for n, t in enumerate(todo):
+            progress(0.5 + 0.5 * (n + 1) / max(len(todo), 1))
+            r = ranked.get(t["id"])
+            try:
+                old = hashes.get(t["id"])
+                if mode == "missing":
+                    # (no typical look: the usual pick)
+                    result = give_picture(stash, t, taken, cache, cands=typical.candidates(t["id"], r or []), looks=looks)
+                else:
+                    result = give_picture(stash, t, taken, cache,
+                                          cands=typical.candidates(t["id"], r, fallback=False), keep=old, looks=looks)
+                    own = old and taken.get(old, t["id"]) == t["id"] and not (
+                        looks and t["id"] in looks.fp and looks.clash(looks.fp[t["id"]], t["id"]))
+                    if not result and own:
+                        taken[old] = t["id"]  # nothing typical of its own: keep its picture
+                        result = (None, False)
+                    elif not result:
+                        # its picture is (or looks like) another tag's: the usual pick
+                        result = give_picture(stash, t, taken, cache, looks=looks)
+            except Exception as e:
+                log("warning", f'Tag "{t["name"]}": could not set a picture: {e}')
+                result = None
+            if result and result[0] is None:
+                kept += 1
+            elif result:
+                given += 1
+                old = hashes.get(t["id"])
+                if old and taken.get(old) == t["id"] and cache.get(t["id"], {}).get("hash") != old:
+                    del taken[old]  # its old picture is free for the tags after it
+                log("debug", f'"{t["name"]}": picture from {result[0]}')
+            elif hashes.get(t["id"]):
+                stuck.append(t["name"])
+            else:
+                nothing.append(t["name"])
+    log("info", f"Done: gave {given} tag(s) their most typical picture" + (f"; {kept} already had it (or nothing better of their own)." if kept else "."))
+    if stuck:
+        log("info", f"{len(stuck)} tag(s) have no picture left that isn't another tag's, so they still share "
+            f"their old one: {short_list(stuck)}")
+    if nothing:
+        log("info", f"{len(nothing)} tag(s) were left without a picture: none of theirs is unused (a picture is "
+            f"never used twice): {short_list(nothing)}")
+
+
+def run_typical_picture(stash, plugin_dir, tag_id):
+    """Asked by the page (runPluginOperation) for "Most typical picture" on
+    the Tags list: give one tag its most typical picture that's its own.
+    Returns {"link", "changed", "reason"}."""
+    tags = all_tags_for_pictures(stash)
+    tag = next((t for t in tags if str(t["id"]) == str(tag_id)), None)
+    if not tag:
+        raise RuntimeError(f"tag {tag_id} not found")
+    typical = TypicalPictures(stash, plugin_dir)
+    ranked = typical.ranked(tag["id"])
+    if not ranked:
+        return {"link": None, "changed": False, "reason": "few"}
+    with locked_picture_hashes(base_dir(plugin_dir)) as cache:
+        hashes = picture_hashes(stash, cache, tags)
+        taken = {h: tid for h, tid in taken_map(hashes).items() if tid != tag["id"]}
+        looks = TagLooks.maybe(stash, plugin_dir, cache, tags)
+        result = give_picture(stash, tag, taken, cache,
+                              cands=typical.candidates(tag["id"], ranked, fallback=False), keep=hashes.get(tag["id"]),
+                              looks=looks)
+        if not result:
+            return {"link": None, "changed": False, "reason": "taken"}
+        if result[0] is None:
+            return {"link": tag["image_path"], "changed": False, "reason": "same"}
+        log("info", f'"{tag["name"]}": picture from {result[0]}')
+        return {"link": cache[tag["id"]]["link"], "changed": True}
 
 
 RECENT_PICTURES = 20  # earlier pictures of a tag skipped by "Pick a new picture"
@@ -1240,11 +2051,12 @@ def run_new_picture(stash, plugin_dir, tag_id):
         recent = list((cache.get(tag["id"]) or {}).get("recent", []))
         taken = {h: tid for h, tid in taken_map(hashes).items() if tid != tag["id"]}
         now = {current} if current else set()
-        result = give_picture(stash, tag, taken, cache, allow_shared=False, avoid=set(recent) | now)
+        looks = TagLooks.maybe(stash, plugin_dir, cache, tags)
+        result = give_picture(stash, tag, taken, cache, avoid=set(recent) | now, looks=looks)
         while not result and recent:
             # been through them all: allow the one it had longest ago again
             recent.pop()
-            result = give_picture(stash, tag, taken, cache, allow_shared=False, avoid=set(recent) | now)
+            result = give_picture(stash, tag, taken, cache, avoid=set(recent) | now, looks=looks)
         if not result:
             return None
         if current:
@@ -2034,8 +2846,19 @@ def ai_settings(s):
         "vocab_size": num("aiTagCount", 250, 10),
         "max_tags": num("aiMaxTags", 6, 1),
         "include_organized": bool(s.get("aiIncludeOrganized")),
+        # edit page "Tags from look-alikes": shown from this share (you pick
+        # what to add, so it can be looser than what the tasks add)
+        "look_suggest": num_pct(s.get("aiLookSuggest"), 20),
+        # items with more tags than this are already well tagged: no AI model
+        # step for them (body tags still run). 0 = never skip.
+        "skip_tagged": max(int(s.get("aiSkipTagged")), 0) if str(s.get("aiSkipTagged") or "").strip().lstrip("-").isdigit() else 5,
         "auto": bool(s.get("aiAuto")),
         "new_all": bool(s.get("aiNewAll")),
+        # new photos: studio from the watermark the AI reads (like scenes)
+        "photo_studios": bool(s.get("aiNewPhotoStudios")),
+        # which items the AI model tags / titles: scenes, images or both
+        "tag_kinds": item_kinds(s.get("aiTagKinds")),
+        "title_kinds": item_kinds(s.get("aiTitleKinds")),
         "autotag_first": not s.get("aiNoAutoTag"),
         "face_url": (s.get("faceHelperUrl") or "http://host.docker.internal:11535").rstrip("/"),
         "face_auto": bool(s.get("faceAutoAssign")),
@@ -2045,6 +2868,8 @@ def ai_settings(s):
         "face_auto_min": num_pct(s.get("faceAutoMin"), 50),
         # new items: quick steps right away, AI model steps once at night
         "nightly": bool(s.get("aiNightly")),
+        # the body tags task (items not checked yet) as part of the night run
+        "night_body": bool(s.get("aiNightBody")),
         "night_time": _clock(s.get("aiNightTime"), "03:00"),
         "time_zone": (s.get("aiTimeZone") or os.environ.get("TZ") or "UTC").strip(),
     }
@@ -2071,6 +2896,13 @@ def ai_vocabulary(stash, cfg, plugin_dir):
     return {t["name"].lower(): t["id"] for t in chosen}, [t["name"] for t in chosen]
 
 
+# (Tried 2026-11-11 with gemma3:4b: checking the AI's picks against the tags'
+# descriptions in a second model call didn't make them more accurate - it
+# kept nearly everything, or when made strict dropped right and wrong picks
+# alike - and matching new-tag ideas to descriptions found little and could
+# mislead. So the descriptions aren't used by the AI.)
+
+
 def ollama_tags(cfg, pictures, names):
     """Ask the model which of `names` apply to the pictures (JPEG bytes).
     The rules and the tag list go first and are the same every time, so
@@ -2079,7 +2911,7 @@ def ollama_tags(cfg, pictures, names):
     ai = cfg["ai"]
     system = AI_SYSTEM + "\n\nAllowed tags: " + "; ".join(names)
     prompt = (
-        f"Which of the allowed tags clearly apply to {'these frames from one video' if len(pictures) > 1 else 'this picture'}? "
+        f"Which of the allowed tags clearly apply to {what_pictures(pictures)}? "
         f"Choose at most {ai['max_tags']}, best first. If none clearly apply, return an empty list."
     )
     body = {
@@ -2119,9 +2951,59 @@ def ai_pictures(stash, kind, item):
         data, ctype = stash.fetch(item["paths"]["thumbnail"])
         return [data] if ctype.startswith("image/") else []
     f = (item.get("files") or [None])[0]
-    if not f or not (f.get("duration") or 0) > 2:
+    duration = (f or {}).get("duration") or 0
+    if not f or duration <= 0.2:
         return []
-    return [grab_frame(stash, f["path"], f["duration"] * p)[0] for p in AI_FRAME_POINTS]
+    # one picture of 4 frames: the model reads one picture instead of three,
+    # about twice as fast (on the user's library: 11.3s -> 5.7s a scene)
+    if duration > 4:
+        with contextlib.suppress(Exception):
+            return [grab_grid(stash, f["path"], duration)]
+    # short clips (phone Live Photos are 1-3 s) and videos the grid can't be
+    # made from: whichever frames can be had. Phone clips are often a little
+    # shorter than they say, so a frame near the end can fail - that mustn't
+    # lose the others.
+    out = []
+    for p in (AI_FRAME_POINTS if duration > 4 else (0.5,)) + (0.0,):
+        if out and p == 0.0:
+            break
+        with contextlib.suppress(Exception):
+            out.append(grab_frame(stash, f["path"], duration * p)[0])
+    return out
+
+
+GRID_POINTS = (0.2, 0.4, 0.6, 0.8)  # frames in the 2x2 grid shown to the model
+GRID_TILE = 448  # each frame fits a square this big (the grid: 896, what gemma3 reads)
+
+
+class GridPicture(bytes):
+    """A JPEG that's several frames of one video in a grid (so prompts can
+    say so)."""
+
+
+def grab_grid(stash, video, duration, points=GRID_POINTS, tile=GRID_TILE):
+    """Frames at `points` (fractions of `duration`) side by side in a 2x2
+    grid, each fitted into a tile x tile square: one JPEG, one ffmpeg run."""
+    cmd = [ffmpeg_path(stash), "-loglevel", "error"]
+    for p in points:
+        cmd += ["-ss", f"{duration * p:.2f}", "-i", video]
+    fit = (f"scale={tile}:{tile}:force_original_aspect_ratio=decrease,"
+           f"pad={tile}:{tile}:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuvj420p")
+    graph = "".join(f"[{i}:v]{fit}[t{i}];" for i in range(len(points)))
+    graph += "".join(f"[t{i}]" for i in range(len(points))) + f"xstack=inputs={len(points)}:layout=0_0|w0_0|0_h0|w0_h0[out]"
+    cmd += ["-filter_complex", graph, "-map", "[out]", "-frames:v", "1", "-q:v", "3",
+            "-f", "image2pipe", "-vcodec", "mjpeg", "-"]
+    proc = subprocess.run(cmd, capture_output=True, timeout=120)
+    if proc.returncode != 0 or not proc.stdout:
+        raise RuntimeError(proc.stderr.decode(errors="replace").strip() or "no grid")
+    return GridPicture(proc.stdout)
+
+
+def what_pictures(pictures):
+    """How to describe the pictures to the model."""
+    if len(pictures) == 1 and isinstance(pictures[0], GridPicture):
+        return "this picture, which shows 4 frames from one video in a 2x2 grid"
+    return "these frames from one video" if len(pictures) > 1 else "this picture"
 
 
 AI_ITEM_FIELDS = {
@@ -2224,6 +3106,21 @@ def ai_targets(stash, cfg, only_untagged, done):
     return out
 
 
+def item_kinds(value):
+    """A "scenes" / "images" / "both" setting as ["scene", "image"] (both
+    when empty or not understood)."""
+    v = str(value or "").strip().lower()
+    if v.startswith("scene") or v in ("videos", "video"):
+        return ["scene"]
+    if v.startswith("image") or v.startswith("photo") or v in ("pictures", "picture"):
+        return ["image"]
+    return ["scene", "image"]
+
+
+def kinds_note(kinds, setting):
+    return "" if len(kinds) == 2 else f" (only {kinds[0]}s - setting \"{setting}\")"
+
+
 def run_ai(stash, plugin_dir, only_untagged=False, preview=False, targets=None):
     """Task: AI-tag scenes and images. `preview`: 10 random items, nothing
     saved. `targets`: specific (kind, item) pairs (the automatic job)."""
@@ -2237,11 +3134,13 @@ def run_ai(stash, plugin_dir, only_untagged=False, preview=False, targets=None):
         with locked_ai_done(plugin_dir) as done:
             done = dict(done)
         targets = ai_targets(stash, cfg, only_untagged, {} if preview else done)
+        targets = [t for t in targets if t[0] in cfg["ai"]["tag_kinds"]]
         if preview:
             import random
             targets = random.sample(targets, min(10, len(targets)))
     what = "Preview" if preview else "AI tagging"
-    log("info", f"{what}: {len(targets)} item(s), choosing from your {len(names)} most used tags with {cfg['ai']['model']}")
+    log("info", f"{what}: {len(targets)} item(s){kinds_note(cfg['ai']['tag_kinds'], 'AI tagging: which items')}, "
+        f"choosing from your {len(names)} most used tags with {cfg['ai']['model']}")
     _, excluded = tag_lookup(stash, cfg, plugin_dir)
     looks = load_look_index(stash, cfg, plugin_dir, excluded)
     body = BodyIndex(stash, plugin_dir, body_excluded(stash, cfg)) if body_ready(cfg) else None
@@ -2253,7 +3152,10 @@ def run_ai(stash, plugin_dir, only_untagged=False, preview=False, targets=None):
             log("info", "Not added any more (you removed them from most items they were added to): "
                 + ", ".join(f"{looks.names.get(t, t)} (kept {k} of {n})" for t, (n, k) in looks.rejected.items()))
     index = autotag_index(stash, plugin_dir) if cfg["ai"]["autotag_first"] else None
-    added = tagged = from_names = 0
+    added = tagged = from_names = well_tagged = 0
+    limit = cfg["ai"]["skip_tagged"]
+    if limit:
+        log("info", f"Skipping the AI model for items with more than {limit} tags already (setting \"AI: skip items with more tags than\")")
     started = time.time()
     for n, (kind, item) in enumerate(targets):
         label = f'{kind} {item["id"]}' + (f' "{item["title"]}"' if item.get("title") else "")
@@ -2267,9 +3169,14 @@ def run_ai(stash, plugin_dir, only_untagged=False, preview=False, targets=None):
             if pre:
                 from_names += 1
                 log("info", f"{label}: from the file name {'would add' if preview else '+'} {', '.join(pre)}")
+        have = ({t["id"] for t in item.get("tags") or []} | set(pre_tags)) - gallery_only_tag_ids(stash, plugin_dir)
         try:
-            picked = ai_tag_item(stash, cfg, vocab, names, kind, item, apply=not preview, have_too=pre_tags,
-                                 looks=looks, plugin_dir=plugin_dir)
+            if limit and len(have) > limit:
+                well_tagged += 1
+                picked = []  # already well tagged: no AI model step (body tags below still run)
+            else:
+                picked = ai_tag_item(stash, cfg, vocab, names, kind, item, apply=not preview, have_too=pre_tags,
+                                     looks=looks, plugin_dir=plugin_dir)
         except Exception as e:
             log("warning", f"{label}: {e}")
             if "urlopen" in repr(e) or "Connection" in repr(e):
@@ -2278,7 +3185,7 @@ def run_ai(stash, plugin_dir, only_untagged=False, preview=False, targets=None):
         if body:
             try:
                 extra = body_item(stash, cfg, body, kind, item, apply=not preview, plugin_dir=plugin_dir,
-                                  rejected=looks.rejected if looks else ())
+                                  rejected=looks.rejected if looks else (), skip_tagged=True)
                 extra = [n for _, n, _ in extra if n not in (picked or [])]
                 if extra:
                     picked = (picked or []) + extra
@@ -2303,6 +3210,8 @@ def run_ai(stash, plugin_dir, only_untagged=False, preview=False, targets=None):
     took = time.time() - started
     per = f" ({took / max(len(targets), 1):.1f}s each)" if targets else ""
     names_note = f" Auto tag (file names) {'would add' if preview else 'added'} to {from_names} item(s)." if index is not None else ""
+    if well_tagged:
+        names_note += f" {well_tagged} item(s) already had more than {limit} tags, so the AI model skipped them."
     if preview:
         log("info", f"Preview done{per}: {tagged} of {len(targets)} items would get new AI tags.{names_note} Nothing was saved.")
     else:
@@ -2310,22 +3219,91 @@ def run_ai(stash, plugin_dir, only_untagged=False, preview=False, targets=None):
 
 
 def run_ai_queued(stash, plugin_dir, scene_ids, image_ids):
-    """Background job: AI-tag scenes/images that were just added."""
+    """Background job: AI-tag scenes/images that were just added (the kinds
+    "AI tagging: which items" says)."""
+    kinds = settings(stash, plugin_dir)["ai"]["tag_kinds"]
     targets = []
     for kind, ids in (("scene", scene_ids), ("image", image_ids)):
-        if not ids:
+        if not ids or kind not in kinds:
             continue
         query, field = ("findScenes", "scenes") if kind == "scene" else ("findImages", "images")
-        items = stash.call(f"query($ids: [ID!]) {{ {query}(ids: $ids, filter: {{per_page: -1}}) {{ {field} {{ {AI_ITEM_FIELDS[kind]} }} }} }}",
-                           {"ids": ids})[query][field]
+        items = find_by_ids(stash, query, field, ids, f"{AI_ITEM_FIELDS[kind]}")
         targets += [(kind, i) for i in items]
     if targets:
         run_ai(stash, plugin_dir, targets=targets)
 
 
+NEW_IDEAS_MAX = 6
+# words that say nothing on their own, and ones only padding the end of an
+# idea ("Selfie Style" -> "Selfie")
+NEW_IDEA_EMPTY = {"setting", "style", "scene", "shot", "picture", "photo", "image", "video", "frame", "background",
+                  "foreground", "artwork", "art", "detail", "details", "detailed", "figure", "figures", "person",
+                  "people", "pose", "posing", "relaxed", "view", "angle", "content", "clothing", "outfit"}
+NEW_IDEA_TAIL = {"style", "setting", "shot", "scene", "view", "pose", "look"}
+
+
+def ollama_new_tags(cfg, pictures):
+    """Short tags for what's clearly visible, in the model's own words (no
+    list to choose from). Used on the edit page only, for tags you may not
+    have yet; the caller drops the ones you already have."""
+    ai = cfg["ai"]
+    prompt = (
+        f"Describe {what_pictures(pictures)} with up to {NEW_IDEAS_MAX + 4} short tags of 1 to 3 words each: "
+        "things that are clearly visible, such as the setting, clothing, objects, actions, positions and the style "
+        "of the picture. Use plain common words. No names of people or places, no text or watermarks you can read, "
+        "no numbers, and nothing you are unsure about. If nothing is clear, return an empty list."
+    )
+    body = {
+        "model": ai["model"], "stream": False, "keep_alive": "15m", "options": {"temperature": 0},
+        "messages": [{"role": "user", "content": prompt, "images": [base64.b64encode(p).decode() for p in pictures]}],
+        "format": {"type": "object", "properties": {"tags": {"type": "array", "items": {"type": "string"}}}, "required": ["tags"]},
+    }
+    req = urllib.request.Request(ai["url"] + "/api/chat", data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=300) as resp:
+        reply = json.loads(resp.read())
+    try:
+        tags = json.loads((reply.get("message") or {}).get("content") or "{}").get("tags") or []
+    except ValueError:
+        tags = []
+    return [t for t in tags if isinstance(t, str)]
+
+
+def new_tag_ideas(stash, cfg, kind, item):
+    """The model's own tags for the item that aren't one of your tags (by
+    name or alias, ignoring case, hyphens and a plural s): [names], Title
+    Cased."""
+    pictures = ai_pictures(stash, kind, item)
+    if not pictures:
+        return []
+    known = set()
+    for t in stash.call("{ findTags(filter: {per_page: -1}) { tags { name aliases } } }")["findTags"]["tags"]:
+        for n in [t["name"], *(t.get("aliases") or [])]:
+            n = re.sub(r"[-_]+", " ", n.strip().lower())
+            known |= {n, n.rstrip("s"), n + "s"}
+    out = []
+    # the model sometimes packs several into one ("Microphone, Studio")
+    pieces = [x for raw in ollama_new_tags(cfg, pictures) for x in re.split(r"\s*(?:[,;/|]|\band\b|&)\s*", raw)]
+    for piece in pieces:
+        words = re.sub(r"\s+", " ", piece).strip(" .,-#\"'").split(" ")
+        while len(words) > 1 and words[-1].lower() in NEW_IDEA_TAIL:
+            words.pop()
+        name = " ".join(words).strip()
+        low = re.sub(r"[-_]+", " ", name.lower())
+        if (not name or len(name) > 30 or len(words) > 3 or re.search(r"\d", name)
+                or all(w.lower() in NEW_IDEA_EMPTY for w in words)
+                or low in known or low.rstrip("s") in known or low in [o.lower() for o in out]):
+            continue
+        out.append(title_case(name, cfg["spellings"]))
+        if len(out) >= NEW_IDEAS_MAX:
+            break
+    return out
+
+
 def run_ai_suggest(stash, plugin_dir, kind, item_id):
     """Asked by the page (runPluginOperation): AI suggestions for one scene
-    or image, nothing saved. Returns [{id, name}]."""
+    or image, nothing saved. Returns [{id, name}]; tags you don't have yet
+    come last as {id: None, name, source: "new"} (edit page only - the
+    tasks never make new tags)."""
     cfg = settings(stash)
     ai_check(cfg)
     vocab, names = ai_vocabulary(stash, cfg, plugin_dir)
@@ -2345,6 +3323,10 @@ def run_ai_suggest(stash, plugin_dir, kind, item_id):
             for t, n, why in body_item(stash, cfg, body, kind, item, apply=False):
                 if t not in [o["id"] for o in out]:
                     out.append({"id": t, "name": n, "source": "body", "why": why})
+    try:
+        out += [{"id": None, "name": n, "source": "new"} for n in new_tag_ideas(stash, cfg, kind, item)]
+    except Exception as e:
+        log("debug", f"new tag ideas skipped: {e}")
     return out
 
 
@@ -2533,6 +3515,22 @@ def all_item_tags(stash):
     return out
 
 
+def organized_keys(stash):
+    """{"scene:ID" / "image:ID"} for every organized scene and image."""
+    out = set()
+    for kind, query, field, farg, ftype in (("scene", "findScenes", "scenes", "scene_filter", "SceneFilterType"),
+                                            ("image", "findImages", "images", "image_filter", "ImageFilterType")):
+        page = 1
+        while True:
+            items = stash.call(f"query($p: {ftype}, $f: FindFilterType) {{ {query}({farg}: $p, filter: $f) {{ {field} {{ id }} }} }}",
+                               {"p": {"organized": True}, "f": {"page": page, "per_page": 5000}})[query][field]
+            out |= {f"{kind}:{i['id']}" for i in items}
+            if len(items) < 5000:
+                break
+            page += 1
+    return out
+
+
 def rejected_tags(item_tags, machine):
     """Tags the add-on added often that you've mostly removed again:
     {tag id: (added, kept)}."""
@@ -2558,13 +3556,16 @@ class LookIndex:
         except (OSError, ValueError):
             machine = {}
         self.rejected = rejected_tags(tags, machine)
+        # an organized item has been looked over: the AI's tags still on it
+        # count as yours
+        reviewed = organized_keys(stash)
         self.names = {t["id"]: t["name"] for t in stash.call("{ findTags(filter: {per_page: -1}) { tags { id name } } }")["findTags"]["tags"]
                       if t["id"] not in excluded}
         self.rows = []  # (key, fingerprint, tags you gave it)
         for key, ent in self.cache.data.items():
             t = tags.get(key)
             if t and ent.get("e"):
-                t = t - set(excluded) - set(machine.get(key, []))
+                t = t - set(excluded) - (set() if key in reviewed else set(machine.get(key, [])))
                 if t:
                     self.rows.append((key, _ints(ent["e"]), frozenset(t)))
 
@@ -2729,7 +3730,11 @@ def run_look_suggest(stash, plugin_dir, kind, item_id):
     scores = looks.for_item(stash, kind, item) or {}
     looks.cache.save()
     names = looks.names
-    best = sorted(((s, t) for t, s in scores.items() if s >= LOOK_SUGGEST and t in names), reverse=True)
+    cut = cfg["ai"].get("look_suggest", LOOK_SUGGEST)
+    # body tags (Tits, Ass, sizes...) come from the body-part detector, which
+    # sees what's shown: look-alike guesses for them are left out
+    best = sorted(((s, t) for t, s in scores.items()
+                   if s >= cut and t in names and names[t].strip().lower() not in BODY_TAG_NAMES), reverse=True)
     return [{"id": t, "name": names[t], "score": round(s, 2), "sure": s >= LOOK_SURE} for s, t in best[:12]]
 
 
@@ -2762,6 +3767,14 @@ BODY_SIZES = {
 BODY_NATURAL = ("Natural Tits", ("Fake Tits", "Fake Boobs"))
 BODY_ABS = ("Defined Abs", "Muscular", "Muscular Man")
 BODY_FRAME_POINTS = (0.2, 0.4, 0.6, 0.8)
+# every tag name that counts as a body tag (an item with any of them is
+# skipped by the body tag tasks, except "check everything again")
+BODY_TAG_NAMES = {n.lower() for n in [*BODY_SHOWN, *(n for g in BODY_SIZES.values() for n in g),
+                                      BODY_NATURAL[0], *BODY_NATURAL[1], *BODY_ABS]}
+
+
+def has_body_tags(item):
+    return any((t.get("name") or "").strip().lower() in BODY_TAG_NAMES for t in item.get("tags") or [])
 TRAIT_MIN, TRAIT_SHARE = 2, 0.7  # a performer's size: on 2+ of their items, and 70% of them
 FEMALE = ("FEMALE", "TRANSGENDER_FEMALE")
 MALE = ("MALE", "TRANSGENDER_MALE")
@@ -2786,7 +3799,9 @@ def body_helper(cfg, pictures):
             if "isn't installed" in detail or e.code == 404:
                 raise RuntimeError("the face helper has no body-part model: run face-helper/setup.sh --body")
             raise ValueError(f"the helper couldn't read it ({e.code} {detail})")
-        except urllib.error.URLError as e:
+        except (urllib.error.URLError, ConnectionError, TimeoutError, http.client.HTTPException) as e:
+            # (a dropped or reset connection isn't a URLError: before, those
+            # skipped the item quietly, so a whole run could find nothing)
             reason = getattr(e, "reason", e)
             if attempt < 3:
                 time.sleep(2 + attempt * 2)
@@ -2801,14 +3816,20 @@ def body_pictures(stash, kind, item):
         data, ctype = stash.fetch(item["paths"]["image"])
         if len(data) > FACE_MAX_IMAGE_BYTES:
             data, ctype = stash.fetch(item["paths"]["thumbnail"])
+        if ctype == "text/html":
+            raise ValueError("Stash sent a web page instead of the picture (signed out?)")
         return [data] if ctype.startswith("image/") else []
     f = (item.get("files") or [None])[0]
     if not f or not (f.get("duration") or 0) > 1:
         return []
-    out = []
+    out, why = [], None
     for at in BODY_FRAME_POINTS:
-        with contextlib.suppress(Exception):
+        try:
             out.append(grab_frame(stash, f["path"], f["duration"] * at, width=960)[0])
+        except Exception as e:
+            why = e
+    if not out and why:
+        raise ValueError(f"no frames could be taken ({why})")
     return out
 
 
@@ -2966,8 +3987,12 @@ def body_ready(cfg):
         return False
 
 
-def body_item(stash, cfg, body, kind, item, apply, plugin_dir=None, rejected=()):
-    """Body tags for one item: [(tag id, name, why)] (added when apply)."""
+def body_item(stash, cfg, body, kind, item, apply, plugin_dir=None, rejected=(), skip_tagged=False):
+    """Body tags for one item: [(tag id, name, why)] (added when apply).
+    skip_tagged: nothing (and no frames looked at) when it already has a
+    body tag."""
+    if skip_tagged and has_body_tags(item):
+        return []
     shown = parts_shown(cfg, body_pictures(stash, kind, item))
     picks = [(t, why) for t, why in body.picks(item, shown) if t not in rejected]
     if apply and picks:
@@ -2979,9 +4004,12 @@ def body_item(stash, cfg, body, kind, item, apply, plugin_dir=None, rejected=())
     return [(t, body.tag_name.get(t, t), why) for t, why in picks]
 
 
-def run_body(stash, plugin_dir, preview=False, limit=None):
+def run_body(stash, plugin_dir, preview=False, limit=None, redo=False):
     """Task: body tags for every scene and image not done yet (or a
-    preview on `limit` random items)."""
+    preview on `limit` random items). redo: every scene and image again,
+    organized ones too, whether done before or not (e.g. after making a
+    new body tag); it keeps its own progress, so cancelling and running it
+    again carries on, and a finished round starts over next time."""
     cfg = settings(stash, plugin_dir)
     if not body_ready(cfg):
         raise RuntimeError("the face helper has no body-part model: run face-helper/setup.sh --body")
@@ -2996,36 +4024,45 @@ def run_body(stash, plugin_dir, preview=False, limit=None):
         rejected = {}
     done_path = os.path.join(plugin_dir, "body_done.json")
     with locked_json(done_path) as done:
-        done = {k: set(v) for k, v in done.items()}
+        done = {k: set(v) for k, v in done.items() if isinstance(v, list)}
+    skip = (lambda kind: done.get("redo_" + kind + "s", set())) if redo else (lambda kind: done.get(kind + "s", set()))
     targets = []
     for kind in ("scene", "image"):
         query, field = ("findScenes", "scenes") if kind == "scene" else ("findImages", "images")
-        f = {} if cfg["ai"]["include_organized"] else {"organized": False}
+        f = {} if (redo or cfg["ai"]["include_organized"]) else {"organized": False}
         page = 1
         while True:
             items = stash.call(f"query($p: {kind.capitalize()}FilterType, $f: FindFilterType) {{ {query}({kind}_filter: $p, filter: $f) "
                                f"{{ {field} {{ {BODY_ITEM_FIELDS[kind]} }} }} }}",
                                {"p": f, "f": {"page": page, "per_page": 500, "sort": "created_at", "direction": "DESC"}})[query][field]
-            targets += [(kind, i) for i in items if preview or i["id"] not in done.get(kind + "s", set())]
+            targets += [(kind, i) for i in items if preview or i["id"] not in skip(kind)]
             if len(items) < 500:
                 break
             page += 1
     if limit:
         import random
         targets = random.sample(targets, min(limit, len(targets)))
+    if redo and not preview:
+        log("info", "Checking every scene and image again (organized ones too, and ones done before). "
+            "Items without performers get what's shown but no sizes.")
     log("info", f"{'Preview: ' if preview else ''}body tags for {len(targets)} item(s); sizes known for "
         f"{len(body.traits)} performer(s) from your tags" + (" (nothing is saved)" if preview else
                                                                ". Scenes take a few seconds, images under one; cancel and run again to carry on."))
-    tagged = added = 0
+    tagged = added = had = failed = 0
     for n, (kind, item) in enumerate(targets):
         progress(n / max(len(targets), 1))
         label = f'{kind} {item["id"]}' + (f' "{item["title"]}"' if item.get("title") else "")
         try:
-            picks = body_item(stash, cfg, body, kind, item, apply=not preview, plugin_dir=plugin_dir, rejected=rejected)
+            if not redo and has_body_tags(item):
+                had += 1
+                picks = []
+            else:
+                picks = body_item(stash, cfg, body, kind, item, apply=not preview, plugin_dir=plugin_dir, rejected=rejected)
         except RuntimeError:
             raise
         except Exception as e:
-            log("debug", f"{label}: {e}")
+            failed += 1
+            log("warning" if failed <= 3 else "debug", f"{label}: couldn't check it ({e})")
             continue
         if picks:
             tagged += 1
@@ -3033,10 +4070,20 @@ def run_body(stash, plugin_dir, preview=False, limit=None):
             log("info", f"{label}: {'would add' if preview else '+'} " + ", ".join(f"{name} ({why})" for _, name, why in picks))
         if not preview:
             with locked_json(done_path) as d:
-                d.setdefault(kind + "s", []).append(item["id"])
+                if item["id"] not in d.setdefault(kind + "s", []):
+                    d[kind + "s"].append(item["id"])
+                if redo:
+                    d.setdefault("redo_" + kind + "s", []).append(item["id"])
+    if redo and not preview:
+        # the round is finished: next time starts over
+        with locked_json(done_path) as d:
+            d.pop("redo_scenes", None)
+            d.pop("redo_images", None)
     progress(1)
     log("info", f"{'Preview done' if preview else 'Done'}: {tagged} of {len(targets)} item(s) "
-        f"{'would get' if preview else 'got'} {added} body tag(s).")
+        f"{'would get' if preview else 'got'} {added} body tag(s)."
+        + (f" {had} already had body tags and were skipped." if had else "")
+        + (f" {failed} couldn't be checked (see the warnings above)." if failed else ""))
 
 
 # --- new items: quick steps now, AI model steps at night ---------------------
@@ -3062,8 +4109,7 @@ def run_quick_new(stash, plugin_dir, cfg, new):
     for kind, ids in (("scene", new.get("scene") or []), ("image", new.get("image") or [])):
         if ids:
             query, field = ("findScenes", "scenes") if kind == "scene" else ("findImages", "images")
-            items = stash.call(f"query($ids: [ID!]) {{ {query}(ids: $ids, filter: {{per_page: -1}}) {{ {field} {{ {AI_ITEM_FIELDS[kind]} }} }} }}",
-                               {"ids": ids})[query][field]
+            items = find_by_ids(stash, query, field, ids, f"{AI_ITEM_FIELDS[kind]}")
             targets += [(kind, i) for i in items]
     if not targets:
         return
@@ -3130,25 +4176,42 @@ def run_night(stash, plugin_dir):
     """Task: the AI model steps for the new items saved for tonight."""
     cfg = settings(stash, plugin_dir)
     ai = cfg["ai"]
-    if ai["nightly"]:
+    if ai["nightly"] or ai["night_body"]:
         ensure_night_runner(stash, plugin_dir, cfg)  # e.g. after Stash restarted
     with locked_night(plugin_dir) as night:
         todo = {"scene": list(night.get("scenes", [])), "image": list(night.get("images", []))}
     n = len(todo["scene"]) + len(todo["image"])
     if not n:
         log("info", "No new items waiting for the AI.")
+        if ai["night_body"]:
+            run_night_body(stash, plugin_dir, cfg)
         return
     log("info", f"Tonight's AI run: {len(todo['scene'])} scene(s), {len(todo['image'])} image(s)")
     if ai["auto"] or ai["new_all"]:
         run_ai_queued(stash, plugin_dir, todo["scene"], todo["image"])
     if ai["new_all"] and todo["scene"]:
         run_accounts_items(stash, plugin_dir, todo["scene"])
+    if ai["photo_studios"] and todo["image"]:
+        run_accounts_items(stash, plugin_dir, todo["image"], kind="image")
     if ai["new_all"]:
         run_ai_titles(stash, plugin_dir, ["scene", "image"], ids=todo)
     with locked_night(plugin_dir) as night:  # items added while this ran stay for next time
         for kind in ("scene", "image"):
             night[kind + "s"] = [i for i in night.get(kind + "s", []) if i not in todo[kind]]
+    if ai["night_body"]:
+        run_night_body(stash, plugin_dir, cfg)
     log("info", "Tonight's AI run is done.")
+
+
+def run_night_body(stash, plugin_dir, cfg):
+    """Night run: the body tags task for everything not checked yet (items
+    with a body tag already are skipped). Needs the face helper's body
+    model; without it, this is skipped with a note."""
+    if not body_ready(cfg):
+        log("warning", "Body tags tonight skipped: the face helper isn't running or has no body-part model.")
+        return
+    log("info", "Body tags for everything not checked yet...")
+    run_body(stash, plugin_dir)
 
 
 def _night_files(plugin_dir):
@@ -3162,7 +4225,7 @@ def ensure_night_runner(stash, plugin_dir, cfg):
     tmp = files["json"] + ".tmp"
     with open(tmp, "w") as f:
         json.dump({"conn": stash.conn, "time": cfg["ai"]["night_time"], "tz": cfg["ai"]["time_zone"],
-                   "plugin_id": AI_ID, "task": NIGHT_TASK}, f)
+                   "plugin_id": AI_ID, "task": NIGHT_TASK, "body": cfg["ai"]["night_body"]}, f)
     os.replace(tmp, files["json"])
     with contextlib.suppress(OSError, ValueError):
         with open(files["pid"]) as f:
@@ -3225,7 +4288,7 @@ def night_runner_main(plugin_dir):
                     night = json.load(f)
             except (OSError, ValueError):
                 night = {}
-            if night.get("scenes") or night.get("images"):
+            if night.get("scenes") or night.get("images") or conf.get("body"):
                 stash = Stash(conf["conn"])
                 job = stash.call("mutation($p: ID!, $t: String!) { runPluginTask(plugin_id: $p, task_name: $t) }",
                                  {"p": conf["plugin_id"], "t": conf["task"]})
@@ -3320,7 +4383,9 @@ def ollama_titles(cfg, pictures, context):
     ai = cfg["ai"]
     prompt = (
         "Suggest 4 different short titles (3 to 9 words each) for "
-        + ("this video (the pictures are frames from it)" if len(pictures) > 1 else "this picture")
+        + ("this video (the pictures are frames from it)" if len(pictures) > 1
+           else "this video (the picture shows 4 frames from it in a 2x2 grid)" if isinstance(pictures[0], GridPicture)
+           else "this picture")
         + " in a private adult media library. Describe what actually happens or is shown, in a natural, "
         "catchy way, like a video title on a website. Use Title Case. No quotes, no emojis, no hashtags, "
         "no file names or numbers. Never make up names: only use a person's name if it's listed below as a "
@@ -3352,7 +4417,12 @@ def ollama_titles(cfg, pictures, context):
     clean = []
     for t in titles:
         if isinstance(t, str):
+            # the model sometimes runs on past the title, e.g.
+            # 'Stage Performance", 4 words, <start_of_image>': keep the title
+            t = re.split(r'["”]\s*,', t)[0]
             t = re.sub(r"\s+", " ", t.strip().strip('"\'“”').rstrip("."))
+            if re.search(r"[<>{}\[\]]|\b\d+ words?\b", t, re.I):
+                continue
             if 2 < len(t) <= 100:
                 clean.append(t)
     return clean[:5]
@@ -3386,8 +4456,14 @@ def ai_title_context(stash, cfg, plugin_dir, kind, item, excluded=None):
 def run_ai_titles(stash, plugin_dir, kinds, preview=False, limit=None, ids=None):
     """Task: give every scene / image without a title one - from the file
     name when that makes a good one, else the local AI model's best idea.
-    `preview`: only log what it would set (on `limit` random items)."""
+    `preview`: only log what it would set (on `limit` random items). New
+    items (`ids`) and the preview only get the kinds "AI titles: which
+    items" says; the tasks named for scenes / images do just those."""
     cfg = settings(stash, plugin_dir)
+    if ids is not None or preview:
+        kinds = [k for k in kinds if k in cfg["ai"]["title_kinds"]]
+        if not kinds:
+            return
     ai_check(cfg)
     _, excluded = tag_lookup(stash, cfg, plugin_dir)
     names = title_names(stash)
@@ -3472,7 +4548,7 @@ def run_title_ideas(stash, plugin_dir, kind, item_id, use_ai):
 
 
 # --- studios from social media handles ----------------------------------------
-# Finds the OnlyFans / Fansly / Instagram / TikTok account a scene comes from -
+# Finds the OnlyFans / Fansly / Patreon / Instagram / TikTok account a scene comes from -
 # in its file name, title, details or URLs (e.g. "onlyfans.com/name"), or in
 # the watermark / on-screen text the local AI model reads off a few frames -
 # and gives scenes without a studio a studio for it (made if needed, under a
@@ -3486,19 +4562,53 @@ PLATFORMS = {
     "fansly": ("Fansly", "https://fansly.com/{}", [r"fansly\.com/([A-Za-z0-9_.\-]{2,40})"]),
     "instagram": ("Instagram", "https://www.instagram.com/{}", [r"instagram\.com/([A-Za-z0-9_.]{2,30})"]),
     "tiktok": ("TikTok", "https://www.tiktok.com/@{}", [r"tiktok\.com/@([A-Za-z0-9_.]{2,30})"]),
+    # patreon.com/name, patreon.com/c/name, or "Patreon: name". (Comic
+    # watermarks often say just "patreon/name": only taken from a watermark,
+    # see PATREON_LOOSE - in a file path "…patreon/next folder" isn't one.)
+    "patreon": ("Patreon", "https://www.patreon.com/{}",
+                [r"patreon\.com/(?:c/)?@?([A-Za-z0-9_.\-]{2,40})", r"patreon\s*:\s*@?([A-Za-z0-9_.\-]{2,40})"]),
 }
-PLATFORM_ORDER = ("onlyfans", "fansly", "tiktok", "instagram")  # which one wins if there are several
+PLATFORM_ORDER = ("onlyfans", "fansly", "patreon", "tiktok", "instagram")  # which one wins if there are several
 HANDLE_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.\-]{1,39}$")
-HANDLE_STOP = {"onlyfans", "fansly", "instagram", "tiktok", "com", "www", "http", "https", "profile", "me", "my",
-               "username", "user", "handle", "link", "bio", "follow", "subscribe", "watermark"}
+HANDLE_STOP = {"onlyfans", "fansly", "instagram", "tiktok", "patreon", "com", "www", "http", "https", "profile", "me",
+               "my", "username", "user", "handle", "link", "bio", "follow", "subscribe", "watermark",
+               "c", "posts", "join", "home", "support", "membership", "login", "checkout"}
 HANDLE_FRAME_POINTS = (0.03, 0.2, 0.4, 0.6, 0.8, 0.97)
 HANDLE_SCENE_FIELDS = "id title details urls studio { id } performers { id } files { path duration }"
+HANDLE_IMAGE_FIELDS = ("id title details urls studio { id } performers { id } paths { image thumbnail } "
+                       "visual_files { __typename ... on ImageFile { path size } ... on VideoFile { path size } }")
+HANDLE_FIELDS = {"scene": HANDLE_SCENE_FIELDS, "image": HANDLE_IMAGE_FIELDS}
+
+
+def photo_picture(stash, image):
+    """The photo itself for the model to read (small watermark text needs
+    more than the thumbnail); an animation / video stored as an image, or a
+    huge file: its thumbnail."""
+    f = (image.get("visual_files") or [{}])[0]
+    if f.get("__typename") == "ImageFile" and (f.get("size") or 0) <= FACE_MAX_IMAGE_BYTES:
+        data, ctype = stash.fetch(image["paths"]["image"])
+    else:
+        data, ctype = stash.fetch(image["paths"]["thumbnail"])
+    if not ctype.startswith("image/") or ctype == "image/gif":
+        if ctype == "image/gif":
+            data, ctype = stash.fetch(image["paths"]["thumbnail"])
+        if not ctype.startswith("image/"):
+            raise ValueError(f"Stash sent {ctype or 'nothing'} instead of the picture")
+    return data
+
+
+# read in watermarks but not anyone's account: leak / repost sites
+HANDLE_NOT_ACCOUNT = re.compile(r"(?i)fappening|leak|thothub|nudostar|coomer|kemono|simpcity|reddit|imgur|"
+                                r"repost|onlyfanz|camwhores|erome")
 
 
 def clean_handle(h):
     h = (h or "").strip().lstrip("@").strip(" /.,:;!?\"'")
-    h = re.sub(r"^(?:https?://)?(?:www\.)?(?:onlyfans|fansly|instagram|tiktok)\.com/@?", "", h, flags=re.I)
+    h = re.sub(r"^(?:https?://)?(?:www\.)?(?:onlyfans|fansly|instagram|tiktok|patreon)\.com/(?:c/)?@?", "", h, flags=re.I)
     h = h.split("/")[0].split("?")[0].rstrip(".")
+    # an email or web address ("@gmail.com", "site.net") isn't an account
+    if re.search(r"(?i)\.(com|net|org|io|co|me|tv|xxx|uk|de|ru)$", h) or HANDLE_NOT_ACCOUNT.search(h):
+        return None
     return h if HANDLE_RE.match(h) and h.lower() not in HANDLE_STOP and not h.isdigit() else None
 
 
@@ -3516,15 +4626,24 @@ def handles_in_text(text):
 
 PLATFORM_WORDS = {
     "tiktok": r"tik\s*tok", "instagram": r"instagram|\big\b|insta\b", "onlyfans": r"only\s*fans|\bof\b",
-    "fansly": r"fansly",
+    "fansly": r"fansly", "patreon": r"patreon",
 }
+
+
+PATREON_LOOSE = re.compile(r"patreon\s*/\s*@?([A-Za-z0-9_.\-]{2,40})", re.I)
 
 
 def handles_in_ocr(text):
     """[(platform or None, handle)] in text the model transcribed off a frame:
-    profile links, or "@name" with the platform named next to it."""
+    profile links, "patreon/name", or "@name" with the platform named next
+    to it."""
     out = [(plat, h) for (plat, _), h in handles_in_text(text).items()]
     have = {h.lower() for _, h in out}
+    for m in PATREON_LOOSE.finditer(text or ""):
+        h = clean_handle(m.group(1))
+        if h and h.lower() not in have:
+            out.append(("patreon", h))
+            have.add(h.lower())
     lines = [l.strip() for l in (text or "").splitlines() if l.strip()]
     for i, line in enumerate(lines):
         for m in re.finditer(r"@([A-Za-z0-9_][A-Za-z0-9_.]{1,39})", line):
@@ -3600,8 +4719,10 @@ def accounts_context(stash, plugin_dir=None):
             k = re.sub(r"[^a-z0-9]", "", (n or "").lower())
             if len(k) >= 4:
                 by_key.setdefault(k, p)
-            # names worth looking for in a watermark: two words, or 6+ letters
-            if len(k) >= 6 or len([w for w in (n or "").split() if len(w) >= 2]) >= 2:
+            # names worth looking for in a watermark: two words or more. (A
+            # one-word name or alias - "Christian", "Summer", "Chanel" - turns
+            # up in any caption or magazine page.)
+            if len([w for w in (n or "").split() if len(w) >= 2]) >= 2:
                 perf_marks += [(pat, p) for pat in name_patterns(n)]
     pending_path = os.path.join(plugin_dir, "handle_pending.json") if plugin_dir else None
     pending = {}
@@ -3611,8 +4732,13 @@ def accounts_context(stash, plugin_dir=None):
                 pending = json.load(fh)
         except (OSError, ValueError):
             pending = {}
+    # tag and gallery names: a new studio for an account takes the spelling
+    # you already use for it (a gallery "Kasujinn" for watermarks "KUSUJINN")
+    words = [t["name"] for t in stash.call("{ findTags(filter: {per_page: -1}) { tags { name } } }")["findTags"]["tags"]]
+    words += [g["title"] for g in stash.call("{ findGalleries(filter: {per_page: -1}) { galleries { title } } }")["findGalleries"]["galleries"]
+              if g.get("title")]
     return {"studios": studios, "marks": marks, "perf_keys": by_key, "perfs": perfs, "perf_marks": perf_marks,
-            "pending": pending, "pending_path": pending_path}
+            "pending": pending, "pending_path": pending_path, "words": words}
 
 
 # Watermarks read by a small model come out slightly wrong now and then
@@ -3648,6 +4774,26 @@ def misread_allowance(a, b):
     return 0 if n < 5 else 1 if n < 7 else 2
 
 
+def alike(a, b):
+    """How alike two names read off pictures are, 0-1 (letters that look
+    alike counted as the same): KUSUJOINN / KUSUJINN 0.94."""
+    import difflib
+    x, y = ocr_key(a), ocr_key(b)
+    return difflib.SequenceMatcher(None, x, y).ratio() if x and y else 0.0
+
+
+ALIKE_SAME = 0.8  # names this alike (and 6+ letters) are taken as one account
+
+
+def close_name(names, handle):
+    """The one of `names` that the handle is most likely a misreading of
+    (ALIKE_SAME or more, 6+ letters), or None."""
+    if len(ocr_key(handle)) < 6:
+        return None
+    best = max(((alike(n, handle), n) for n in names if len(ocr_key(n)) >= 6), default=(0, None))
+    return best[1] if best[0] >= ALIKE_SAME else None
+
+
 def known_name_for(ctx, handle):
     """("studio", studio) or ("performer", performer) whose name or alias
     the handle (read off frames) most likely is, or None. A studio wins over
@@ -3675,45 +4821,69 @@ def known_name_for(ctx, handle):
                 if d <= misread_allowance(key, k):
                     cands.append((d, 1, "performer", p))
     if not cands:
-        return None
+        # not a near miss letter for letter, but about the same as a studio
+        # you have (a misread with more letters off: KUSUJOINN for KUSUJINN)
+        names = {}
+        for st in ctx["studios"]:
+            if st["name"].lower() in platform_names:
+                continue
+            for n in [st["name"]] + (st.get("aliases") or []):
+                names.setdefault(n, st)
+        hit = close_name(list(names), handle)
+        return ("studio", names[hit]) if hit else None
     cands.sort(key=lambda c: (c[0], c[1]))
     best = cands[0]
     rivals = {c[3]["id"] for c in cands if c[:2] == best[:2]}
     return (best[2], best[3]) if len(rivals) == 1 else None
 
 
-def pending_handle(stash, ctx, platform, handle, scene, apply):
-    """An account name read only in this scene's watermark, matching nothing
-    you have. It gets a studio once it's been read in a second scene (any
-    near spelling counts; the most read spelling is used), which the earlier
-    scenes then get too. Returns (studio or None, new, scenes waiting)."""
+def pending_handle(stash, ctx, platform, handle, scene, apply, kind="scene"):
+    """An account name read only in this scene's (or photo's) watermark,
+    matching nothing you have. It gets a studio once it's been read in a
+    second scene or photo (any near spelling counts; the most read spelling
+    is used), which the earlier ones then get too. Returns (studio or None,
+    new, items waiting). Entries keep "scenes" and "images" id lists."""
     pend = ctx["pending"] if apply else json.loads(json.dumps(ctx["pending"]))
     key = ocr_key(handle)
+    if len(key) < 4:  # too short to be sure it's an account ("ess")
+        return None, False, []
     match = next((k for k in pend if edit_distance(key, k, misread_allowance(key, k)) <= misread_allowance(key, k)), None)
     if match is None:
+        match = close_name(list(pend), key)
+    if match is None:
         match = key
-        pend[key] = {"platform": platform, "spellings": {}, "scenes": []}
+        pend[key] = {"platform": platform, "spellings": {}, "scenes": [], "images": []}
     e = pend[match]
-    if scene["id"] not in e["scenes"]:
-        e["scenes"].append(scene["id"])
+    e.setdefault("scenes", [])
+    e.setdefault("images", [])
+    mine = e[kind + "s"]
+    if scene["id"] not in mine:
+        mine.append(scene["id"])
     e["spellings"][handle] = e["spellings"].get(handle, 0) + 1
-    if len(e["scenes"]) < 2:
+    if len(e["scenes"]) + len(e["images"]) < 2:
         if apply:
             save_pending(ctx)
-        return None, False, e["scenes"]
+        return None, False, e["scenes"] + e["images"]
     spelling = max(e["spellings"].items(), key=lambda kv: kv[1])[0]
+    # you already have a tag or gallery by about that name: use its spelling
+    spelling = close_name(ctx.get("words", []), spelling) or spelling
     st, new = studio_for_handle(stash, ctx["studios"], e["platform"], spelling, apply)
-    earlier = [i for i in e["scenes"] if i != scene["id"]]
+    earlier = {k: [i for i in e[k + "s"] if not (k == kind and i == scene["id"])] for k in ("scene", "image")}
     if apply:
-        still = stash.call("query($ids: [ID!]) { findScenes(ids: $ids, filter: {per_page: -1}) { scenes { id studio { id } } } }",
-                           {"ids": earlier})["findScenes"]["scenes"]
-        todo = [x["id"] for x in still if not x.get("studio")]
-        if todo:
-            stash.call("mutation($i: BulkSceneUpdateInput!) { bulkSceneUpdate(input: $i) { id } }",
-                       {"i": {"ids": todo, "studio_id": st["id"]}})
+        for k, ids in earlier.items():
+            if not ids:
+                continue
+            q, f, bulk, typ = (("findScenes", "scenes", "bulkSceneUpdate", "BulkSceneUpdateInput") if k == "scene"
+                               else ("findImages", "images", "bulkImageUpdate", "BulkImageUpdateInput"))
+            still = stash.call(f"query($ids: [ID!]) {{ {q}(ids: $ids, filter: {{per_page: -1}}) {{ {f} {{ id studio {{ id }} }} }} }}",
+                               {"ids": ids})[q][f]
+            todo = [x["id"] for x in still if not x.get("studio")]
+            if todo:
+                stash.call(f"mutation($i: {typ}!) {{ {bulk}(input: $i) {{ id }} }}",
+                           {"i": {"ids": todo, "studio_id": st["id"]}})
         del pend[match]
         save_pending(ctx)
-    return st, new, earlier
+    return st, new, earlier["scene"] + earlier["image"]
 
 
 def save_pending(ctx):
@@ -3725,12 +4895,19 @@ def save_pending(ctx):
     os.replace(tmp, ctx["pending_path"])
 
 
+def plat_name(platform):
+    """OnlyFans / Fansly / ... - or "account" for a bare @name (no platform read)."""
+    return PLATFORMS[platform][0] if platform else "account"
+
+
 def performer_for_handle(ctx, platform, handle):
     """A performer whose name or alias is the handle (ignoring spaces, dots,
     case), or who has the account's profile link."""
     p = ctx["perf_keys"].get(re.sub(r"[^a-z0-9]", "", handle.lower()))
     if p:
         return p
+    if not platform:
+        return None
     url = PLATFORMS[platform][1].format(handle).lower()
     tail = url.split("://", 1)[1].replace("www.", "")
     for p in ctx["perfs"]:
@@ -3739,11 +4916,13 @@ def performer_for_handle(ctx, platform, handle):
     return None
 
 
-def scene_accounts(stash, cfg, ctx, scene, use_ai=True):
-    """What a scene shows: ([(platform, handle, where)] best first,
-    [(existing studio, frames)] whose name is in the watermark)."""
+def scene_accounts(stash, cfg, ctx, scene, use_ai=True, kind="scene"):
+    """What a scene (or photo) shows: ([(platform, handle, where)] best
+    first, [(existing studio, frames)] whose name is in the watermark).
+    A scene's frames must agree (two of them); a photo is one picture, so
+    one read counts - a brand-new account still needs a second item."""
     text = " ".join([scene.get("title") or "", scene.get("details") or "", " ".join(scene.get("urls") or []),
-                     item_path("scene", scene)])
+                     item_path(kind, scene)])
     from_text = handles_in_text(text)
     seen = defaultdict(int)  # (platform or None, handle lower) -> frames
     spelled = {}
@@ -3751,11 +4930,17 @@ def scene_accounts(stash, cfg, ctx, scene, use_ai=True):
     mark_studio = {}
     pmarks = defaultdict(int)  # performer id -> frames their name was read in
     mark_perf = {}
+    need = 1 if kind == "image" else 2  # reads needed
     f = (scene.get("files") or [None])[0]
-    if use_ai and f and (f.get("duration") or 0) > 1:
-        for i, at in enumerate(HANDLE_FRAME_POINTS):
+    if kind == "image":
+        points = (None,) if use_ai else ()
+    else:
+        points = HANDLE_FRAME_POINTS if use_ai and f and (f.get("duration") or 0) > 1 else ()
+    if points:
+        for i, at in enumerate(points):
             try:
-                pic = grab_frame(stash, f["path"], f["duration"] * at, width=1280)[0]
+                pic = (photo_picture(stash, scene) if kind == "image"
+                       else grab_frame(stash, f["path"], f["duration"] * at, width=1280)[0])
                 frame_text = ollama_frame_text(cfg, pic)
                 for plat, h in set(handles_in_ocr(frame_text)):
                     seen[(plat, h.lower())] += 1
@@ -3770,6 +4955,8 @@ def scene_accounts(stash, cfg, ctx, scene, use_ai=True):
                     pmarks[p_id] += 1
                     mark_perf[p_id] = p
             except Exception as e:
+                if kind == "image":
+                    raise
                 log("debug", f"frame at {at:.0%}: {e}")
             # stop early: two frames agree (on a name with its platform, or a
             # studio), or three frames show nothing (watermarks don't come and go)
@@ -3796,20 +4983,26 @@ def scene_accounts(stash, cfg, ctx, scene, use_ai=True):
         if any(hl == r[1].lower() for r in results):
             continue
         plat = plat_of.get(hl)
-        if n >= 2 and plat:
+        # a bare "@name" (no platform next to it) counts too - many photo
+        # watermarks are just that; a new one still needs a second item
+        if n >= need and (plat or len(hl) >= 4):
             results.append((plat, spelled[hl], f"{n} frames"))
-    results.sort(key=lambda r: (not r[2].startswith("text"), PLATFORM_ORDER.index(r[0])))
-    studios = sorted(((mark_studio[i], n) for i, n in marks.items() if n >= 2), key=lambda x: -x[1])
-    performers = [mark_perf[i] for i, n in pmarks.items() if n >= 2]
+    results.sort(key=lambda r: (not r[2].startswith("text"), r[0] is None,
+                                PLATFORM_ORDER.index(r[0]) if r[0] else len(PLATFORM_ORDER)))
+    studios = sorted(((mark_studio[i], n) for i, n in marks.items() if n >= need), key=lambda x: -x[1])
+    # a photo is read once, so its text could be anything (a magazine page):
+    # a performer only from a name in two frames of a scene. (An account name
+    # that's a performer's still counts, for photos too.)
+    performers = [mark_perf[i] for i, n in pmarks.items() if n >= 2] if kind != "image" else []
     return results, studios, performers
 
 
-def process_scene_accounts(stash, cfg, ctx, scene, apply, use_ai=True):
-    """Give one scene its studio (if it has none) and performers from the
-    accounts / studio watermarks it shows. Returns (a log line or None,
-    whether a new studio was made)."""
-    handles, mark_studios, mark_perfs = scene_accounts(stash, cfg, ctx, scene, use_ai)
-    name = os.path.basename(item_path("scene", scene)) or f"scene {scene['id']}"
+def process_scene_accounts(stash, cfg, ctx, scene, apply, use_ai=True, kind="scene"):
+    """Give one scene (or photo) its studio (if it has none) and performers
+    from the accounts / studio watermarks it shows. Returns (a log line or
+    None, whether a new studio was made)."""
+    handles, mark_studios, mark_perfs = scene_accounts(stash, cfg, ctx, scene, use_ai, kind)
+    name = os.path.basename(item_path(kind, scene)) or f"{kind} {scene['id']}"
     parts, inp, new = [], {"id": scene["id"]}, False
     # names read off frames may be misread: take a near match with what you have
     known = {}  # handle -> ("studio" | "performer", thing)
@@ -3821,31 +5014,31 @@ def process_scene_accounts(stash, cfg, ctx, scene, apply, use_ai=True):
     if not scene.get("studio"):
         if mark_studios:
             st, n = mark_studios[0]
-            parts.append(f'studio "{st["name"]}" [its watermark, in {n} frames]')
+            parts.append(f'studio "{st["name"]}" [its watermark' + (", in the picture]" if kind == "image" else f", in {n} frames]"))
             inp["studio_id"] = st["id"]
         elif handles:
             plat, handle, where = handles[0]
-            kind, thing = known.get(handle, (None, None))
-            src = f" [{PLATFORMS[plat][0]} @{handle}, from {where}"
-            if kind == "studio":
+            hit, thing = known.get(handle, (None, None))
+            src = f" [{plat_name(plat)} @{handle}, from {where}"
+            if hit == "studio":
                 st = thing
                 parts.append(f'studio "{st["name"]}"' + src + ("" if st["name"] == handle else f', taken as "{st["name"]}"') + "]")
                 inp["studio_id"] = st["id"]
-            elif kind == "performer" or where.startswith("text"):
-                spelling = thing["name"] if kind == "performer" else handle
-                st, new = studio_for_handle(stash, ctx["studios"], plat, spelling, apply, with_url=kind != "performer")
-                parts.append(f'studio "{st["name"]}"' + (f" (new, under {PLATFORMS[plat][0]})" if new else "")
-                             + src + (f', taken as performer "{thing["name"]}"' if kind == "performer" else "") + "]")
+            elif hit == "performer" or where.startswith("text"):
+                spelling = thing["name"] if hit == "performer" else handle
+                st, new = studio_for_handle(stash, ctx["studios"], plat, spelling, apply, with_url=hit != "performer")
+                parts.append(f'studio "{st["name"]}"' + (f" (new, under {plat_name(plat)})" if new and plat else " (new)" if new else "")
+                             + src + (f', taken as performer "{thing["name"]}"' if hit == "performer" else "") + "]")
                 inp["studio_id"] = st["id"]
             else:  # a new name, only in this scene's watermark so far
-                st, new, earlier = pending_handle(stash, ctx, plat, handle, scene, apply)
+                st, new, earlier = pending_handle(stash, ctx, plat, handle, scene, apply, kind)
                 if st:
-                    parts.append(f'studio "{st["name"]}"' + (f" (new, under {PLATFORMS[plat][0]})" if new else "")
-                                 + src + f", also read in {len(earlier)} earlier scene(s), which get it too]")
+                    parts.append(f'studio "{st["name"]}"' + (f" (new, under {plat_name(plat)})" if new and plat else " (new)" if new else "")
+                                 + src + f", also read in {len(earlier)} earlier item(s), which get it too]")
                     inp["studio_id"] = st["id"]
                 else:
-                    log("info", f"{name}: read {PLATFORMS[plat][0]} @{handle} in the watermark; a studio is made "
-                        "once it's read in a second scene too (misreads rarely repeat)")
+                    log("info", f"{name}: read {plat_name(plat)} @{handle} in the watermark; a studio is made "
+                        "once it's read in a second scene or photo too (misreads rarely repeat)")
     have = {p["id"] for p in scene.get("performers") or []}
     add = []
     by_handle = [known[h][1] if known.get(h, ("",))[0] == "performer" else performer_for_handle(ctx, plat, h)
@@ -3860,8 +5053,11 @@ def process_scene_accounts(stash, cfg, ctx, scene, apply, use_ai=True):
     if not parts:
         return None, False
     if apply and len(inp) > 1:
-        stash.call("mutation($i: SceneUpdateInput!) { sceneUpdate(input: $i) { id } }", {"i": inp})
-    others = ", ".join(f"{PLATFORMS[p][0]} @{h}" for p, h, _ in handles[1:])
+        if kind == "image":
+            stash.call("mutation($i: ImageUpdateInput!) { imageUpdate(input: $i) { id } }", {"i": inp})
+        else:
+            stash.call("mutation($i: SceneUpdateInput!) { sceneUpdate(input: $i) { id } }", {"i": inp})
+    others = ", ".join(f"{plat_name(p)} @{h}" for p, h, _ in handles[1:])
     return f'{"Would give" if not apply else "Gave"} {name} ' + " and ".join(parts) + (f"; also saw {others}" if others else ""), new
 
 
@@ -3871,15 +5067,20 @@ def studio_for_handle(stash, studios, platform, handle, apply, with_url=True):
     the list of all studios (kept up to date). The platform's studio is set
     to be ignored by Auto Tag, or every file with "OnlyFans" in its name
     would get it."""
-    parent_name, url_fmt, _ = PLATFORMS[platform]
-    url = url_fmt.format(handle)
+    parent_name, url_fmt, _ = PLATFORMS[platform] if platform else (None, None, None)
+    url = url_fmt.format(handle) if url_fmt else None
     low = handle.lower()
     for st in studios:
         names = [st["name"].lower()] + [a.lower() for a in st.get("aliases") or []]
-        if low in names or any(u.rstrip("/").lower() == url.lower() for u in st.get("urls") or []):
+        if low in names or (url and any(u.rstrip("/").lower() == url.lower() for u in st.get("urls") or [])):
             return st, False
     if not apply:
         return {"id": None, "name": handle}, True
+    if not platform:  # a bare @name: a studio of its own, under no platform
+        st = stash.call("mutation($i: StudioCreateInput!) { studioCreate(input: $i) { id name aliases urls } }",
+                        {"i": {"name": handle}})["studioCreate"]
+        studios.append(st)
+        return st, True
     parent = next((st for st in studios if st["name"].lower() == parent_name.lower()), None)
     if not parent:
         parent = stash.call("mutation($i: StudioCreateInput!) { studioCreate(input: $i) { id name aliases urls } }",
@@ -3891,20 +5092,97 @@ def studio_for_handle(stash, studios, platform, handle, apply, with_url=True):
     return st, True
 
 
-def run_accounts_items(stash, plugin_dir, scene_ids):
-    """New scenes from a scan: studio and performers from accounts."""
+def accounts_needed(scene):
+    """Worth reading the scene's watermarks? Not when it already has a
+    studio and performers: that's 6 AI model calls with nothing to find."""
+    return not scene.get("studio") or not scene.get("performers")
+
+
+def run_accounts_items(stash, plugin_dir, scene_ids, kind="scene"):
+    """New scenes (or photos) from a scan: studio and performers from
+    accounts."""
     cfg = settings(stash, plugin_dir)
     ai_check(cfg)
     ctx = accounts_context(stash, plugin_dir)
-    scenes = stash.call(f"query($ids: [ID!]) {{ findScenes(ids: $ids, filter: {{per_page: -1}}) {{ scenes {{ {HANDLE_SCENE_FIELDS} }} }} }}",
-                        {"ids": scene_ids})["findScenes"]["scenes"]
-    for sc in scenes:
+    q, f = ("findScenes", "scenes") if kind == "scene" else ("findImages", "images")
+    items = stash.call(f"query($ids: [ID!]) {{ {q}(ids: $ids, filter: {{per_page: -1}}) {{ {f} {{ {HANDLE_FIELDS[kind]} }} }} }}",
+                       {"ids": scene_ids})[q][f]
+    skip = [sc for sc in items if not accounts_needed(sc)]
+    if skip:
+        log("info", f"Watermarks: skipping {len(skip)} {kind}(s) that already have a studio and performers")
+    for sc in (sc for sc in items if accounts_needed(sc)):
         try:
-            line, _ = process_scene_accounts(stash, cfg, ctx, sc, apply=True)
+            line, _ = process_scene_accounts(stash, cfg, ctx, sc, apply=True, kind=kind)
             if line:
                 log("info", line)
         except Exception as e:
-            log("warning", f"scene {sc['id']}: accounts skipped ({e})")
+            log("warning", f"{kind} {sc['id']}: accounts skipped ({e})")
+
+
+def run_photo_studios(stash, plugin_dir, in_galleries=False, preview=False, limit=None):
+    """Task: photos without a studio get one from the account or studio
+    watermark the AI model reads in them (one model call each). Photos in a
+    gallery (comic pages, sets) only with `in_galleries`. Photos already
+    read are skipped next time (handle_scan.json)."""
+    cfg = settings(stash, plugin_dir)
+    ai_check(cfg)
+    flt = {"studios": {"modifier": "IS_NULL"}}
+    if not in_galleries:
+        flt["galleries"] = {"modifier": "IS_NULL"}
+    photos, page = [], 1
+    while True:
+        got = stash.call(
+            f"query($p: ImageFilterType, $f: FindFilterType) {{ findImages(image_filter: $p, filter: $f) {{ images {{ {HANDLE_IMAGE_FIELDS} }} }} }}",
+            {"p": flt, "f": {"page": page, "per_page": 500, "sort": "created_at", "direction": "DESC"}})["findImages"]["images"]
+        photos += [x for x in got if not x.get("studio")]
+        if len(got) < 500:
+            break
+        page += 1
+    done_path = os.path.join(plugin_dir, "handle_scan.json")
+    try:
+        with open(done_path) as fh:
+            saved = json.load(fh)
+    except (OSError, ValueError):
+        saved = {}
+    done = set(saved.get("images", []))
+    if limit:
+        import random
+        photos = random.sample(photos, min(limit, len(photos)))
+    else:
+        photos = [x for x in photos if x["id"] not in done]
+    ctx = accounts_context(stash, plugin_dir)
+    log("info", f"Reading watermarks in {len(photos)} photo(s) without a studio"
+        + ("" if in_galleries else " (not in a gallery)") + (" (preview, nothing is saved)" if preview else "")
+        + (". A few seconds each, so this takes a while; you can cancel it under Settings → Tasks and run it again to carry on."
+           if len(photos) > 20 else "."))
+    assigned = created = failed = 0
+    for n, ph in enumerate(photos):
+        progress(n / max(len(photos), 1))
+        name = os.path.basename(item_path("image", ph)) or f"image {ph['id']}"
+        try:
+            line, new = process_scene_accounts(stash, cfg, ctx, ph, apply=not preview, kind="image")
+        except RuntimeError:
+            raise
+        except Exception as e:
+            failed += 1
+            log("warning" if failed <= 3 else "debug", f"{name}: skipped ({e})")
+            continue
+        if line:
+            log("info", line)
+            assigned += 1
+            created += new
+        if (n + 1) % 50 == 0:
+            log("info", f"Read {n + 1} of {len(photos)} photo(s): {assigned} got a studio so far ({created} new), "
+                f"{len(ctx['pending'])} account name(s) waiting to be seen a second time")
+        if not preview and not limit:
+            done.add(ph["id"])
+            if n % 10 == 9 or n == len(photos) - 1:
+                with locked_json(done_path) as d:
+                    d["images"] = sorted(set(d.get("images", [])) | done, key=int)
+    progress(1)
+    log("info", f"{'Preview: ' if preview else 'Done: '}{assigned} of {len(photos)} photo(s) "
+        + ("would get" if preview else "got") + f" a studio and/or performers from a watermark ({created} new studio(s))"
+        + (f"; {failed} couldn't be read" if failed else "") + (". Nothing was saved." if preview else "."))
 
 
 def run_handle_studios(stash, plugin_dir, preview=False, limit=None, use_ai=True):
@@ -3936,7 +5214,7 @@ def run_handle_studios(stash, plugin_dir, preview=False, limit=None, use_ai=True
     elif use_ai:  # the AI pass skips scenes it has already looked at
         scenes = [s_ for s_ in scenes if s_["id"] not in done]
     ctx = accounts_context(stash, plugin_dir)
-    log("info", f"Looking for OnlyFans / Fansly / Instagram / TikTok accounts and studio watermarks in {len(scenes)} scene(s) without a studio"
+    log("info", f"Looking for OnlyFans / Fansly / Patreon / Instagram / TikTok accounts and studio watermarks in {len(scenes)} scene(s) without a studio"
         + (" (preview, nothing is saved)" if preview else "")
         + (". The AI reads up to 6 frames of each, so this takes a while; you can cancel it under Settings → Tasks and run it again to carry on."
            if use_ai and len(scenes) > 20 else "."))
@@ -3956,10 +5234,9 @@ def run_handle_studios(stash, plugin_dir, preview=False, limit=None, use_ai=True
         if not preview and not limit and use_ai:
             done.add(sc["id"])
             if n % 10 == 9 or n == len(scenes) - 1:
-                tmp = done_path + ".tmp"
-                with open(tmp, "w") as fh:
-                    json.dump({"scenes": sorted(done, key=int)}, fh)
-                os.replace(tmp, done_path)
+                # (merged: the photo task keeps its own list in the same file)
+                with locked_json(done_path) as d:
+                    d["scenes"] = sorted(set(d.get("scenes", [])) | done, key=int)
     progress(1)
     log("info", f"{'Preview: ' if preview else 'Done: '}{assigned} of {len(scenes)} scene(s) "
         + ("would get" if preview else "got") + f" a studio and/or performers from an account or watermark ({created} new studio(s))"
@@ -4269,6 +5546,878 @@ def run_face_reject(plugin_dir, performer_id, key):
         return True
 
 
+def look_knn(cfg, vectors, base, k=LOOK_K):
+    """The face helper's /knn: each vector's k most alike base vectors."""
+    body = json.dumps({"vectors": vectors, "base": base, "k": k}).encode()
+    req = urllib.request.Request(cfg["ai"]["face_url"] + "/knn", data=body, headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=600) as resp:
+            return json.loads(resp.read())["results"]
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            raise RuntimeError("the face helper is too old for tag review - copy the add-on's face-helper/face_helper.py "
+                               "over the running one and restart it (see the README)")
+        raise RuntimeError(f"the face helper couldn't compare pictures ({e.code})")
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"can't reach the face helper at {cfg['ai']['face_url']} ({getattr(e, 'reason', e)})")
+
+
+TAG_REVIEW_CACHE_SECONDS = 15 * 60
+
+
+def locked_tag_review_not(plugin_dir):
+    return locked_json(os.path.join(plugin_dir, "tag_review_not.json"))
+
+
+def run_tag_review_answer(plugin_dir, key, tag_id, no=True):
+    """Tag review's "No" (or its Undo): don't suggest that tag for that item
+    again. tag_review_not.json: {"scene:12": [tag ids]}."""
+    with locked_tag_review_not(plugin_dir) as data:
+        have = data.get(key, [])
+        if no and str(tag_id) not in have:
+            data[key] = have + [str(tag_id)]
+        elif not no and str(tag_id) in have:
+            data[key] = [t for t in have if t != str(tag_id)]
+            if not data[key]:
+                del data[key]
+    return True
+
+
+def _tag_review_candidates(stash, cfg, plugin_dir, excluded, fresh=False):
+    """Every confident look-alike tag (LOOK_SURE+) for every fingerprinted
+    item, whatever it has now: [[key, tag id, score, look-alikes with it]].
+    The comparing is done by the face helper; kept for 15 minutes."""
+    path = os.path.join(plugin_dir, "tag_review_cache.json")
+    if not fresh:
+        with contextlib.suppress(OSError, ValueError, KeyError):
+            with open(path) as f:
+                saved = json.load(f)
+            if time.time() - saved.get("at", 0) < TAG_REVIEW_CACHE_SECONDS:
+                return saved["found"], saved["names"]
+    looks = LookIndex(stash, cfg, plugin_dir, excluded)
+    if not looks.ready():
+        raise RuntimeError('not enough look-alikes yet - run "Look-alike tags: scan scenes and images" first')
+    keys = [k for k, ent in looks.cache.data.items() if ent.get("e")]
+    pos = {k: i for i, k in enumerate(keys)}
+    rows = {pos[r[0]]: r for r in looks.rows if r[0] in pos}
+    nn = look_knn(cfg, [looks.cache.data[k]["e"] for k in keys], sorted(rows), LOOK_K)
+    found = []
+    for key, near in zip(keys, nn):
+        if not near:
+            continue
+        top = near[0][1] / 16129
+        out, total, count = defaultdict(float), 0.0, Counter()
+        for j, dot in near:
+            w = math.exp((dot / 16129 - top) / LOOK_TEMP)
+            total += w
+            for t in rows[j][2]:
+                out[t] += w
+                count[t] += 1
+        for t, w in out.items():
+            sc = w / total
+            if sc >= LOOK_SURE and t in looks.names and t not in looks.rejected:
+                found.append([key, t, round(sc, 3), count[t]])
+    names = looks.names
+    tmp = f"{path}.{os.getpid()}.tmp"  # (two requests at once mustn't share it)
+    with open(tmp, "w") as f:
+        json.dump({"at": time.time(), "found": found, "names": names}, f)
+    os.replace(tmp, path)
+    return found, names
+
+
+TAG_REVIEW_FIELDS = {
+    "scene": "id title tags { id } files { basename } paths { screenshot }",
+    "image": "id title tags { id } visual_files { ... on BaseFile { basename } } paths { image }",
+}
+
+
+def run_tag_review(stash, plugin_dir, tag=None, limit=40, skip=(), fresh=False):
+    """Tag review page: confident look-alike tags (the ones the tasks would
+    add, 50%+ of the closest look-alikes' vote) that items don't have yet and
+    you haven't turned down. Body tags are left out (the body detector does
+    those), as are "Tags to ignore", gallery-name tags and tags you've
+    mostly removed. Best first. `skip`: "kind:id:tag" already shown."""
+    cfg = settings(stash, plugin_dir)
+    _, excluded = tag_lookup(stash, cfg, plugin_dir)
+    found, names = _tag_review_candidates(stash, cfg, plugin_dir, excluded, fresh)
+    have = all_item_tags(stash)
+    with locked_tag_review_not(plugin_dir) as nots:
+        nots = {k: set(v) for k, v in nots.items()}
+    skip = set(skip or ())
+    want = str(tag) if tag else None
+    picks = []
+    for key, t, sc, n in found:
+        if want and t != want:
+            continue
+        if t in excluded or names.get(t, "").strip().lower() in BODY_TAG_NAMES:
+            continue
+        if t in have.get(key, ()) or t in nots.get(key, ()) or f"{key}:{t}" in skip:
+            continue
+        picks.append((sc, n, key, t))
+    picks.sort(key=lambda x: (-x[0], -x[1]))
+    out = []
+    for at in range(0, len(picks), 150):
+        chunk = picks[at:at + 150]
+        items = {}
+        for kind, query, field in (("scene", "findScenes", "scenes"), ("image", "findImages", "images")):
+            ids = sorted({k.split(":")[1] for _, _, k, _ in chunk if k.startswith(kind + ":")}, key=int)
+            if ids:
+                got = find_by_ids(stash, query, field, ids, f"{TAG_REVIEW_FIELDS[kind]}")
+                items.update({f"{kind}:{x['id']}": x for x in got})
+        for sc, n, key, t in chunk:
+            it = items.get(key)
+            if not it or t in {x["id"] for x in it.get("tags") or []}:
+                continue
+            kind, iid = key.split(":")
+            files = it.get("files") or it.get("visual_files") or [{}]
+            link = (it.get("paths") or {}).get("screenshot" if kind == "scene" else "image") or ""
+            out.append({
+                "kind": kind, "id": iid, "tag": t, "name": names.get(t, ""), "score": round(sc * 100), "near": n,
+                "title": it.get("title") or (files[0] or {}).get("basename") or "",
+                # the page is opened from the phone too: no localhost address
+                "picture": re.sub(r"^https?://[^/]+", "", link), "tags": len(it.get("tags") or []),
+            })
+            if len(out) >= limit:
+                break
+        if len(out) >= limit:
+            break
+    # the Batch view: how many there are for each tag, biggest first
+    per = Counter(t for _, _, _, t in picks)
+    groups = [{"id": t, "name": names.get(t, t), "count": c} for t, c in per.most_common()]
+    return {"items": out, "total": len(picks), "groups": groups}
+
+
+# --- new performers: the same unknown face in several items --------------
+NEW_PERF_UNKNOWN = 0.45   # a face this far from everyone you have is someone new
+NEW_PERF_SAME = 0.6       # faces this alike are put together as one person (0.5 mixed people
+                          # up: the same performer on only 71% of a group's tagged items; 0.6: 90%)
+NEW_PERF_MIN_ITEMS = 3
+# drawn faces all look alike to the face model: comics, cartoons... are left out
+NEW_PERF_DRAWN_TAGS = {"animated", "animation", "comics", "comic", "hentai", "sketches", "sketch", "cartoon",
+                       "anime", "manga", "doujinshi", "drawn", "drawing", "3d", "ai", "art", "illustration",
+                       "black and white", "captions"}
+NEW_PERF_GENERIC_FOLDER = re.compile(r"(?i)(^[\d_\W]|locked|folder|download|dcim|camera|^img|pictures?$|photos?$|"
+                                     r"videos?$|^misc|^new\b|^stuff|^tmp|^temp)")
+
+
+def face_cluster(cfg, faces, threshold=NEW_PERF_SAME):
+    body = json.dumps({"faces": faces, "threshold": threshold}).encode()
+    req = urllib.request.Request(cfg["ai"]["face_url"] + "/cluster", data=body, headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=600) as resp:
+            return json.loads(resp.read())["results"]
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            raise RuntimeError("the face helper is too old for new performers - copy the add-on's face-helper/face_helper.py "
+                               "over the running one and restart it (see the README)")
+        raise RuntimeError(f"the face helper couldn't group faces ({e.code})")
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"can't reach the face helper at {cfg['ai']['face_url']} ({getattr(e, 'reason', e)})")
+
+
+def locked_new_perf_not(plugin_dir):
+    return locked_json(os.path.join(plugin_dir, "new_perf_not.json"))
+
+
+def run_new_perf_answer(plugin_dir, keys, no=True):
+    """"Not a performer" (or its Undo) for a group of items."""
+    keys = sorted(set(keys or []))
+    with locked_new_perf_not(plugin_dir) as data:
+        groups = data.setdefault("groups", [])
+        if no and keys not in groups:
+            groups.append(keys)
+        elif not no:
+            data["groups"] = [g for g in groups if g != keys]
+    return True
+
+
+NEW_PERF_FIELDS = {
+    "scene": "id title details urls performers { id name } studio { id name parent_studio { name } } tags { id name } "
+             "files { path } paths { screenshot }",
+    "image": "id title details urls performers { id name } studio { id name parent_studio { name } } tags { id name } "
+             "visual_files { ... on BaseFile { path } } paths { thumbnail image }",
+}
+
+
+NEW_PERF_NAME_LIKE = re.compile(r"^[A-Z][\w'.-]*(?: [A-Z][\w'.-]*){0,2}$")
+
+
+def new_perf_names(xs, n, studios, studio_names, folders, tag_uses, path_of, tag_people=None):
+    """Name ideas for a new performer from what most of their items share:
+    an account named in the file names / titles / links, a studio, a tag
+    that looks like a name and is used (nearly) only on them, or a named
+    folder. [{name, why}] best first, at most 3."""
+    out, seen = [], set()
+
+    def add(name, why, strength, url=None):
+        name = " ".join(str(name or "").split())
+        if name and name.lower() not in seen:
+            seen.add(name.lower())
+            out.append({"name": name, "why": why, "k": strength, "url": url})
+
+    quarter = max(2, -(-n // 4))
+    accounts, spelled = Counter(), {}
+    for x in xs:
+        text = " ".join([x.get("title") or "", x.get("details") or "", " ".join(x.get("urls") or []), path_of(x)])
+        for (plat, hl), h in handles_in_text(text).items():
+            accounts[(plat, hl)] += 1
+            spelled.setdefault((plat, hl), h)
+    for (plat, hl), c in accounts.most_common(2):
+        if c >= quarter:
+            add(spelled[(plat, hl)], f"{c} of them name the {PLATFORMS[plat][0]} account @{spelled[(plat, hl)]}", 3 + c / n,
+                PLATFORMS[plat][1].format(spelled[(plat, hl)]))
+    for sid, c in studios.most_common(2):
+        if c >= quarter:
+            add(studio_names[sid], f"{c} of them are from the studio {studio_names[sid]}", 2 + c / n)
+    tags = Counter((t["id"], t["name"]) for x in xs for t in x.get("tags") or [])
+    for (tid, tname), c in tags.most_common(12):
+        if c * 2 < n or not NEW_PERF_NAME_LIKE.match(tname.strip()):
+            continue
+        if tname.strip().lower() in BODY_TAG_NAMES or tname.strip().lower() in NEW_PERF_DRAWN_TAGS:
+            continue
+        if tag_uses.get(tid, 0) - c > 4 * n:  # all over the library: a category, not a name
+            continue
+        if tag_people is not None and len(tag_people.get(tid, ())) >= 3:  # on many people: a description
+            continue
+        add(tname, f"{c} of them are tagged {tname}", 1.5 + c / n)
+    fd = folders.most_common(1)
+    # (a folder with numbers in its name is a series or a date, not a person)
+    if fd and fd[0][0] and fd[0][1] * 2 >= n and not NEW_PERF_GENERIC_FOLDER.search(fd[0][0]) and not re.search(r"\d", fd[0][0]):
+        add(re.sub(r"[_.]+", " ", fd[0][0]).strip(), f"{fd[0][1]} of them are in the folder \"{fd[0][0]}\"", 1 + fd[0][1] / n)
+    out.sort(key=lambda c: -c["k"])
+    return [{"name": c["name"], "why": c["why"], **({"url": c["url"]} if c.get("url") else {})} for c in out[:3]]
+
+
+def run_new_performers(stash, plugin_dir, limit=30, skip=(), fresh=False):
+    """Review page, "New" tab: people seen in several scenes / photos whose
+    face matches none of your performers. A group where a quarter or more of
+    the items already have the same performer becomes "It's [them]?" (add them to the rest, learn the
+    face); otherwise "New performer?", with a name from a studio or folder
+    most of them share. Drawn items (comics...) are left out. Kept 15 min."""
+    cfg = settings(stash, plugin_dir)
+    path = os.path.join(plugin_dir, "new_perf_cache.json")
+    found = None
+    if not fresh:
+        with contextlib.suppress(OSError, ValueError, KeyError):
+            with open(path) as f:
+                saved = json.load(f)
+            if time.time() - saved.get("at", 0) < TAG_REVIEW_CACHE_SECONDS and saved.get("same") == NEW_PERF_SAME:
+                found = saved["found"]
+    items = {}
+    for kind, query, field in (("scene", "findScenes", "scenes"), ("image", "findImages", "images")):
+        got = stash.call(f"{{ {query}(filter: {{per_page: -1}}) {{ {field} {{ {NEW_PERF_FIELDS[kind]} }} }} }}")[query][field]
+        items.update({f"{kind}:{x['id']}": x for x in got})
+
+    def path_of(x):
+        return (((x.get("files") or x.get("visual_files") or [{}])[0]) or {}).get("path") or ""
+
+    # how often each tag is used in all: a tag that's someone's name is used
+    # on them (mostly this group), a category tag all over the library
+    tag_uses = {t["id"]: (t.get("scene_count") or 0) + (t.get("image_count") or 0) for t in stash.call(
+        "{ findTags(filter: {per_page: -1}) { tags { id scene_count image_count } } }")["findTags"]["tags"]}
+    # ... and isn't spread over lots of different performers either
+    tag_people = defaultdict(set)
+    for x in items.values():
+        pids = {p["id"] for p in x.get("performers") or []}
+        if pids:
+            for t in x.get("tags") or []:
+                tag_people[t["id"]] |= pids
+
+    if found is None:
+        index = load_face_index(plugin_dir)
+        known = {}
+        for pid, entry in index.items():
+            embs = [q8(e) for e in entry.get("embs", [])] + entry.get("tagged", []) + entry.get("conf", [])
+            if embs:
+                known[pid] = embs
+        cache = FaceCache(plugin_dir)
+        if not cache.data:
+            raise RuntimeError('nothing is scanned yet - run "Faces: scan scenes and images" first')
+
+        def drawn(key):
+            x = items.get(key)
+            if not x:
+                return True
+            if re.search(r"\.(zip|cbz|cbr|rar|7z)[\\/]", path_of(x).lower()):
+                return True
+            return any(t["name"].strip().lower() in NEW_PERF_DRAWN_TAGS for t in x.get("tags") or [])
+
+        faces, where = [], []
+        for key, entry in cache.data.items():
+            if drawn(key):
+                continue
+            for g, group in enumerate(entry.get("f", [])):
+                for f in group:
+                    faces.append(f)
+                    where.append(key)
+        matches = face_match_all(cfg, faces, known) if known else [[None, 0.0, 0.0]] * len(faces)
+        unknown = [i for i, (_, best, _) in enumerate(matches) if best < NEW_PERF_UNKNOWN]
+        groups = face_cluster(cfg, [faces[i] for i in unknown])
+        members = defaultdict(dict)  # group -> item key -> (likeness, face)
+        for i, (gid, sim) in zip(unknown, groups):
+            if gid < 0:
+                continue
+            have = members[gid].get(where[i])
+            if not have or sim > have[0]:
+                members[gid][where[i]] = (sim, faces[i])
+        found = []
+        for gid, m in members.items():
+            if len(m) < NEW_PERF_MIN_ITEMS:
+                continue
+            ranked = sorted(m.items(), key=lambda kv: -kv[1][0])
+            found.append({"keys": [k for k, _ in ranked], "faces": [v[1] for _, v in ranked[:6]]})
+        tmp = f"{path}.{os.getpid()}.tmp"  # (two requests at once mustn't share it)
+        with open(tmp, "w") as f:
+            json.dump({"at": time.time(), "found": found, "same": NEW_PERF_SAME}, f)
+        os.replace(tmp, path)
+
+    # performers whose face is known: if their face didn't match, it isn't them
+    face_known = {pid for pid, entry in load_face_index(plugin_dir).items() if known_embs(entry)}
+    with locked_new_perf_not(plugin_dir) as data:
+        turned_down = [set(g) for g in data.get("groups", [])]
+    skip = set(skip or ())
+    out = []
+    for g in found:
+        keys = [k for k in g["keys"] if k in items]
+        if len(keys) < NEW_PERF_MIN_ITEMS:
+            continue
+        sig = "|".join(sorted(keys)[:12])
+        if sig in skip or any(len(set(keys) & t) * 2 >= len(keys) for t in turned_down):
+            continue
+        xs = [items[k] for k in keys]
+        n = len(keys)
+        perf = Counter(p["id"] for x in xs for p in x.get("performers") or [])
+        names = {p["id"]: p["name"] for x in xs for p in x.get("performers") or []}
+        studios = Counter((x.get("studio") or {}).get("id") for x in xs if x.get("studio"))
+        studio_names = {x["studio"]["id"]: x["studio"]["name"] for x in xs if x.get("studio")}
+        folders = Counter(re.split(r"[\\/]", path_of(x))[-2] if len(re.split(r"[\\/]", path_of(x))) > 1 else "" for x in xs)
+        reasons = []
+        kinds = Counter(k.split(":")[0] for k in keys)
+        reasons.append("The same face in " + " and ".join(
+            f"{c} {k}{'s' if c != 1 else ''}".replace("image", "photo") for k, c in kinds.items()))
+        top = perf.most_common(1)
+        # only ever added to items with no performer: one that has someone
+        # most likely shows them
+        untagged = [k for k in keys if not items[k].get("performers")]
+        tagged_n = n - len(untagged)
+        sugg = {"sig": sig, "faces": g["faces"]}
+        if top and top[0][1] >= max(2, -(-n // 4)):
+            pid, have = top[0]
+            # a performer on a good share of them whose face isn't known yet:
+            # probably them. One whose face IS known didn't match it, so it's
+            # someone else (or a poor likeness of them) - nothing to suggest.
+            if pid in face_known or not untagged:
+                continue
+            reasons.append(f"{names[pid]} is already on {have} of them, and their face isn't known yet")
+            sugg.update(type="assign", performer={"id": pid, "name": names[pid]}, missing=untagged, keys=keys,
+                        count=len(untagged))
+            show = untagged + [k for k in keys if k not in untagged]
+        elif len(untagged) >= NEW_PERF_MIN_ITEMS:
+            ux = [items[k] for k in untagged]
+            un = len(untagged)
+            ukinds = Counter(k.split(":")[0] for k in untagged)
+            reasons[0] = "The same face in " + " and ".join(
+                f"{c} {k}{'s' if c != 1 else ''}".replace("image", "photo") for k, c in ukinds.items()) + " without a performer"
+            ustudios = Counter((x.get("studio") or {}).get("id") for x in ux if x.get("studio"))
+            ufolders = Counter(re.split(r"[\\/]", path_of(x))[-2] if len(re.split(r"[\\/]", path_of(x))) > 1 else "" for x in ux)
+            cands = new_perf_names(ux, un, ustudios, studio_names, ufolders, tag_uses, path_of, tag_people)
+            if cands:
+                reasons.append(cands[0]["why"])
+            if tagged_n:
+                reasons.append(f"also in {tagged_n} that have performers (left as they are)")
+            sugg.update(type="new", name=cands[0]["name"] if cands else "", names=cands, keys=untagged, count=un)
+            show = untagged
+        else:
+            continue
+        sugg["scenes"] = sum(1 for k in sugg["keys"] if k.startswith("scene:"))
+        sugg["photos"] = sum(1 for k in sugg["keys"] if k.startswith("image:"))
+        # pictures: photos first (a face shows better), best likeness first
+        order = sorted(show, key=lambda k: (not k.startswith("image:"), show.index(k)))
+        pics = []
+        for k in order[:6]:
+            kind, iid = k.split(":")
+            x = items[k]
+            link = (x.get("paths") or {}).get("screenshot" if kind == "scene" else "thumbnail") or ""
+            pics.append({"kind": kind, "id": iid, "picture": re.sub(r"^https?://[^/]+", "", link)})
+        sugg["samples"] = pics
+        # every item it would change, to look through (and leave some out)
+        allp = []
+        for k in (sugg.get("missing") if sugg["type"] == "assign" else sugg["keys"]):
+            kind, iid = k.split(":")
+            x = items[k]
+            link = (x.get("paths") or {}).get("screenshot" if kind == "scene" else "thumbnail") or ""
+            allp.append({"key": k, "kind": kind, "id": iid, "title": x.get("title") or os.path.basename(path_of(x)),
+                         "picture": re.sub(r"^https?://[^/]+", "", link)})
+        sugg["all"] = allp
+        if sugg["type"] == "new":
+            ks = sugg["keys"]
+            tc = Counter((t["id"], t["name"]) for k in ks for t in items[k].get("tags") or [])
+            sugg["tag_ideas"] = [{"id": tid, "name": tn, "count": c} for (tid, tn), c in tc.most_common(14)
+                                 if c >= max(2, len(ks) // 4) and tn.strip().lower() not in NEW_PERF_DRAWN_TAGS][:10]
+        sugg["reasons"] = reasons
+        out.append(sugg)
+    # "It's ..." first (more to go on), then the most items
+    out.sort(key=lambda x: (x["type"] != "assign", -x["count"]))
+    return {"items": out[:limit], "total": len(out)}
+
+
+def run_new_perf_read(stash, plugin_dir, keys, limit=6):
+    """New tab: the local AI model reads the text in a few of a suggestion's
+    pictures (watermarks, captions) for account names - OnlyFans, Fansly,
+    Patreon, Instagram, TikTok - and studio / performer names you have.
+    Name ideas [{name, why, url?}], best first. Remembered per set of items
+    (new_perf_ocr.json), so each is only read once."""
+    cfg = settings(stash, plugin_dir)
+    ai_check(cfg)
+    keys = [k for k in (keys or []) if re.match(r"^(scene|image):\d+$", k)]
+    sig = hashlib.sha1("|".join(sorted(keys)).encode()).hexdigest()[:16]
+    path = os.path.join(plugin_dir, "new_perf_ocr.json")
+    with locked_json(path) as saved:
+        if sig in saved:
+            return saved[sig]
+    # photos first (a watermark is sharper there), then scenes (2 frames each)
+    order = [k for k in keys if k.startswith("image:")] + [k for k in keys if k.startswith("scene:")]
+    ctx = accounts_context(stash, plugin_dir)
+    plat_names = {v[0].lower() for v in PLATFORMS.values()}
+    seen, spelled, plat_of = Counter(), {}, {}
+    studios_read, perfs_read = Counter(), Counter()
+    looked = 0
+    for k in order:
+        if looked >= limit:
+            break
+        kind, iid = k.split(":")
+        q = "findScene" if kind == "scene" else "findImage"
+        item = stash.call(f"query($id: ID!) {{ {q}(id: $id) {{ {HANDLE_FIELDS[kind]} }} }}", {"id": iid})[q]
+        if not item:
+            continue
+        pics = []
+        try:
+            if kind == "image":
+                pics = [photo_picture(stash, item)]
+            else:
+                f = (item.get("files") or [None])[0]
+                if f and (f.get("duration") or 0) > 1:
+                    pics = [grab_frame(stash, f["path"], f["duration"] * at, width=1280)[0] for at in (0.15, 0.6)]
+        except Exception as e:
+            log("debug", f"{k}: {e}")
+        if not pics:
+            continue
+        looked += 1
+        here, here_st, here_pf = set(), set(), set()
+        for pic in pics:
+            try:
+                text = ollama_frame_text(cfg, pic)
+            except RuntimeError:
+                raise
+            except Exception as e:
+                log("debug", f"{k}: {e}")
+                continue
+            for plat, h in handles_in_ocr(text):
+                hl = h.lower()
+                if hl in plat_names:
+                    continue
+                here.add(hl)
+                spelled.setdefault(hl, h)
+                if plat:
+                    plat_of.setdefault(hl, plat)
+            low = " ".join(text.lower().split())
+            here_st |= {st["name"] for pat, st in ctx["marks"] if pat.search(low)}
+            here_pf |= {p["name"] for pat, p in ctx["perf_marks"] if pat.search(low)}
+        seen.update(here)
+        studios_read.update(here_st)
+        perfs_read.update(here_pf)
+        # two pictures agree on an account: that's enough
+        if any(c >= 2 for c in seen.values()):
+            break
+    out = []
+    for hl, c in seen.most_common(3):
+        plat = plat_of.get(hl)
+        where = f"{PLATFORMS[plat][0]} @{spelled[hl]}" if plat else f"@{spelled[hl]}"
+        # a near miss of a studio / performer you have is probably them
+        known = known_name_for(ctx, spelled[hl])
+        name = known[1]["name"] if known else spelled[hl]
+        why = f"the AI read {where} in {c} picture{'s' if c != 1 else ''}" + (f' (you have "{name}")' if known else "")
+        idea = {"name": name, "why": why}
+        if plat and not known:
+            idea["url"] = PLATFORMS[plat][1].format(spelled[hl])
+        out.append(idea)
+    for nm, c in (perfs_read + studios_read).most_common(2):
+        if nm.lower() not in {o["name"].lower() for o in out}:
+            out.append({"name": nm, "why": f"the AI read \"{nm}\" in {c} picture{'s' if c != 1 else ''}"})
+    result = {"names": out[:3], "looked": looked}
+    with locked_json(path) as saved:
+        saved[sig] = result
+    return result
+
+
+def run_new_perf_lookalikes(plugin_dir, faces, limit=8):
+    """New tab, "add to a performer you already have": the performers whose
+    known faces are closest to this group's faces (best pair), as ideas - not
+    a match (it's on the New tab because no one matched well). [{id, name, score}]"""
+    index = load_face_index(plugin_dir)
+    mine = [unq8(f) for f in (faces or [])[:6] if isinstance(f, str)]
+    if not mine:
+        return []
+    hits = []
+    for pid, entry in index.items():
+        embs = known_embs(entry)
+        if embs:
+            hits.append((max(_dot(a, b) for a in mine for b in embs), pid, entry.get("name", "")))
+    hits.sort(reverse=True)
+    return [{"id": pid, "name": name, "score": round(sc * 100)} for sc, pid, name in hits[:limit] if sc > 0.2]
+
+
+def run_review_no_many(plugin_dir, kind, pairs, no=True):
+    """Batch view: many "no"s (or their Undo) at once. kind "tags": pairs
+    of [item key, tag id]; "faces": [item key, performer id]."""
+    pairs = [p for p in pairs or [] if isinstance(p, (list, tuple)) and len(p) == 2]
+    if kind == "tags":
+        with locked_tag_review_not(plugin_dir) as data:
+            for key, tag in pairs:
+                have = data.get(key, [])
+                if no and str(tag) not in have:
+                    data[key] = have + [str(tag)]
+                elif not no and str(tag) in have:
+                    data[key] = [t for t in have if t != str(tag)]
+                    if not data[key]:
+                        del data[key]
+    else:
+        with locked_face_index(plugin_dir) as index:
+            for key, pid in pairs:
+                entry = index.get(str(pid))
+                if not entry:
+                    continue
+                nots = entry.get("not", [])
+                if no and key not in nots:
+                    entry["not"] = (nots + [key])[-2000:]
+                elif not no and key in nots:
+                    entry["not"] = [k for k in nots if k != key]
+    return len(pairs)
+
+
+# --- Review "Check": what's on an item that might not belong ---------------
+CHECK_TAG_UNDER = 0.05       # a tag on it that under 5% of its closest look-alikes have
+CHECK_TAG_EXAMPLES = 25      # ... and only tags with this many tagged items to judge by
+CHECK_TAG_TRUSTED = 0.4      # ... that look-alikes usually see (median score on its own items):
+                             # "Celeb" isn't something a picture shows, so it isn't judged
+CHECK_FACE_UNDER = 0.25      # a performer whose known face is this far from every face in it
+CHECK_FIELDS = {
+    "scene": "id title files { basename } paths { screenshot }",
+    "image": "id title visual_files { ... on BaseFile { basename } } paths { image }",
+}
+
+
+def locked_check_keep(plugin_dir):
+    return locked_json(os.path.join(plugin_dir, "check_keep.json"))
+
+
+def run_check_answer(plugin_dir, key, what, keep=True):
+    """"It fits" (or its Undo): don't ask about it again. what: "t:ID" / "p:ID"."""
+    with locked_check_keep(plugin_dir) as data:
+        have = data.get(key, [])
+        if keep and what not in have:
+            data[key] = have + [what]
+        elif not keep and what in have:
+            data[key] = [x for x in have if x != what]
+            if not data[key]:
+                del data[key]
+    return True
+
+
+def _check_candidates(stash, cfg, plugin_dir, excluded, fresh=False):
+    """Every tag / performer on an item that looks out of place:
+    [[key, "t" | "p", id, score, extra]]. Kept 15 minutes."""
+    path = os.path.join(plugin_dir, "check_cache.json")
+    if not fresh:
+        with contextlib.suppress(OSError, ValueError, KeyError):
+            with open(path) as f:
+                saved = json.load(f)
+            if time.time() - saved.get("at", 0) < TAG_REVIEW_CACHE_SECONDS:
+                return saved["found"], saved["names"]
+    found = []
+    have = all_item_tags(stash)
+    # tags: the look-alike vote of each item, for the tags it has
+    looks = LookIndex(stash, cfg, plugin_dir, excluded)
+    names = dict(looks.names)
+    if looks.ready():
+        examples = Counter(t for r in looks.rows for t in r[2])
+        judged = {t for t, n in examples.items() if n >= CHECK_TAG_EXAMPLES
+                  and names.get(t, "").strip().lower() not in BODY_TAG_NAMES}
+        keys = [k for k, ent in looks.cache.data.items() if ent.get("e") and have.get(k, set()) & judged]
+        pos = {k: i for i, k in enumerate(looks.cache.data)}
+        allkeys = list(looks.cache.data)
+        rows = {}
+        vecs, idx = [], {}
+        for k in set(keys) | {r[0] for r in looks.rows}:
+            if looks.cache.data.get(k, {}).get("e"):
+                idx[k] = len(vecs)
+                vecs.append(looks.cache.data[k]["e"])
+        row_at = {idx[r[0]]: r for r in looks.rows if r[0] in idx}
+        nn = look_knn(cfg, vecs, sorted(row_at), LOOK_K)
+        per_tag = defaultdict(list)  # tag -> [(score, key)] on the items that have it
+        for k in keys:
+            near = nn[idx[k]]
+            if not near:
+                continue
+            top = near[0][1] / 16129
+            out, total = defaultdict(float), 0.0
+            for j, dot in near:
+                w = math.exp((dot / 16129 - top) / LOOK_TEMP)
+                total += w
+                for t in row_at[j][2]:
+                    out[t] += w
+            for t in have[k] & judged:
+                per_tag[t].append((out.get(t, 0.0) / total if total else 0.0, k))
+        for t, lst in per_tag.items():
+            med = sorted(sc for sc, _ in lst)[len(lst) // 2]
+            if med < CHECK_TAG_TRUSTED:
+                continue  # look-alikes don't see this tag well enough to judge it
+            odd = [(sc, k) for sc, k in lst if sc < CHECK_TAG_UNDER]
+            # a real slip is a rare one; lots of them means the look-alikes
+            # just don't capture that tag (e.g. a folder of mixed things)
+            if len(odd) > max(2, len(lst) // 10):
+                continue
+            for sc, k in odd:
+                found.append([k, "t", t, round(sc, 3), examples[t]])
+    # performers: their known face against the faces found in the item
+    index = load_face_index(plugin_dir)
+    known = {pid: known_embs(e) for pid, e in index.items()}
+    known = {p: e for p, e in known.items() if e}
+    cache = FaceCache(plugin_dir)
+    for kind, query, field in (("scene", "findScenes", "scenes"), ("image", "findImages", "images")):
+        got = stash.call(f"query($f: {kind.capitalize()}FilterType) {{ {query}({kind}_filter: $f, filter: {{per_page: -1}}) {{ {field} {{ id performers {{ id name }} }} }} }}",
+                         {"f": {"performer_count": {"value": 0, "modifier": "GREATER_THAN"}}})[query][field]
+        for x in got:
+            key = f"{kind}:{x['id']}"
+            groups = (cache.data.get(key) or {}).get("f") or []
+            faces = [unq8(f) for g in groups for f in g]
+            if not faces:
+                continue
+            for p in x["performers"]:
+                names.setdefault("p" + p["id"], p["name"])
+                embs = known.get(p["id"])
+                if not embs:
+                    continue
+                best = max(_dot(a, b) for a in faces for b in embs)
+                if best < CHECK_FACE_UNDER:
+                    found.append([key, "p", p["id"], round(best, 3), len(faces)])
+    tmp = f"{path}.{os.getpid()}.tmp"  # (two requests at once mustn't share it)
+    with open(tmp, "w") as f:
+        json.dump({"at": time.time(), "found": found, "names": names}, f)
+    os.replace(tmp, path)
+    return found, names
+
+
+def run_check_keep_many(plugin_dir, pairs, keep=True):
+    """Batch: many "It fits" (or their Undo) at once: [[item key, "t:ID" / "p:ID"]]."""
+    with locked_check_keep(plugin_dir) as data:
+        for key, what in pairs or []:
+            have = data.get(key, [])
+            if keep and what not in have:
+                data[key] = have + [what]
+            elif not keep and what in have:
+                data[key] = [x for x in have if x != what]
+                if not data[key]:
+                    del data[key]
+    return len(pairs or [])
+
+
+def run_check(stash, plugin_dir, limit=40, skip=(), fresh=False, group=None, only=None):
+    """Review page, "Check" tab: tags on items that their look-alikes say
+    don't fit, and performers whose face isn't in the item. Most out of
+    place first. Removing is done by the page; "It fits" is remembered."""
+    cfg = settings(stash, plugin_dir)
+    _, excluded = tag_lookup(stash, cfg, plugin_dir)
+    if only == "g":  # Galleries → Check: photos that look like none of the rest of their gallery
+        found, names = _gallery_check_candidates(stash, cfg, plugin_dir, fresh)
+    else:
+        found, names = _check_candidates(stash, cfg, plugin_dir, excluded, fresh)
+    have = all_item_tags(stash)
+    with locked_check_keep(plugin_dir) as kept:
+        kept = {k: set(v) for k, v in kept.items()}
+    skip = set(skip or ())
+    picks = []
+    for key, what, xid, sc, extra in found:
+        if group and f"{what}:{xid}" != group:
+            continue
+        if only and what != only:
+            continue  # Faces → Check: performers only; Tags → Check: tags only
+        if what == "t" and (xid in excluded or xid not in have.get(key, ())):
+            continue  # ignored now, or already taken off
+        if f"{what}:{xid}" in kept.get(key, ()) or f"{key}:{what}:{xid}" in skip:
+            continue
+        picks.append((sc, key, what, xid, extra))
+    picks.sort(key=lambda x: x[0])
+    out = []
+    for at in range(0, len(picks), 150):
+        chunk = picks[at:at + 150]
+        items = {}
+        for kind, query, field in (("scene", "findScenes", "scenes"), ("image", "findImages", "images")):
+            ids = sorted({k.split(":")[1] for _, k, _, _, _ in chunk if k.startswith(kind + ":")}, key=int)
+            if ids:
+                fields = CHECK_FIELDS[kind] + " performers { id } tags { id }" + (" galleries { id }" if kind == "image" else "")
+                items.update({f"{kind}:{x['id']}": x for x in find_by_ids(stash, query, field, ids, fields)})
+        for sc, key, what, xid, extra in chunk:
+            it = items.get(key)
+            if not it:
+                continue
+            if what == "p" and xid not in {p["id"] for p in it.get("performers") or []}:
+                continue  # already taken off
+            if what == "g" and xid not in {g["id"] for g in it.get("galleries") or []}:
+                continue
+            kind, iid = key.split(":")
+            files = it.get("files") or it.get("visual_files") or [{}]
+            link = (it.get("paths") or {}).get("screenshot" if kind == "scene" else "image") or ""
+            name = names.get(xid, xid) if what == "t" else names.get(what + xid, xid)
+            why = (f"only {round(sc * 100)}% of its 20 closest look-alikes have it ({extra} tagged items to go by)" if what == "t"
+                   else f"only {round(sc * 100)}% of its 20 closest look-alikes are in it ({extra} photos in it)" if what == "g"
+                   else f"none of the {extra} face{'s' if extra != 1 else ''} found in it look like them"
+                   + (f" (closest {round(sc * 100)}%)" if sc > 0 else ""))
+            out.append({"kind": kind, "id": iid, "what": what, "target": xid, "name": name, "score": round(sc * 100),
+                        "why": why, "title": it.get("title") or (files[0] or {}).get("basename") or "",
+                        "picture": re.sub(r"^https?://[^/]+", "", link)})
+            if len(out) >= limit:
+                break
+        if len(out) >= limit:
+            break
+    # the Batch view: one tag / performer at a time, the most first
+    per = Counter(f"{what}:{xid}" for _, _, what, xid, _ in picks)
+    groups = [{"id": gid, "name": names.get(gid[2:], gid) if gid.startswith("t:") else names.get(gid[0] + gid[2:], gid),
+               "count": c} for gid, c in per.most_common()]
+    return {"items": out, "total": len(picks), "groups": groups}
+
+
+def run_face_unreject(plugin_dir, performer_id, key):
+    """Undo a "Not them" (face review's Undo)."""
+    with locked_face_index(plugin_dir) as index:
+        entry = index.get(str(performer_id))
+        if not entry or key not in entry.get("not", []):
+            return False
+        entry["not"] = [k for k in entry["not"] if k != key]
+        return True
+
+
+def face_match_all(cfg, faces, known):
+    """The face helper's /match: [[best performer id, best, second best]]
+    for each q8 face (numpy there; plain Python here would take minutes)."""
+    body = json.dumps({"faces": faces, "known": known}).encode()
+    req = urllib.request.Request(cfg["ai"]["face_url"] + "/match", data=body, headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=300) as resp:
+            return json.loads(resp.read())["results"]
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            raise RuntimeError("the face helper is too old for face review - copy the add-on's face-helper/face_helper.py "
+                               "over the running one and restart it (see the README)")
+        raise RuntimeError(f"the face helper couldn't match faces ({e.code})")
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"can't reach the face helper at {cfg['ai']['face_url']} ({getattr(e, 'reason', e)})")
+
+
+FACE_REVIEW_FIELDS = {
+    "scene": "id title performers { id } files { basename duration } paths { screenshot }",  # duration: the times
+    "image": "id title performers { id } visual_files { ... on BaseFile { basename } } paths { thumbnail image }",
+}
+
+
+def run_face_review(stash, plugin_dir, performer=None, limit=40, skip=()):
+    """Face review page: strong face matches across the whole library (or
+    one performer) that aren't on the item yet and you haven't turned down -
+    the same bar as "add confident matches automatically": a high likeness,
+    clearly ahead of anyone else, and in a scene the best match in 2+ frames.
+    Best first. `skip`: "kind:id:performer" already shown this visit."""
+    cfg = settings(stash, plugin_dir)
+    index = load_face_index(plugin_dir)
+    known = {}
+    for pid, entry in index.items():
+        embs = [q8(e) for e in entry.get("embs", [])] + entry.get("tagged", []) + entry.get("conf", [])
+        if embs:
+            known[pid] = embs
+    if not known:
+        raise RuntimeError("no performer faces known yet - run \"Faces: learn performers' faces\"")
+    cache = FaceCache(plugin_dir)
+    if not cache.data:
+        raise RuntimeError('nothing is scanned yet - run "Faces: scan scenes and images" first')
+    faces, where = [], []  # where: (item key, picture number)
+    groups_of = {}  # item key -> how many pictures were looked at
+    for key, entry in cache.data.items():
+        groups_of[key] = len(entry.get("f", []))
+        for g, group in enumerate(entry.get("f", [])):
+            for f in group:
+                faces.append(f)
+                where.append((key, g))
+    matches = face_match_all(cfg, faces, known)
+    # per item and performer: best likeness, the face it was, the closest
+    # other performer for that face, and in how many pictures they won
+    hits = {}
+    for (key, g), f, (pid, best, second) in zip(where, faces, matches):
+        if not pid:
+            continue
+        h = hits.setdefault((key, pid), {"score": 0.0, "rival": 0.0, "emb": None, "pics": set(), "best_g": g})
+        h["pics"].add(g)
+        if best > h["score"]:
+            h["score"], h["rival"], h["emb"], h["best_g"] = best, second, f, g
+    floor = cfg["ai"]["face_auto_min"]
+    want = str(performer) if performer else None
+    skip = set(skip or ())
+    tagged = {}  # item key -> performer ids already on it
+    for kind, query, field in (("scene", "findScenes", "scenes"), ("image", "findImages", "images")):
+        got = stash.call(f"{{ {query}(filter: {{per_page: -1}}) {{ {field} {{ id performers {{ id }} }} }} }}")[query][field]
+        tagged.update({f"{kind}:{x['id']}": {p["id"] for p in x["performers"]} for x in got})
+    strong = []
+    for (key, pid), h in hits.items():
+        kind, iid = key.split(":")
+        if want and pid != want:
+            continue
+        if h["score"] < floor + (0.05 if kind == "image" else 0) or h["score"] - h["rival"] < FACE_MARGIN:
+            continue
+        if kind == "scene" and len(h["pics"]) < 2:
+            continue
+        if key in (index.get(pid) or {}).get("not", []) or f"{key}:{pid}" in skip or pid in tagged.get(key, ()):
+            continue
+        strong.append((h["score"], kind, iid, pid, h))
+    strong.sort(key=lambda x: -x[0])
+    # drop the ones already tagged with them (checked on the best few only)
+    out = []
+    for at in range(0, len(strong), 200):
+        chunk = strong[at:at + 200]
+        items = {}
+        for kind, query, field in (("scene", "findScenes", "scenes"), ("image", "findImages", "images")):
+            ids = sorted({iid for _, k, iid, _, _ in chunk if k == kind}, key=int)
+            if ids:
+                got = find_by_ids(stash, query, field, ids, f"{FACE_REVIEW_FIELDS[kind]}")
+                items.update({(kind, x["id"]): x for x in got})
+        for score, kind, iid, pid, h in chunk:
+            it = items.get((kind, iid))
+            if not it or pid in {p["id"] for p in it.get("performers") or []}:
+                continue
+            files = it.get("files") or it.get("visual_files") or [{}]
+            # a scene: when they're seen (the frames the face scan looked at,
+            # FACE_FRAME_POINTS of the length - only if it got all of them, so
+            # the pictures line up with those points)
+            times, best_at = [], None
+            dur = (files[0] or {}).get("duration") or 0
+            if kind == "scene" and dur and groups_of.get(f"{kind}:{iid}") == len(FACE_FRAME_POINTS):
+                times = [round(dur * FACE_FRAME_POINTS[g]) for g in sorted(h["pics"])]
+                best_at = round(dur * FACE_FRAME_POINTS[h["best_g"]])
+            out.append({
+                "times": times, "best_at": best_at,
+                "kind": kind, "id": iid, "performer": pid, "name": (index.get(pid) or {}).get("name", ""),
+                "score": round(score * 100), "rival": round(h["rival"] * 100), "pictures": len(h["pics"]),
+                "emb": h["emb"], "title": it.get("title") or (files[0] or {}).get("basename") or "",
+                "picture": (it.get("paths") or {}).get("screenshot") if kind == "scene" else (it.get("paths") or {}).get("image"),
+                "others": len(it.get("performers") or []),
+            })
+            if len(out) >= limit:
+                break
+        if len(out) >= limit:
+            break
+    # the Batch view: how many there are for each performer, biggest first
+    per = Counter(pid for _, _, _, pid, _ in strong)
+    groups = [{"id": pid, "name": (index.get(pid) or {}).get("name", pid), "count": c} for pid, c in per.most_common()]
+    return {"items": out, "total": len(strong), "groups": groups}
+
+
 def add_performers(stash, kind, item, ids):
     have = {p["id"] for p in item.get("performers") or []}
     mutation, input_type = AUTOTAG_UPDATE[kind]
@@ -4425,6 +6574,71 @@ def run_face_learn_tagged(stash, plugin_dir):
     log("info", f"Done: learned more faces for {grew} performer(s).")
 
 
+def run_look_similar(stash, plugin_dir, kind, item_id, limit=40):
+    """Asked by Stash Suggestions' "Similar photos" / "Suggested" rows: the
+    scenes or photos (same kind) that look most like this one, from the
+    picture fingerprints (look_items.json), with the library's average look
+    taken away so it's what's special about this one that counts. An item
+    without a fingerprint gets one now when the face helper is running (new
+    items). Nothing else is saved. {"known": bool, "items": [[id, 0-100]]}."""
+    kind = "scene" if kind in ("scene", "scenes") else "image"
+    cache = LookCache(plugin_dir)
+    key = f"{kind}:{item_id}"
+    ent = cache.new.get(key) or cache.data.get(key)
+    if not (ent and ent.get("e")):
+        with contextlib.suppress(Exception):
+            q = "findScene" if kind == "scene" else "findImage"
+            item = stash.call(f"query($id: ID!) {{ {q}(id: $id) {{ {LOOK_ITEM_FIELDS[kind]} }} }}", {"id": str(item_id)})[q]
+            if item:
+                cache.vector(stash, settings(stash, plugin_dir), kind, item)
+                cache.save()
+        ent = cache.data.get(key)
+    if not (ent and ent.get("e")):
+        return {"known": False, "items": []}
+
+    def unit(v):
+        n = math.sqrt(sum(x * x for x in v)) or 1.0
+        return [x / n for x in v]
+    raw = {k: unit(_ints(e["e"])) for k, e in cache.data.items() if k.startswith(kind + ":") and e.get("e")}
+    avg = [sum(col) / len(raw) for col in zip(*raw.values())]
+    me = unit([a - b for a, b in zip(raw[key], avg)])
+    hits = []
+    for k, v in raw.items():
+        if k != key:
+            hits.append((sum(map(operator.mul, me, unit([a - b for a, b in zip(v, avg)]))), k.split(":", 1)[1]))
+    hits.sort(reverse=True)
+    return {"known": True, "items": [[i, round(sc * 100)] for sc, i in hits[:limit]]}
+
+
+def run_face_similar(plugin_dir, performer_id, limit=60):
+    """Asked by Stash Suggestions' "Similar Performers" row: how alike other
+    performers' faces are to this one's (best pair of their known face
+    fingerprints, 0-100, the same "% alike" as elsewhere). Nothing is saved.
+    How alike faces score differs a lot from one performer to the next (how
+    many pictures of them it knows), so it also gives this performer's own
+    top-5% line ("p95") to judge by. {"known", "scores": {id: %}, "p95"}:
+    the most alike `limit` performers at or above that line."""
+    index = load_face_index(plugin_dir)
+    pid = str(performer_id)
+    mine = known_embs(index.get(pid) or {})
+    if not mine:
+        return {"known": False, "scores": {}}
+    hits = []
+    for other, entry in index.items():
+        if other == pid:
+            continue
+        theirs = known_embs(entry)
+        if not theirs:
+            continue
+        hits.append((max(_dot(x, y) for x in mine for y in theirs), other))
+    if not hits:
+        return {"known": True, "scores": {}, "p95": 100}
+    hits.sort(reverse=True)
+    p95 = round(hits[min(len(hits) - 1, len(hits) // 20)][0] * 100)
+    return {"known": True, "p95": p95,
+            "scores": {o: round(sc * 100) for sc, o in hits[:limit] if round(sc * 100) >= p95}}
+
+
 def run_face_lookalikes(stash, plugin_dir, performer_id, limit=80):
     """Asked by a performer's page: scanned scenes / images that don't have
     them but have a face that looks like them, best first. Nothing is saved."""
@@ -4482,8 +6696,7 @@ def run_face_lookalikes(stash, plugin_dir, performer_id, limit=80):
     for kind, query, field in (("scene", "findScenes", "scenes"), ("image", "findImages", "images")):
         ids = [o["id"] for o in out if o["kind"] == kind]
         if ids:
-            got = stash.call(f"query($ids: [ID!]) {{ {query}(ids: $ids, filter: {{per_page: -1}}) {{ {field} {{ id title {'files { basename }' if kind == 'scene' else 'visual_files { ... on BaseFile { basename } }'} }} }} }}",
-                             {"ids": ids})[query][field]
+            got = find_by_ids(stash, query, field, ids, f"id title {'files { basename }' if kind == 'scene' else 'visual_files { ... on BaseFile { basename } }'}")
             names = {x["id"]: x.get("title") or ((x.get("files") or x.get("visual_files") or [{}])[0] or {}).get("basename") or "" for x in got}
             for o in out:
                 if o["kind"] == kind:
@@ -4740,3 +6953,764 @@ def run_bulktag(stash, args):
             log("info", f"{verb} {tag_list} {where} the gallery {owner}")
         else:
             log("info", f"{verb} {tag_list} {where} {len(ids)} of {owner} {label}")
+
+
+# ---------------------------------------------------------------------------
+# Review page, "Studios" tab: studios to merge (names that are misreadings of
+# one another), to delete (junk or empty ones the watermark task made), and
+# to add (account names read once, and items in a gallery or folder whose
+# others all have a studio).
+
+STUDIO_REVIEW_FIELDS = ("id name aliases urls details ignore_auto_tag favorite rating100 image_path "
+                        "parent_studio { id name } child_studios { id } stash_ids { endpoint stash_id } tags { id } "
+                        "scene_count image_count gallery_count")
+STUDIO_ITEM_FIELDS = {
+    "scene": "id title studio { id name } files { path } paths { screenshot }",
+    "image": "id title studio { id name } galleries { id title } visual_files { ... on BaseFile { path } } paths { thumbnail }",
+}
+STUDIO_JUNK = re.compile(r"(?i)^(gmail|yahoo|hotmail|outlook|icloud|proton(mail)?)\b|\.(com|net|org|io|co|me|tv|xxx)$")
+STUDIO_MATE_SHARE = 0.8  # of a gallery's / folder's items with a studio, this many have the same one
+STUDIO_MATE_MIN = 0.25   # ... and at least this much of the whole gallery / folder
+
+
+def _studio_name_key(name):
+    """A studio name to compare: without a "Site: " prefix or "(platform)" ending
+    ("FansDB: Babyfooji (onlyfans)" -> babyfooji)."""
+    n = re.sub(r"^[^:]{2,20}:\s*", "", name or "")
+    n = re.sub(r"\s*\([^)]*\)\s*$", "", n)
+    return ocr_key(n)
+
+
+def _handle_like(name):
+    return bool(name) and " " not in name.strip()
+
+
+def locked_studio_review(plugin_dir):
+    return locked_json(os.path.join(plugin_dir, "studio_review.json"))
+
+
+def _studio_items(stash, sid):
+    """{"scene": [ids], "image": [ids], "gallery": [ids]} with exactly this studio."""
+    out = {}
+    flt = {"studios": {"value": [str(sid)], "modifier": "INCLUDES", "depth": 0}}
+    for kind, q, f, typ, arg in (("scene", "findScenes", "scenes", "SceneFilterType", "scene_filter"),
+                                 ("image", "findImages", "images", "ImageFilterType", "image_filter"),
+                                 ("gallery", "findGalleries", "galleries", "GalleryFilterType", "gallery_filter")):
+        out[kind] = [x["id"] for x in stash.call(
+            f"query($f: {typ}) {{ {q}({arg}: $f, filter: {{per_page: -1}}) {{ {f} {{ id }} }} }}", {"f": flt})[q][f]]
+    return out
+
+
+def _set_studio(stash, kind_ids, sid):
+    """Studio sid (None: none) on {"scene": ids, "image": ids, "gallery": ids}."""
+    for kind, ids in kind_ids.items():
+        if not ids:
+            continue
+        mut, typ = {"scene": ("bulkSceneUpdate", "BulkSceneUpdateInput"), "image": ("bulkImageUpdate", "BulkImageUpdateInput"),
+                    "gallery": ("bulkGalleryUpdate", "BulkGalleryUpdateInput")}[kind]
+        stash.call(f"mutation($i: {typ}!) {{ {mut}(input: $i) {{ id }} }}", {"i": {"ids": [str(i) for i in ids], "studio_id": sid}})
+
+
+def _keys_by_kind(keys):
+    out = {"scene": [], "image": [], "gallery": []}
+    for k in keys or []:
+        kind, _, iid = str(k).partition(":")
+        if kind in out and iid.isdigit():
+            out[kind].append(iid)
+    return out
+
+
+def _studio_made_by_scan(st):
+    """Looks like one the watermark task made: no picture, details or StashDB link."""
+    return not st.get("details") and not st.get("stash_ids") and "default=true" in (st.get("image_path") or "default=true")
+
+
+def run_studio_review(stash, plugin_dir, limit=30, skip=(), kinds=None):
+    platform_names = {v[0].lower() for v in PLATFORMS.values()}
+    studios = stash.call(f"{{ findStudios(filter: {{per_page: -1}}) {{ studios {{ {STUDIO_REVIEW_FIELDS} }} }} }}")["findStudios"]["studios"]
+    by_id = {st["id"]: st for st in studios}
+    items = {}
+    for kind, q, f in (("scene", "findScenes", "scenes"), ("image", "findImages", "images")):
+        got = stash.call(f"{{ {q}(filter: {{per_page: -1}}) {{ {f} {{ {STUDIO_ITEM_FIELDS[kind]} }} }} }}")[q][f]
+        items.update({f"{kind}:{x['id']}": x for x in got})
+    with locked_studio_review(plugin_dir) as data:
+        turned_down = set(data.get("no", []))
+    skip = set(skip or ()) | turned_down
+
+    def path_of(x):
+        return (((x.get("files") or x.get("visual_files") or [{}])[0]) or {}).get("path") or ""
+
+    def pic(key):
+        kind, iid = key.split(":")
+        x = items.get(key) or {}
+        link = (x.get("paths") or {}).get("screenshot" if kind == "scene" else "thumbnail") or ""
+        return {"key": key, "kind": kind, "id": iid, "title": x.get("title") or os.path.basename(path_of(x)),
+                "picture": re.sub(r"^https?://[^/]+", "", link)}
+
+    in_studio = defaultdict(list)
+    for k, x in items.items():
+        if x.get("studio"):
+            in_studio[x["studio"]["id"]].append(k)
+
+    def count(st):
+        return (st.get("scene_count") or 0) + (st.get("image_count") or 0) + (st.get("gallery_count") or 0)
+
+    def card(st):
+        keys = in_studio.get(st["id"], [])
+        keys = [k for k in keys if k.startswith("image:")][:4] + [k for k in keys if k.startswith("scene:")][:4]
+        return {"id": st["id"], "name": st["name"], "aliases": st.get("aliases") or [], "count": count(st),
+                "scenes": st.get("scene_count") or 0, "photos": st.get("image_count") or 0,
+                "parent": (st.get("parent_studio") or {}).get("name"), "samples": [pic(k) for k in keys[:4]]}
+
+    out = []
+    # --- merge: names that are about the same (a misreading, or case / dots)
+    names = [(st, [st["name"]] + (st.get("aliases") or [])) for st in studios
+             if st["name"].lower() not in platform_names and not st.get("child_studios")]
+    keys = {st["id"]: [_studio_name_key(n) for n in ns] for st, ns in names}
+    parent = {st["id"]: st["id"] for st, _ in names}
+
+    def root(a):
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+
+    import difflib
+    why = {}
+    for i, (a, an) in enumerate(names):
+        for b, bn in names[i + 1:]:
+            pa, pb = (a.get("parent_studio") or {}).get("id"), (b.get("parent_studio") or {}).get("id")
+            if pa and pb and pa != pb:
+                continue  # the same name on two platforms: two accounts
+            if a.get("stash_ids") and b.get("stash_ids"):
+                continue  # both from StashDB: two real studios
+            best = 0.0
+            for ka in keys[a["id"]]:
+                for kb in keys[b["id"]]:
+                    if not ka or not kb:
+                        continue
+                    if ka == kb:
+                        best = 1.0
+                    elif min(len(ka), len(kb)) >= 6 and abs(len(ka) - len(kb)) <= 2:
+                        sm = difflib.SequenceMatcher(None, ka, kb)
+                        if sm.quick_ratio() >= ALIKE_SAME:
+                            best = max(best, sm.ratio())
+            if best >= ALIKE_SAME:
+                parent[root(a["id"])] = root(b["id"])
+                why[(a["id"], b["id"])] = best
+    clusters = defaultdict(list)
+    for st, _ in names:
+        clusters[root(st["id"])].append(st)
+    for group in clusters.values():
+        if len(group) < 2:
+            continue
+        group.sort(key=lambda st: (-count(st), st["name"]))
+        sig = "m:" + ",".join(sorted(st["id"] for st in group))
+        if sig in skip:
+            continue
+        same = all(len(set(keys[st["id"]]) & set(keys[group[0]["id"]])) for st in group)
+        out.append({"sig": sig, "st": True, "type": "merge", "studios": [card(st) for st in group], "keep": group[0]["id"],
+                    "count": sum(count(st) for st in group),
+                    "reasons": ["The same name written differently" if same else "Names that look like misreadings of each other"]})
+
+    # --- delete: junk names, empty, or made from a watermark read in one item
+    for st in studios:
+        n = count(st)
+        if st["name"].lower() in platform_names or st.get("child_studios"):
+            continue
+        sig = "d:" + st["id"]
+        if sig in skip:
+            continue
+        made = _studio_made_by_scan(st)
+        reason = None
+        if made and (HANDLE_NOT_ACCOUNT.search(st["name"]) or STUDIO_JUNK.search(st["name"]) or len(ocr_key(st["name"])) < 4):
+            reason = "Looks like a website, email or repost site rather than an account"
+        elif n == 0:
+            reason = "Has nothing in it"
+        elif made and n == 1 and _handle_like(st["name"]) and (
+                not st.get("urls") or ((st.get("parent_studio") or {}).get("name") or "").lower() in platform_names):
+            reason = "Made from a watermark read in just 1 item"
+        if reason:
+            out.append({"sig": sig, "st": True, "type": "delete", "studios": [card(st)], "count": n, "reasons": [reason]})
+
+    # --- add to an existing studio: the rest of a gallery / folder has it
+    galleries = {g["id"]: g for g in stash.call(
+        "{ findGalleries(filter: {per_page: -1}) { galleries { id title studio { id } folder { path } files { path } } } }")["findGalleries"]["galleries"]}
+
+    def gallery_label(gid):
+        g = galleries.get(gid) or {}
+        path = (g.get("folder") or {}).get("path") or ((g.get("files") or [{}])[0] or {}).get("path") or ""
+        return g.get("title") or os.path.basename(path.rstrip("/\\")) or "a gallery"
+    places = defaultdict(list)  # (where, label) -> keys
+    for k, x in items.items():
+        gals = x.get("galleries") or []
+        if gals:
+            for g in gals:
+                places[("g" + g["id"], gallery_label(g["id"]))].append(k)
+        else:
+            parts = re.split(r"[\\/]", path_of(x))
+            if len(parts) > 1 and not re.search(r"\.(zip|cbz|cbr|rar|7z)$", parts[-2], re.I):
+                places[("f" + "/".join(parts[:-1]), parts[-2])].append(k)
+    mates = defaultdict(list)  # studio id -> [(where, label, keys missing it, have it, of)]
+    for (where, label), ks in places.items():
+        have = Counter(items[k]["studio"]["id"] for k in ks if items[k].get("studio"))
+        missing = [k for k in ks if not items[k].get("studio")]
+        if not have or not missing:
+            continue
+        sid, c = have.most_common(1)[0]
+        if c < 2 or c < STUDIO_MATE_SHARE * sum(have.values()) or c < STUDIO_MATE_MIN * len(ks) or sid not in by_id:
+            continue
+        mates[sid].append((where, label, missing, c, len(ks)))
+    for sid, places_of in mates.items():
+        places_of.sort(key=lambda x: -len(x[2]))
+        sig = f"s:{sid}:" + hashlib.sha1("|".join(sorted(w for w, *_ in places_of)).encode()).hexdigest()[:12]
+        if sig in skip:
+            continue
+        missing = [k for _, _, ks, _, _ in places_of for k in ks]
+        missing = list(dict.fromkeys(missing))
+        gals = [w[1:] for w, *_ in places_of if w.startswith("g") and not (galleries.get(w[1:]) or {}).get("studio")]
+        where, label, ks, c, of = places_of[0]
+        kind = "gallery" if where.startswith("g") else "folder"
+        reason = f"{c} of the {of} in the {kind} \"{label}\" are {by_id[sid]['name']}"
+        if len(places_of) > 1:
+            reason = f"Most of {len(places_of)} galleries / folders are {by_id[sid]['name']} (e.g. \"{label}\": {c} of {of})"
+        out.append({"sig": sig, "st": True, "type": "join", "studio": card(by_id[sid]), "keys": missing + [f"gallery:{g}" for g in gals],
+                    "count": len(missing), "samples": [pic(k) for k in missing[:6]], "all": [pic(k) for k in missing],
+                    "places": [{"name": lbl, "missing": len(m)} for _, lbl, m, _, _ in places_of[:12]],
+                    "reasons": [reason, f"{len(missing)} without a studio" + (f", and {len(gals)} galler{'y' if len(gals) == 1 else 'ies'}" if gals else "")]})
+
+    # --- new studio: an account name read in a watermark only once so far
+    try:
+        with open(os.path.join(plugin_dir, "handle_pending.json")) as fh:
+            pending = json.load(fh)
+    except (OSError, ValueError):
+        pending = {}
+    ctx_names = {}
+    for st in studios:
+        if st["name"].lower() not in platform_names:
+            for n in [st["name"]] + (st.get("aliases") or []):
+                ctx_names.setdefault(n, st)
+    for pkey, e in pending.items():
+        ks = [f"scene:{i}" for i in e.get("scenes", [])] + [f"image:{i}" for i in e.get("images", [])]
+        ks = [k for k in ks if k in items and not items[k].get("studio")]
+        if not ks:
+            continue
+        spelling = max((e.get("spellings") or {pkey: 1}).items(), key=lambda kv: kv[1])[0]
+        if clean_handle(spelling) is None or len(ocr_key(spelling)) < 4:
+            continue
+        near = close_name(list(ctx_names), spelling)
+        if near:
+            st = ctx_names[near]
+            sig = f"s:{st['id']}:p{pkey}"
+            if sig in skip:
+                continue
+            out.append({"sig": sig, "st": True, "type": "join", "studio": card(st), "keys": ks, "count": len(ks), "pending": pkey,
+                        "samples": [pic(k) for k in ks[:6]], "all": [pic(k) for k in ks],
+                        "reasons": [f"Watermark read as {plat_name(e.get('platform'))} @{spelling}, close to {st['name']}"]})
+            continue
+        sig = "a:" + pkey
+        if sig in skip:
+            continue
+        # studios you have whose name is most like it, for "…or add to a studio you already have"
+        near, seen_ids = [], set()
+        for sc, n in sorted(((alike(n, spelling), n) for n in ctx_names), reverse=True):
+            st = ctx_names[n]
+            if sc < 0.5 or len(near) >= 6:
+                break
+            if st["id"] not in seen_ids:
+                seen_ids.add(st["id"])
+                near.append({"id": st["id"], "name": st["name"], "score": round(sc * 100), "count": count(st),
+                             "via": n if n != st["name"] else None})
+        out.append({"sig": sig, "st": True, "type": "add", "name": spelling, "platform": e.get("platform"), "pending": pkey, "near": near,
+                    "keys": ks, "count": len(ks), "samples": [pic(k) for k in ks[:6]], "all": [pic(k) for k in ks],
+                    "reasons": [f"Watermark read as {plat_name(e.get('platform'))} @{spelling} in {len(ks)} item{'s' if len(ks) != 1 else ''}"]})
+
+    if kinds:
+        out = [x for x in out if x["type"] in kinds]
+    order = {"merge": 0, "delete": 1, "join": 2, "add": 3}
+    out.sort(key=lambda x: (order[x["type"]], -x["count"] if x["type"] != "delete" else x["count"]))
+    return {"items": out[:limit], "total": len(out),
+            "kinds": dict(Counter(x["type"] for x in out))}
+
+
+def _studio_snapshot(stash, st):
+    """Enough to make a deleted studio again (Undo): its details, picture and items."""
+    snap = {"name": st["name"], "aliases": st.get("aliases") or [], "urls": st.get("urls") or [],
+            "details": st.get("details"), "ignore_auto_tag": st.get("ignore_auto_tag"), "favorite": st.get("favorite"),
+            "rating100": st.get("rating100"), "parent_id": (st.get("parent_studio") or {}).get("id"),
+            "tag_ids": [t["id"] for t in st.get("tags") or []],
+            "stash_ids": [{"endpoint": s["endpoint"], "stash_id": s["stash_id"]} for s in st.get("stash_ids") or []],
+            "items": _studio_items(stash, st["id"])}
+    if "default=true" not in (st.get("image_path") or "default=true"):
+        with contextlib.suppress(Exception):
+            data, ctype = stash.fetch(st["image_path"])
+            if ctype.startswith("image/") and len(data) < 8 * 1024 * 1024:
+                snap["image"] = f"data:{ctype};base64," + base64.b64encode(data).decode()
+    return snap
+
+
+def _studio_restore(stash, snap):
+    inp = {k: snap[k] for k in ("name", "aliases", "urls", "details", "ignore_auto_tag", "favorite", "rating100",
+                                "parent_id", "tag_ids", "stash_ids", "image") if snap.get(k) not in (None, [], "")}
+    st = stash.call("mutation($i: StudioCreateInput!) { studioCreate(input: $i) { id } }", {"i": inp})["studioCreate"]
+    _set_studio(stash, snap["items"], st["id"])
+    return st["id"]
+
+
+def _get_studio(stash, sid):
+    st = stash.call(f"query($id: ID!) {{ findStudio(id: $id) {{ {STUDIO_REVIEW_FIELDS} }} }}", {"id": str(sid)})["findStudio"]
+    if not st:
+        raise RuntimeError(f"studio {sid} is gone")
+    return st
+
+
+def _drop_pending(plugin_dir, pkey):
+    path = os.path.join(plugin_dir, "handle_pending.json")
+    if not pkey:
+        return None
+    with locked_json(path) as pend:
+        return pend.pop(pkey, None)
+
+
+def run_studio_apply(stash, plugin_dir, action, data):
+    """Does what a Studios card says. Returns what Undo needs."""
+    data = data or {}
+    if action == "no":
+        with locked_studio_review(plugin_dir) as d:
+            d["no"] = sorted(set(d.get("no", [])) | {data["sig"]})
+        return {"action": "no", "sig": data["sig"]}
+    if action == "merge":
+        keep = _get_studio(stash, data["keep"])
+        removed = []
+        aliases = list(keep.get("aliases") or [])
+        urls = list(keep.get("urls") or [])
+        sids = [{"endpoint": x["endpoint"], "stash_id": x["stash_id"]} for x in keep.get("stash_ids") or []]
+        for sid in data.get("others") or []:
+            if str(sid) == str(keep["id"]):
+                continue
+            st = _get_studio(stash, sid)
+            snap = _studio_snapshot(stash, st)
+            _set_studio(stash, snap["items"], keep["id"])
+            left = _studio_items(stash, sid)
+            if any(left.values()):
+                raise RuntimeError(f"couldn't move everything off {st['name']}")
+            stash.call("mutation($i: StudioDestroyInput!) { studioDestroy(input: $i) }", {"i": {"id": str(sid)}})
+            removed.append(snap)
+            aliases += [st["name"]] + (st.get("aliases") or [])
+            urls += [u for u in st.get("urls") or [] if u not in urls]
+            sids += [x for x in snap["stash_ids"] if x not in sids]
+        name = (data.get("name") or "").strip() or keep["name"]
+        seen, al = {name.lower()}, []
+        for a in aliases + ([keep["name"]] if name != keep["name"] else []):
+            if a and a.lower() not in seen:
+                seen.add(a.lower())
+                al.append(a)
+        stash.call("mutation($i: StudioUpdateInput!) { studioUpdate(input: $i) { id } }",
+                   {"i": {"id": keep["id"], "name": name, "aliases": al, "urls": urls, "stash_ids": sids}})
+        return {"action": "merge", "keep": keep["id"],
+                "before": {"name": keep["name"], "aliases": keep.get("aliases") or [], "urls": keep.get("urls") or [],
+                           "stash_ids": [{"endpoint": x["endpoint"], "stash_id": x["stash_id"]} for x in keep.get("stash_ids") or []]},
+                "removed": removed}
+    if action == "delete":
+        st = _get_studio(stash, data["id"])
+        snap = _studio_snapshot(stash, st)
+        stash.call("mutation($i: StudioDestroyInput!) { studioDestroy(input: $i) }", {"i": {"id": st["id"]}})
+        return {"action": "delete", "removed": [snap]}
+    if action in ("add", "join"):
+        kinds = _keys_by_kind(data.get("keys"))
+        # only the ones still without a studio
+        todo = {}
+        for kind, q, f in (("scene", "findScenes", "scenes"), ("image", "findImages", "images")):
+            got = find_by_ids(stash, q, f, kinds[kind], "id studio { id }") if kinds[kind] else []
+            todo[kind] = [x["id"] for x in got if not x.get("studio")]
+        todo["gallery"] = []
+        for gid in kinds["gallery"]:
+            g = stash.call("query($id: ID!) { findGallery(id: $id) { id studio { id } } }", {"id": gid})["findGallery"]
+            if g and not g.get("studio"):
+                todo["gallery"].append(g["id"])
+        if not any(todo.values()):
+            raise RuntimeError("they all have a studio by now")
+        made = None
+        if action == "add":
+            name = clean_handle(data.get("name") or "") or (data.get("name") or "").strip()
+            if not name:
+                raise RuntimeError("give it a name first")
+            studios = stash.call("{ findStudios(filter: {per_page: -1}) { studios { id name aliases urls } } }")["findStudios"]["studios"]
+            before = {st["id"] for st in studios}
+            st, _ = studio_for_handle(stash, studios, data.get("platform") or None, name, True)
+            sid = st["id"]
+            made = [s["id"] for s in studios if s["id"] not in before]
+        else:
+            sid = str(data["studio"])
+        _set_studio(stash, todo, sid)
+        alias_added = None
+        alias = (data.get("alias") or "").strip()
+        if action == "join" and alias:
+            st = _get_studio(stash, sid)
+            if alias.lower() not in [st["name"].lower()] + [a.lower() for a in st.get("aliases") or []]:
+                with contextlib.suppress(Exception):  # (taken by another studio's name: skip it)
+                    stash.call("mutation($i: StudioUpdateInput!) { studioUpdate(input: $i) { id } }",
+                               {"i": {"id": sid, "aliases": (st.get("aliases") or []) + [alias]}})
+                    alias_added = alias
+        pend = _drop_pending(plugin_dir, data.get("pending"))
+        return {"action": action, "studio": sid, "set": todo, "made": made or [], "pending": [data.get("pending"), pend],
+                "alias": alias_added}
+    raise RuntimeError(f"unknown studio action {action!r}")
+
+
+def run_studio_undo(stash, plugin_dir, undo):
+    action = undo.get("action")
+    if action == "no":
+        with locked_studio_review(plugin_dir) as d:
+            d["no"] = [s for s in d.get("no", []) if s != undo["sig"]]
+    elif action in ("merge", "delete"):
+        if action == "merge":
+            # the kept studio as it was first (its name, aliases and links free again)
+            stash.call("mutation($i: StudioUpdateInput!) { studioUpdate(input: $i) { id } }",
+                       {"i": {"id": undo["keep"], **undo["before"]}})
+        for snap in undo.get("removed") or []:
+            _studio_restore(stash, snap)  # (takes its items back off the kept one)
+    elif action in ("add", "join"):
+        _set_studio(stash, undo.get("set") or {}, None)
+        if undo.get("alias"):
+            with contextlib.suppress(Exception):
+                st = _get_studio(stash, undo["studio"])
+                stash.call("mutation($i: StudioUpdateInput!) { studioUpdate(input: $i) { id } }",
+                           {"i": {"id": st["id"], "aliases": [a for a in st.get("aliases") or [] if a != undo["alias"]]}})
+        for sid in reversed(undo.get("made") or []):
+            if not any(_studio_items(stash, sid).values()):
+                with contextlib.suppress(Exception):
+                    stash.call("mutation($i: StudioDestroyInput!) { studioDestroy(input: $i) }", {"i": {"id": str(sid)}})
+        pkey, pend = (undo.get("pending") or [None, None])
+        if pkey and pend:
+            with locked_json(os.path.join(plugin_dir, "handle_pending.json")) as p:
+                p.setdefault(pkey, pend)
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Review page, "Galleries" tab. Suggested: loose photos (in no gallery) that
+# belong in one - they look like its photos, or sit in the folder its photos
+# are in - and performers / a studio most of a gallery's photos have but the
+# gallery doesn't. Check: photos in a gallery that look like none of the rest
+# (on the Check cards, what "g"). New: folders of loose photos that could be
+# a gallery.
+
+GALLERY_TRUSTED = 0.4   # a gallery whose photos mostly look like each other (median share)
+GALLERY_ODD = 0.05      # a photo in it whose look-alikes are under 5% in that gallery
+GALLERY_JOIN = 0.6      # a loose photo whose look-alikes are 60%+ in one gallery
+GALLERY_MIN = 8         # photos (with a fingerprint) a gallery needs to be judged
+GALLERY_NEW_MIN = 5     # loose photos in one folder to suggest a gallery
+GALLERY_FOLDER_SHARE = 0.8
+GALLERY_IMAGE_FIELDS = ("id title galleries { id } performers { id name } studio { id name } "
+                        "visual_files { ... on BaseFile { path } } paths { thumbnail }")
+
+
+def locked_gallery_review(plugin_dir):
+    return locked_json(os.path.join(plugin_dir, "gallery_review.json"))
+
+
+def _gallery_world(stash):
+    images = {f"image:{x['id']}": x for x in stash.call(
+        f"{{ findImages(filter: {{per_page: -1}}) {{ images {{ {GALLERY_IMAGE_FIELDS} }} }} }}")["findImages"]["images"]}
+    galleries = {g["id"]: g for g in stash.call(
+        "{ findGalleries(filter: {per_page: -1}) { galleries { id title image_count folder { path } files { path } "
+        "studio { id name } performers { id name } } } }")["findGalleries"]["galleries"]}
+    return images, galleries
+
+
+def _gallery_title(g):
+    path = (g.get("folder") or {}).get("path") or ((g.get("files") or [{}])[0] or {}).get("path") or ""
+    return g.get("title") or os.path.basename(path.rstrip("/\\")) or f"Gallery {g['id']}"
+
+
+def _gallery_shares(stash, cfg, plugin_dir, images, fresh=False):
+    """{image key: {gallery id: share}}: how much of each photo's 20 closest
+    look-alikes (weighted, the closest counting most) are in each gallery.
+    Only photos with a look-alike fingerprint. Kept 15 minutes."""
+    path = os.path.join(plugin_dir, "gallery_look_cache.json")
+    if not fresh:
+        with contextlib.suppress(OSError, ValueError, KeyError):
+            with open(path) as f:
+                saved = json.load(f)
+            if time.time() - saved.get("at", 0) < TAG_REVIEW_CACHE_SECONDS:
+                return saved["share"]
+    cache = LookCache(plugin_dir)
+    keys = [k for k in images if (cache.data.get(k) or {}).get("e")]
+    if not keys:
+        raise RuntimeError('no photos have look-alike fingerprints yet - run "Look-alike tags: scan scenes and images" first')
+    vecs = [cache.data[k]["e"] for k in keys]
+    nn = look_knn(cfg, vecs, list(range(len(keys))), LOOK_K + 1)
+    gal_of = [[g["id"] for g in images[k].get("galleries") or []] for k in keys]
+    share = {}
+    for i, near in enumerate(nn):
+        near = [(j, d) for j, d in near if j != i][:LOOK_K]
+        if not near:
+            continue
+        top = near[0][1] / 16129
+        out, total = defaultdict(float), 0.0
+        for j, dot in near:
+            w = math.exp((dot / 16129 - top) / LOOK_TEMP)
+            total += w
+            for g in gal_of[j]:
+                out[g] += w
+        mine = {g: round(v / total, 3) for g, v in out.items() if total and v / total >= 0.02}
+        for g in gal_of[i]:
+            mine.setdefault(g, round(out.get(g, 0.0) / total, 3) if total else 0.0)
+        share[keys[i]] = mine
+    tmp = f"{path}.{os.getpid()}.tmp"
+    with open(tmp, "w") as f:
+        json.dump({"at": time.time(), "share": share}, f)
+    os.replace(tmp, path)
+    return share
+
+
+def _gallery_trust(images, share):
+    """{gallery id: (median share of its own photos, their [(share, key)])} -
+    galleries whose photos look alike enough to be judged by look-alikes."""
+    members = defaultdict(list)
+    for k, s in share.items():
+        for g in images[k].get("galleries") or []:
+            members[g["id"]].append((s.get(g["id"], 0.0), k))
+    out = {}
+    for g, lst in members.items():
+        if len(lst) >= GALLERY_MIN:
+            out[g] = (sorted(sc for sc, _ in lst)[len(lst) // 2], lst)
+    return out
+
+
+def _gallery_check_candidates(stash, cfg, plugin_dir, fresh=False):
+    """Check cards for galleries: [[key, "g", gallery id, share, photos]] and names. Kept 15 minutes."""
+    path = os.path.join(plugin_dir, "gallery_check_cache.json")
+    if not fresh:
+        with contextlib.suppress(OSError, ValueError, KeyError):
+            with open(path) as f:
+                saved = json.load(f)
+            if time.time() - saved.get("at", 0) < TAG_REVIEW_CACHE_SECONDS:
+                return saved["found"], saved["names"]
+    images, galleries = _gallery_world(stash)
+    share = _gallery_shares(stash, cfg, plugin_dir, images, fresh)
+    found = []
+    for g, (med, lst) in _gallery_trust(images, share).items():
+        if med < GALLERY_TRUSTED:
+            continue  # a gallery of mixed pictures: look-alikes can't judge it
+        odd = [(sc, k) for sc, k in lst if sc < GALLERY_ODD]
+        if len(odd) > max(2, len(lst) // 10):
+            continue
+        found += [[k, "g", g, sc, len(lst)] for sc, k in odd]
+    names = {"g" + gid: _gallery_title(g) for gid, g in galleries.items()}
+    tmp = f"{path}.{os.getpid()}.tmp"
+    with open(tmp, "w") as f:
+        json.dump({"at": time.time(), "found": found, "names": names}, f)
+    os.replace(tmp, path)
+    return found, names
+
+
+def run_gallery_review(stash, plugin_dir, limit=30, skip=(), kinds=None, fresh=False):
+    cfg = settings(stash, plugin_dir)
+    images, galleries = _gallery_world(stash)
+    with locked_gallery_review(plugin_dir) as data:
+        skip = set(skip or ()) | set(data.get("no", []))
+    kinds = set(kinds or ("gjoin", "gdetails", "gnew"))
+
+    def path_of(x):
+        return (((x.get("visual_files") or [{}])[0]) or {}).get("path") or ""
+
+    def folder_of(x):
+        return os.path.dirname(path_of(x))
+
+    def pic(k):
+        x = images[k]
+        return {"key": k, "kind": "image", "id": x["id"], "title": x.get("title") or os.path.basename(path_of(x)),
+                "picture": re.sub(r"^https?://[^/]+", "", (x.get("paths") or {}).get("thumbnail") or "")}
+
+    def gcard(g):
+        return {"id": g["id"], "name": _gallery_title(g), "count": g.get("image_count") or 0}
+
+    members = defaultdict(list)
+    for k, x in images.items():
+        for g in x.get("galleries") or []:
+            members[g["id"]].append(k)
+    loose = [k for k, x in images.items() if not x.get("galleries")]
+    out = []
+
+    # --- add loose photos to a gallery: they look like it, or they're in its folder
+    if "gjoin" in kinds:
+        votes = defaultdict(dict)  # gallery -> key -> reason
+        try:
+            share = _gallery_shares(stash, cfg, plugin_dir, images, fresh)
+            trust = _gallery_trust(images, share)
+            for k in loose:
+                for g, sc in (share.get(k) or {}).items():
+                    if sc >= GALLERY_JOIN and trust.get(g, (0,))[0] >= GALLERY_TRUSTED:
+                        votes[g][k] = sc
+        except RuntimeError as e:
+            log("debug", f"gallery look-alikes skipped: {e}")
+        folders = defaultdict(list)
+        for k in loose:
+            folders[folder_of(images[k])].append(k)
+        by_folder = {}
+        # which galleries the photos in each folder are in: a folder whose
+        # photos went to several galleries (a camera roll sorted by hand)
+        # says nothing about where the rest go
+        folder_gals = defaultdict(Counter)
+        for k, x in images.items():
+            for g in x.get("galleries") or []:
+                folder_gals[folder_of(x)][g["id"]] += 1
+        for gid, ks in members.items():
+            g = galleries.get(gid) or {}
+            if g.get("folder") or g.get("files") or len(ks) < 3:
+                continue  # a folder / zip gallery has its whole folder already
+            top, n = Counter(folder_of(images[k]) for k in ks).most_common(1)[0]
+            fg = folder_gals.get(top) or Counter()
+            if (top and n >= GALLERY_FOLDER_SHARE * len(ks) and fg[gid] >= GALLERY_FOLDER_SHARE * sum(fg.values())
+                    and len(folders.get(top, [])) <= len(ks)):
+                for k in folders.get(top, []):
+                    votes[gid].setdefault(k, None)
+                by_folder[gid] = top
+        for gid, ks in votes.items():
+            g = galleries.get(gid)
+            if not g or not ks:
+                continue
+            ordered = sorted(ks, key=lambda k: -(ks[k] or 0))
+            sig = f"gj:{gid}:" + hashlib.sha1("|".join(sorted(ordered)).encode()).hexdigest()[:10]
+            if sig in skip:
+                continue
+            looked = sum(1 for k in ordered if ks[k] is not None)
+            reasons = []
+            if looked:
+                reasons.append(f"{looked} look{'s' if looked == 1 else ''} like its photos (60%+ of their closest look-alikes are in it)")
+            if gid in by_folder:
+                reasons.append(f"{sum(1 for k in ordered if ks[k] is None) or len(ordered)} in the folder its photos are in")
+            out.append({"sig": sig, "gal": True, "type": "gjoin", "gallery": gcard(g), "keys": ordered, "count": len(ordered),
+                        "samples": [pic(k) for k in ordered[:6]], "all": [pic(k) for k in ordered], "reasons": reasons})
+
+    # --- performers / studio most of a gallery's photos have
+    if "gdetails" in kinds:
+        for gid, ks in members.items():
+            g = galleries.get(gid)
+            if not g or len(ks) < 3:
+                continue
+            have = {p["id"] for p in g.get("performers") or []}
+            pc = Counter((p["id"], p["name"]) for k in ks for p in images[k].get("performers") or [])
+            perfs = [{"id": pid, "name": nm, "on": c} for (pid, nm), c in pc.most_common()
+                     if pid not in have and c >= max(3, len(ks) / 2)]
+            studio = None
+            if not g.get("studio"):
+                sc = Counter((images[k]["studio"]["id"], images[k]["studio"]["name"]) for k in ks if images[k].get("studio"))
+                if sc:
+                    (sid, snm), c = sc.most_common(1)[0]
+                    if c >= GALLERY_FOLDER_SHARE * len(ks):
+                        studio = {"id": sid, "name": snm, "on": c}
+            if not perfs and not studio:
+                continue
+            sig = f"gd:{gid}:" + ",".join(p["id"] for p in perfs) + (f":s{studio['id']}" if studio else "")
+            if sig in skip:
+                continue
+            out.append({"sig": sig, "gal": True, "type": "gdetails", "gallery": gcard(g), "performers": perfs, "studio": studio,
+                        "count": len(ks), "samples": [pic(k) for k in ks[:6]], "all": [pic(k) for k in ks],
+                        "reasons": [f"Of its {len(ks)} photos: " + ", ".join(
+                            [f"{p['name']} is on {p['on']}" for p in perfs] + ([f"{studio['name']} on {studio['on']}"] if studio else []))]})
+
+    # --- a new gallery: a folder of loose photos
+    if "gnew" in kinds:
+        gal_folders = {((g.get("folder") or {}).get("path") or "").rstrip("/") for g in galleries.values()}
+        folders = defaultdict(list)
+        for k in loose:
+            folders[folder_of(images[k])].append(k)
+        for folder, ks in folders.items():
+            if len(ks) < GALLERY_NEW_MIN or not folder or folder.rstrip("/") in gal_folders:
+                continue
+            sig = "gn:" + hashlib.sha1(folder.encode()).hexdigest()[:12]
+            if sig in skip:
+                continue
+            ks.sort(key=lambda k: path_of(images[k]))
+            sc = Counter((images[k]["studio"]["id"], images[k]["studio"]["name"]) for k in ks if images[k].get("studio"))
+            studio = None
+            if sc:
+                (sid, snm), c = sc.most_common(1)[0]
+                if c >= GALLERY_FOLDER_SHARE * len(ks):
+                    studio = {"id": sid, "name": snm}
+            pc = Counter((p["id"], p["name"]) for k in ks for p in images[k].get("performers") or [])
+            perfs = [{"id": pid, "name": nm} for (pid, nm), c in pc.most_common(4) if c >= len(ks) / 2]
+            name = re.sub(r"[_]+", " ", os.path.basename(folder)).strip()
+            out.append({"sig": sig, "gal": True, "type": "gnew", "name": name, "folder": folder, "studio": studio, "performers": perfs,
+                        "keys": ks, "count": len(ks), "samples": [pic(k) for k in ks[:6]], "all": [pic(k) for k in ks],
+                        "reasons": [f"{len(ks)} photos in no gallery, all in the folder \"{os.path.basename(folder)}\""]
+                        + ([f"with {', '.join(p['name'] for p in perfs)}"] if perfs else [])})
+
+    order = {"gjoin": 0, "gdetails": 1, "gnew": 2}
+    out.sort(key=lambda x: (order[x["type"]], -x["count"]))
+    return {"items": out[:limit], "total": len(out)}
+
+
+def _gallery_get(stash, gid):
+    g = stash.call("query($id: ID!) { findGallery(id: $id) { id title studio { id } performers { id } } }", {"id": str(gid)})["findGallery"]
+    if not g:
+        raise RuntimeError(f"gallery {gid} is gone")
+    return g
+
+
+def run_gallery_apply(stash, plugin_dir, action, data):
+    data = data or {}
+    if action == "no":
+        with locked_gallery_review(plugin_dir) as d:
+            d["no"] = sorted(set(d.get("no", [])) | {data["sig"]})
+        return {"action": "no", "sig": data["sig"]}
+    ids = _keys_by_kind(data.get("keys"))["image"]
+    if action == "gjoin":
+        gid = str(data["gallery"])
+        got = find_by_ids(stash, "findImages", "images", ids, "id galleries { id }")
+        todo = [x["id"] for x in got if gid not in {g["id"] for g in x.get("galleries") or []}]
+        if not todo:
+            raise RuntimeError("they're all in it already")
+        stash.call("mutation($i: GalleryAddInput!) { addGalleryImages(input: $i) }", {"i": {"gallery_id": gid, "image_ids": todo}})
+        return {"action": "gjoin", "gallery": gid, "added": todo}
+    if action == "gdetails":
+        g = _gallery_get(stash, data["gallery"])
+        before = {"performer_ids": [p["id"] for p in g.get("performers") or []],
+                  "studio_id": (g.get("studio") or {}).get("id")}
+        inp = {"id": g["id"]}
+        add = [str(p) for p in data.get("performers") or [] if str(p) not in before["performer_ids"]]
+        if add:
+            inp["performer_ids"] = before["performer_ids"] + add
+        if data.get("studio") and not before["studio_id"]:
+            inp["studio_id"] = str(data["studio"])
+        if len(inp) == 1:
+            raise RuntimeError("nothing left to add")
+        stash.call("mutation($i: GalleryUpdateInput!) { galleryUpdate(input: $i) { id } }", {"i": inp})
+        return {"action": "gdetails", "gallery": g["id"], "before": before}
+    if action == "gnew":
+        title = (data.get("name") or "").strip()
+        if not title:
+            raise RuntimeError("give it a name first")
+        got = find_by_ids(stash, "findImages", "images", ids, "id")
+        if not got:
+            raise RuntimeError("those photos are gone")
+        inp = {"title": title}
+        if data.get("studio"):
+            inp["studio_id"] = str(data["studio"])
+        if data.get("performers"):
+            inp["performer_ids"] = [str(p) for p in data["performers"]]
+        g = stash.call("mutation($i: GalleryCreateInput!) { galleryCreate(input: $i) { id } }", {"i": inp})["galleryCreate"]
+        stash.call("mutation($i: GalleryAddInput!) { addGalleryImages(input: $i) }",
+                   {"i": {"gallery_id": g["id"], "image_ids": [x["id"] for x in got]}})
+        return {"action": "gnew", "gallery": g["id"]}
+    raise RuntimeError(f"unknown gallery action {action!r}")
+
+
+def run_gallery_undo(stash, plugin_dir, undo):
+    action = undo.get("action")
+    if action == "no":
+        with locked_gallery_review(plugin_dir) as d:
+            d["no"] = [s for s in d.get("no", []) if s != undo["sig"]]
+    elif action == "gjoin":
+        stash.call("mutation($i: GalleryRemoveInput!) { removeGalleryImages(input: $i) }",
+                   {"i": {"gallery_id": undo["gallery"], "image_ids": undo["added"]}})
+    elif action == "gdetails":
+        stash.call("mutation($i: GalleryUpdateInput!) { galleryUpdate(input: $i) { id } }",
+                   {"i": {"id": undo["gallery"], **undo["before"]}})
+    elif action == "gnew":
+        stash.call("mutation($i: GalleryDestroyInput!) { galleryDestroy(input: $i) }",
+                   {"i": {"ids": [undo["gallery"]], "delete_file": False, "delete_generated": False}})
+    return True

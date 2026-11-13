@@ -1,6 +1,6 @@
 name: Better Tagging Tools
-description: Tags each performer and studio with the tags used most often in their scenes, images and galleries, and each gallery with its images' most used tags, shows one-click "Suggested tags" and "Title ideas" when editing, and adds "Bulk tag" buttons on performer and gallery pages. Can also tag every image in a gallery with the gallery's name, give tags without a picture one from your library, keep tag names consistently capitalised, auto tag from file names, fill in dates and titles from file names, and give scenes a studio from the account link in their file name. No AI - for that, add Better Tagging AI (works with or without this plugin).
-version: "2.2"
+description: Tags each performer and studio with the tags used most often in their scenes, images and galleries, and each gallery with its images' most used tags, shows one-click "Suggested tags" and "Title ideas" when editing, adds "Bulk tag" buttons on performer and gallery pages, and can tag a studio's items with the studio's tags. Can also tag every image in a gallery with the gallery's name, give tags without a picture one from your library, keep tag names consistently capitalised, auto tag from file names, fill in dates and titles from file names, and give scenes a studio from the account link in their file name. No AI - for that, add Better Tagging AI (works with or without this plugin).
+version: "2.3"
 url: https://github.com/OpenSourceLuffy/stash-plugins/tree/main/plugins/BetterTaggingTools
 exec:
   - python
@@ -50,6 +50,14 @@ tasks:
     description: The same for galleries - counts the tags on each gallery's images and adds the most used ones to the gallery. Gallery-name tags never count.
     defaultArgs:
       mode: apply_galleries
+  - name: Preview studio tags on their items (no changes)
+    description: Writes what "Tag studios' items with the studio's tags" would add to the log, without changing anything.
+    defaultArgs:
+      mode: studiotags_preview
+  - name: Tag studios' items with the studio's tags
+    description: Gives every scene, image and gallery of each studio the tags on the studio itself (the top tags this plugin added and any you added). Only a studio's own items, not its sub-studios'. Nothing is removed. A studio page also has a button to do one studio, choosing which of its tags to use.
+    defaultArgs:
+      mode: studiotags
   - name: Preview titles from file names (no changes)
     description: Writes the titles "Fill in titles from file names" (below) would give to the log, without changing anything.
     defaultArgs:
@@ -74,8 +82,16 @@ tasks:
     description: Gives scenes, images and galleries that have no date the date in their file name (or their folder's name) - "2023-05-19_video", "Studio - 6 Nov 2026 - Title", "Studio.21.07.08.Name", "05-27-2014 17_26_15" and similar. Only full dates count, and dates you've already set are never changed.
     defaultArgs:
       mode: dates
+  - name: Preview tag descriptions on 30 tags (no changes)
+    description: Writes to the log the descriptions "Fill in empty tag descriptions" would give 30 random tags, and where each comes from, without changing anything.
+    defaultArgs:
+      mode: tagdescs_preview
+  - name: Fill in empty tag descriptions
+    description: Every tag without a description gets one - from the stash-box it's linked to (StashDB...), else StashDB by exact name or alias, else the E-Hentai wiki (comic and doujinshi tags), else Danbooru's wiki. Only empty descriptions are filled; names, aliases and descriptions you've written are never changed. Story or chapter names starting with a number are skipped.
+    defaultArgs:
+      mode: tagdescs
   - name: Give tags without a picture one from your library
-    description: Every tag that has no picture gets one from your library - the photo that's most "about" that tag (fewest other tags, then highest rated), else a scene screenshot, a marker screenshot or a gallery cover. Each tag gets a picture no other tag has where possible, if need be a different frame from one of its scenes. Tags that already have a picture are never changed.
+    description: Every tag that has no picture gets one from your library - the photo that's most "about" that tag (fewest other tags, then highest rated), else a scene screenshot, a marker screenshot or a gallery cover. A picture is never used for two tags - each tag gets one no other tag has, if need be a different frame from one of its scenes, or none if there's nothing unused. Tags that already have a picture are never changed.
     defaultArgs:
       mode: tagpictures
   - name: Give tags that share a picture their own
