@@ -11,12 +11,15 @@ works on its own.
 
 ## How it's different from other Stash AI plugins
 
-Most AI options for Stash either send your pictures to an online service, or need a separate AI
-server with a fixed list of tags it was trained on (and usually a graphics card). This add-on:
+It was made because the existing Stash AI tagging plugins didn't work on a Mac: their models need
+a particular graphics card (NVIDIA, with CUDA). Other options send your pictures to an online
+service, or come with a fixed list of tags they were trained on. This add-on:
 
+- **Runs on a Mac (and any ordinary computer).** No special graphics card: it uses models that run
+  well on Apple Silicon and on a normal processor (about 5 seconds a picture on an Apple M4), as well
+  as on Linux and Windows.
 - **Stays on your computer.** A small open model in Ollama and a tiny local helper; nothing is
-  uploaded, nothing needs an account. An ordinary computer is enough (no graphics card needed; about
-  5 seconds a picture on an Apple M4).
+  uploaded, nothing needs an account.
 - **Learns your tags, not someone else's.** It only ever picks from your own tag list, and learns
   from what you've already tagged: an item gets the tags of the items you've tagged that look most
   like it. The AI model's own picks are only kept when those look-alikes back them up.
