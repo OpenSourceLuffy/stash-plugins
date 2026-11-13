@@ -1,4 +1,4 @@
-"""Face helper for Better Tagging AI Add-on.
+"""Face helper for Better Organizing AI Add-on.
 
 A tiny local web service: send it pictures, get back the faces in them and a
 "fingerprint" (128 numbers) for each face. Two faces with similar

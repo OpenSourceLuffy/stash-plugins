@@ -1,8 +1,8 @@
-// Better Tagging AI - the page side: an "AI" row under the Tags box, a
+// Better Organizing AI - the page side: an "AI" row under the Tags box, a
 // "Faces" row under the Performers box and an "AI titles" row under the
 // Title box when editing a scene or image (titles also on galleries), and
 // "Ask AI for details" when editing a performer, asking the local AI model (Ollama) through this
-// plugin. Works with or without Better Tagging Tools; if that's installed,
+// plugin. Works with or without Better Organizing Tools; if that's installed,
 // its suggestion rows and these sit one after another.
 (function () {
   "use strict";
@@ -159,7 +159,7 @@
   api.patch.after("TagSelect", function (...args) {
     const props = args[0] || {};
     const result = args[args.length - 1];
-    // the edit form's Tags box (not filters, and not Better Tagging Tools'
+    // the edit form's Tags box (not filters, and not Better Organizing Tools'
     // own bulk windows)
     if (!props.isMulti || !props.onSelect || props.isDisabled || props.ptsNoSuggest) return result;
     if (!ITEM_PAGE.test(location.pathname)) return result;
@@ -684,7 +684,7 @@
     });
   }
 
-  // Right under the Title box, or under Better Tagging Tools' "Title ideas"
+  // Right under the Title box, or under Better Organizing Tools' "Title ideas"
   // row if that's there
   function placeTitleRow(input, row) {
     const after = input.nextElementSibling && input.nextElementSibling.classList.contains("bt-title-ideas")
@@ -708,7 +708,7 @@
   }
 
   // ---- Settings → Tasks: this plugin's tasks in sections --------------------
-  // Same idea as Better Tagging Tools: a heading above each group of tasks
+  // Same idea as Better Organizing Tools: a heading above each group of tasks
   // that shows / hides them (closed to start with; remembered per browser).
   const TASK_GROUPS = [
     ["ai-night", "Tonight's run", "The AI work saved for the night time, started now",
@@ -830,7 +830,7 @@
             else taken++;
           } catch (e) {
             taken++;
-            console.warn("[Better Tagging AI] typical picture failed", e);
+            console.warn("[Better Organizing AI] typical picture failed", e);
           }
           cards.forEach((c) => c.classList.remove("pts-repicking"));
         }

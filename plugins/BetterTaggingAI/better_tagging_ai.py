@@ -1,8 +1,8 @@
-"""Better Tagging AI - the tagging helpers that ask a local AI model
+"""Better Organizing AI - the tagging helpers that ask a local AI model
 (Ollama) or the face helper: AI tags (checked against look-alikes you've
 tagged), AI titles, studios and performers from watermarks, faces, and all
 of it for new items after a scan. The work is in btt_core.py, which
-Better Tagging Tools ships too; this script only picks what to run.
+Better Organizing Tools ships too; this script only picks what to run.
 """
 import json
 import os
@@ -12,7 +12,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import btt_core as c  # noqa: E402
 
-# what's been done, kept by Better Tagging Tools before the AI had a plugin
+# what's been done, kept by Better Organizing Tools before the AI had a plugin
 # of its own: copied over once, so finished work isn't done again
 CARRY_OVER = ("ai_done.json", "handle_scan.json")
 
@@ -38,7 +38,7 @@ def main():
     args = payload.get("args", {})
     plugin_dir = conn.get("PluginDir") or os.path.dirname(os.path.abspath(__file__))
     c.PLUGIN_ID = c.AI_ID
-    c._plugin_dir = c.base_dir(plugin_dir)  # titles made from file names: Better Tagging Tools' record
+    c._plugin_dir = c.base_dir(plugin_dir)  # titles made from file names: Better Organizing Tools' record
     carry_over(plugin_dir)
     mode = args.get("mode")
     # keep the night runner going when a night option is on (e.g. "Body tags
@@ -179,7 +179,7 @@ def main():
         else:
             raise RuntimeError(f'unknown task "{mode}"')
     except Exception as e:
-        c.log("error", f"Better Tagging AI Add-on failed: {e}")
+        c.log("error", f"Better Organizing AI Add-on failed: {e}")
         raise
 
 

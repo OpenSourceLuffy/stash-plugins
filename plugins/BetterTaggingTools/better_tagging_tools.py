@@ -1,6 +1,6 @@
-"""Better Tagging Tools - tagging helpers without AI (see btt_core.py).
+"""Better Organizing Tools - tagging helpers without AI (see btt_core.py).
 
-The work is in btt_core.py, which Better Tagging AI ships too; this script
+The work is in btt_core.py, which Better Organizing AI ships too; this script
 only picks what to run.
 """
 import json
@@ -86,9 +86,9 @@ def main():
         elif mode in (None, "apply", "dryrun"):
             c.run_all(stash, plugin_dir, dry_run=mode == "dryrun")
         else:
-            raise RuntimeError(f'unknown task "{mode}" (AI tasks are in the Better Tagging AI plugin)')
+            raise RuntimeError(f'unknown task "{mode}" (AI tasks are in the Better Organizing AI plugin)')
     except Exception as e:
-        c.log("error", f"Better Tagging Tools failed: {e}")
+        c.log("error", f"Better Organizing Tools failed: {e}")
         raise
 
 

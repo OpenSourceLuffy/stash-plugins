@@ -56,7 +56,7 @@ def kept_tag_names(stash):
         plugins = {}
     own = plugins.get(PLUGIN_ID) or {}
     names = {n.strip().lower() for n in (own.get("keepTags") or "").split(",") if n.strip()}
-    # Better Tagging Tools' parent tag for gallery-name tags
+    # Better Organizing Tools' parent tag for gallery-name tags
     parent = ((plugins.get("BetterTaggingTools") or {}).get("galleryTagParent") or "").strip()
     if parent:
         names.add(parent.lower())

@@ -18,7 +18,7 @@ Under **Settings → Tasks → Plugin Tasks → Library Cleanup**:
 
 **Always kept:** favourites, tags that are the parent of other tags, parent studios with a child studio in use, the tags listed in
 **Tags to always keep**, and the parent tag
-[Better Tagging Tools](../BetterTaggingTools) files its gallery-name tags under.
+[Better Organizing Tools](../BetterTaggingTools) files its gallery-name tags under.
 
 ## Settings
 

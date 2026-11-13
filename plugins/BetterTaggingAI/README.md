@@ -1,11 +1,11 @@
-# Better Tagging AI Add-on (local AI)
+# Better Organizing AI Add-on (local AI)
 
 Local AI for Stash: it tags scenes and images, writes titles, recognises your performers' faces,
 finds a scene's studio from the account in its watermark, and tidies up studios and galleries.
 Everything runs on your own computer (an [Ollama](https://ollama.com) model plus a small helper
 program), so no picture ever leaves it.
 
-It's an add-on for [Better Tagging Tools](../BetterTaggingTools) and works best next to it (it then
+It's an add-on for [Better Organizing Tools](../BetterTaggingTools) and works best next to it (it then
 uses that plugin's **Tags to ignore**, **Special spellings** and gallery-name tags), but it also
 works on its own.
 
@@ -129,7 +129,7 @@ Nothing is saved until you click a suggestion and save.
 
 ## Tasks
 
-Under **Settings → Tasks → Plugin Tasks → Better Tagging AI Add-on (local AI)**. Each section starts with a
+Under **Settings → Tasks → Plugin Tasks → Better Organizing AI Add-on (local AI)**. Each section starts with a
 preview that only writes to the log; tasks only add, skip what's done, and carry on where they
 stopped if cancelled.
 
@@ -244,7 +244,7 @@ Each job uses the smallest model that does it well, so it all runs on an ordinar
 
 ## Settings
 
-Under **Settings → Plugins → Better Tagging AI Add-on (local AI)**:
+Under **Settings → Plugins → Better Organizing AI Add-on (local AI)**:
 
 | Setting | What it does |
 | --- | --- |
@@ -270,7 +270,7 @@ Under **Settings → Plugins → Better Tagging AI Add-on (local AI)**:
 | Faces: likeness needed to suggest (%) | Default 36. |
 | Faces: helper address | Default `http://host.docker.internal:11535`. |
 
-AI settings set in Better Tagging Tools before the AI had its own plugin still count until you
+AI settings set in Better Organizing Tools before the AI had its own plugin still count until you
 change them here.
 
 ## Requirements and notes
@@ -279,6 +279,6 @@ change them here.
 - Ollama with a vision model, and the face helper, as in [Setup](#setup).
 - The AI gets most things right but not all: check the previews, and use **Review** or the **Ask AI**
   buttons where accuracy matters.
-- The code is in `btt_core.py`, shared with Better Tagging Tools, so each plugin works on its own.
+- The code is in `btt_core.py`, shared with Better Organizing Tools, so each plugin works on its own.
   Small files in the plugin's folder remember what's been done; deleting them is safe.
 - Works with any theme. Changes are listed in the [changelog](CHANGELOG.md).

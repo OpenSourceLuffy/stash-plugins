@@ -107,7 +107,7 @@ A cleaner, app-like look for Stash, built to feel good on a phone as well as a c
 - A **Count** option in the Sort menu on the Tags, Performers and Studios pages: scenes + images + galleries added together, highest first (flip the arrow for lowest first). Paging, filters and search work as usual. Stash can't sort by a total itself, so Modern UI works out the order in your browser.
 
 **Tags**
-- Tag cards look like gallery cards: the tag's picture fills the card, with the name underneath. Tags without a picture show a small tag icon instead. (The [Better Tagging Tools](../BetterTaggingTools) plugin can give your tags pictures from your library.)
+- Tag cards look like gallery cards: the tag's picture fills the card, with the name underneath. Tags without a picture show a small tag icon instead. (The [Better Organizing Tools](../BetterTaggingTools) plugin can give your tags pictures from your library.)
 
 ![Tag cards](../../docs/screenshots/Tag_Cards.png)
 

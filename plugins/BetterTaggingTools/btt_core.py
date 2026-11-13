@@ -1,4 +1,4 @@
-"""Better Tagging Tools / Better Tagging AI - shared code.
+"""Better Organizing Tools / Better Organizing AI - shared code.
 
 Both plugins ship this same file, so each works on its own. Better Tagging
 Tools (no AI): performers', studios' and galleries' top tags, suggested tags,
@@ -9,7 +9,7 @@ titles, reading watermarks for studios and performers, and doing it all for
 new items after a scan.
 
 When both are installed they share settings (the AI plugin reads "Tags to
-ignore", special spellings and the like from Better Tagging Tools) and
+ignore", special spellings and the like from Better Organizing Tools) and
 records (gallery-name tags, titles made from file names).
 """
 import base64
@@ -37,11 +37,11 @@ PLUGIN_ID = BASE_ID              # the one running now (set by its script)
 
 
 def plugin_name():
-    return "Better Tagging AI Add-on" if PLUGIN_ID == AI_ID else "Better Tagging Tools"
+    return "Better Organizing AI Add-on" if PLUGIN_ID == AI_ID else "Better Organizing Tools"
 
 
 def base_dir(plugin_dir):
-    """Where Better Tagging Tools keeps its records (gallery-name tags,
+    """Where Better Organizing Tools keeps its records (gallery-name tags,
     titles made from file names): its own folder, or next to this plugin's."""
     if PLUGIN_ID == BASE_ID or not plugin_dir:
         return plugin_dir
@@ -134,7 +134,7 @@ SETTINGS_CACHE_SECONDS = 30
 
 
 def plugin_settings(stash, plugin_dir=None, plugin_id=BASE_ID):
-    """A plugin's raw settings (Better Tagging Tools' unless said otherwise).
+    """A plugin's raw settings (Better Organizing Tools' unless said otherwise).
     With plugin_dir, a copy up to 30 seconds old is reused: scans fire a hook
     per new image, so this saves a call."""
     path = os.path.join(plugin_dir, "settings_cache.json") if plugin_dir else None
@@ -165,7 +165,7 @@ def plugin_settings(stash, plugin_dir=None, plugin_id=BASE_ID):
 
 def settings(stash, plugin_dir=None):
     s = plugin_settings(stash, plugin_dir)
-    # AI settings belong to Better Tagging AI; ones still saved under Better
+    # AI settings belong to Better Organizing AI; ones still saved under Better
     # Tagging Tools (from before the two were split) count until changed there
     ai_raw = {k: v for k, v in s.items() if k.startswith("ai")}
     ai_raw.update(plugin_settings(stash, plugin_dir, AI_ID))
@@ -471,7 +471,7 @@ def run_hook(stash, plugin_dir, hook):
     action = action.split(".")[0]  # "Create" / "Update"
 
     if PLUGIN_ID == AI_ID:
-        # Better Tagging AI: new scenes and images for the AI
+        # Better Organizing AI: new scenes and images for the AI
         if action == "Create" and kind in ("Scene", "Image"):
             cfg = settings(stash, plugin_dir)
             if cfg["ai"]["auto"] or cfg["ai"]["new_all"] or cfg["ai"]["face_auto"] or \
@@ -537,7 +537,7 @@ def run_hook(stash, plugin_dir, hook):
         if image_event:
             images = [str(hook["id"])]  # its galleries are looked up by the job
     ai_scenes, ai_images = [], []
-    # (new items for the AI are queued by Better Tagging AI's own hook)
+    # (new items for the AI are queued by Better Organizing AI's own hook)
     dates = {}
     if created and cfg["dates_new"]:
         dates["dates_" + kind.lower()] = [str(hook["id"])]
@@ -1109,7 +1109,7 @@ def run_studio_tags_to_items(stash, plugin_dir, preview=False, studio_ids=None, 
 # --- "Tags to ignore" suggestions ----------------------------------------------
 # Big tags that look like housekeeping rather than what's shown: their name
 # (process, review, categories, underscores...), that they group other tags,
-# or - with Better Tagging AI's picture fingerprints - that their items don't
+# or - with Better Organizing AI's picture fingerprints - that their items don't
 # look alike at all. Shown under the setting; you choose what to add.
 
 HOUSEKEEPING_WORDS = re.compile(

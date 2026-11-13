@@ -83,7 +83,7 @@
   }
 
   // ------------------------------------------------------------------
-  // Optional: the Better Tagging AI add-on. When it's installed and
+  // Optional: the Better Organizing AI add-on. When it's installed and
   // enabled, the rows also use what it knows - how alike performers' faces
   // look, and which scenes / photos look most alike (picture fingerprints).
   // Without it (or if it fails), every row works exactly as before: each
@@ -111,7 +111,7 @@
         call("mutation ($p: ID!, $a: Map) { runPluginOperation(plugin_id: $p, args: $a) }", { p: PLUGIN, a: args })
           .then((d) => d.runPluginOperation)
           .catch((e) => {
-            console.warn("[Stash Suggestions] Better Tagging AI:", e.message);
+            console.warn("[Stash Suggestions] Better Organizing AI:", e.message);
             return null;
           }));
 
@@ -248,7 +248,7 @@
       const len = file && file.duration;
       const studioId = scene.studio && scene.studio.id;
 
-      // With Better Tagging AI: scenes that look alike, and the scene's
+      // With Better Organizing AI: scenes that look alike, and the scene's
       // performers' face matches (else nothing extra)
       const [alike, faceMaps] = await Promise.all([
         AI.looks("scene", scene.id),
@@ -286,9 +286,9 @@
 
       // Suggested: every candidate scored on
       //   each shared tag 2, same studio 3, performers who look alike
-      //   (best pair, half of lookAlikePoints or - with Better Tagging AI -
+      //   (best pair, half of lookAlikePoints or - with Better Organizing AI -
       //   of their face score, whichever is closer: up to 5), similar
-      //   length 1, same orientation 1, and with Better Tagging AI how
+      //   length 1, same orientation 1, and with Better Organizing AI how
       //   alike the scene itself looks (the 40 closest: 2-8)
       const score = (s) => {
         let k = 2 * s.tags.filter((t) => tagIds.has(t.id)).length;
@@ -444,7 +444,7 @@
   // gallery, or has a look-alike performer gets a score: 2 points per
   // shared tag or gallery, plus up to 5 for the closest look-alike
   // (half their Similar Performers score: looks + shared performer tags,
-  // or with Better Tagging AI their face, if that's closer). With Better
+  // or with Better Organizing AI their face, if that's closer). With Better
   // Tagging AI, the 40 photos that look most like it (picture
   // fingerprints) are candidates too, worth 2-8 points by how alike.
   // The highest scores come first (ties in random order). If there are
@@ -461,7 +461,7 @@
     const TAG_POINTS = 2;
     const GALLERY_POINTS = 2;
     const LOOKALIKE_MAX_POINTS = 5;
-    const LOOKS_MAX_POINTS = 8;    // the photo that looks most alike (Better Tagging AI)
+    const LOOKS_MAX_POINTS = 8;    // the photo that looks most alike (Better Organizing AI)
     const LOOKALIKE_MIN = 4;       // look-alike score (out of ~10+) to count at all
     const LOOKALIKES = 15;         // closest look-alike performers to pull photos from
     const CANDIDATES = 500;        // images fetched per match type before scoring
@@ -515,7 +515,7 @@
             if (!prev || k > prev.k) out.set(x.id, { name: x.name, k });
           }
         }
-        // With Better Tagging AI: performers whose face looks like theirs
+        // With Better Organizing AI: performers whose face looks like theirs
         // (2-10, the same scale), the better of the two counting
         const f = await AI.faces(p.id);
         for (const [pid, pct] of Object.entries(f.scores)) {
@@ -562,7 +562,7 @@
 
       const [lookAlikes, alike] = await Promise.all([
         perfIds.size ? lookAlikesOf(image.performers.slice(0, 3), perfIds) : new Map(),
-        AI.looks("image", image.id), // photos that look alike (Better Tagging AI; else none)
+        AI.looks("image", image.id), // photos that look alike (Better Organizing AI; else none)
       ]);
       const alikePoints = AI.lookPoints(alike, LOOKS_MAX_POINTS);
 
@@ -1060,7 +1060,7 @@
         { f: filter, n: perPage }
       )).findPerformers.performers;
 
-    // With the Better Tagging AI add-on: how alike performers' faces look
+    // With the Better Organizing AI add-on: how alike performers' faces look
     // counts too, and the closest few join the row whatever else they share
     const FACE_PULL = 8;
     const facesLike = AI.faces;

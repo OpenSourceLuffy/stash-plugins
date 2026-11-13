@@ -1,11 +1,12 @@
-# Better Tagging Tools changelog
+# Better Organizing Tools changelog
 
-Newest first. Versions are what Stash shows under Settings → Plugins. Better Tagging Tools and the
-[Better Tagging AI Add-on](../BetterTaggingAI) share their code (`btt_core.py`), so some versions
+Newest first. Versions are what Stash shows under Settings → Plugins. Better Organizing Tools and the
+[Better Organizing AI Add-on](../BetterTaggingAI) share their code (`btt_core.py`), so some versions
 only bring the other plugin's changes.
 
 ## 2.3 (2026-11-11)
 
+- Renamed **Better Organizing Tools** (it was Better Tagging Tools), to match the AI add-on. Its ID and folder are unchanged, so settings and saved data carry over.
 - **Patreon** accounts count for studios from accounts: `patreon.com/name`, `patreon.com/c/name` or
   `Patreon: name` in a file name, title, details, URL or watermark, and `patreon/name` in a
   watermark. A new account goes under a **Patreon** parent studio.

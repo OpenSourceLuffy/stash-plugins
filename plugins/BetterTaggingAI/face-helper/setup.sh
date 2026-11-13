@@ -1,5 +1,5 @@
 #!/bin/sh
-# Sets up the face helper for Better Tagging AI Add-on on a Mac (or Linux):
+# Sets up the face helper for Better Organizing AI Add-on on a Mac (or Linux):
 # a Python environment with OpenCV, the face and picture models, and (on a Mac) a
 # login service so it starts by itself. Run it once:  sh setup.sh
 #

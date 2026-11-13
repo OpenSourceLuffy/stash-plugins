@@ -27,10 +27,10 @@ performer pages (plus a performer's galleries and studios), so there's always so
 
 ![Similar Performers row](../../docs/screenshots/Similar_Performers_light.png)
 
-- **With the [Better Tagging AI Add-on](../BetterTaggingAI)** installed (optional), Similar photos and
+- **With the [Better Organizing AI Add-on](../BetterTaggingAI)** installed (optional), Similar photos and
   Suggested also include the photos / scenes that look most alike, and every row counts how alike
   performers' faces look. Without it, everything works the same as before.
-- **Similar Performers**: scored by shared tags, ethnicity, hair and eye colour, country, height and age (same gender only). With the [Better Tagging AI Add-on](../BetterTaggingAI) installed, how alike their faces look (from the faces it has learned) counts too, and the closest look-alikes are included even with nothing else in common.
+- **Similar Performers**: scored by shared tags, ethnicity, hair and eye colour, country, height and age (same gender only). With the [Better Organizing AI Add-on](../BetterTaggingAI) installed, how alike their faces look (from the faces it has learned) counts too, and the closest look-alikes are included even with nothing else in common.
 ![Galleries and Studios rows on a performer's page](../../docs/screenshots/Stash_Suggestions_Performer.png)
 
 *A performer's Galleries and Studios rows (pictures blurred, example names).*

@@ -1,5 +1,5 @@
-name: Better Tagging Tools
-description: Tags each performer and studio with the tags used most often in their scenes, images and galleries, and each gallery with its images' most used tags, shows one-click "Suggested tags" and "Title ideas" when editing, adds "Bulk tag" buttons on performer and gallery pages, and can tag a studio's items with the studio's tags. Can also tag every image in a gallery with the gallery's name, give tags without a picture one from your library, keep tag names consistently capitalised, auto tag from file names, fill in dates and titles from file names, and give scenes a studio from the account link in their file name. No AI - for that, add Better Tagging AI (works with or without this plugin).
+name: Better Organizing Tools
+description: Tags each performer and studio with the tags used most often in their scenes, images and galleries, and each gallery with its images' most used tags, shows one-click "Suggested tags" and "Title ideas" when editing, adds "Bulk tag" buttons on performer and gallery pages, and can tag a studio's items with the studio's tags. Can also tag every image in a gallery with the gallery's name, give tags without a picture one from your library, keep tag names consistently capitalised, auto tag from file names, fill in dates and titles from file names, and give scenes a studio from the account link in their file name. No AI - for that, add Better Organizing AI (works with or without this plugin).
 version: "2.3"
 url: https://github.com/OpenSourceLuffy/stash-plugins/tree/main/plugins/BetterTaggingTools
 exec:
@@ -71,7 +71,7 @@ tasks:
     defaultArgs:
       mode: retitles
   - name: "Studios from accounts: from file names and links only"
-    description: Gives scenes without a studio a studio for the account in their file name, title, details or URLs (e.g. "onlyfans.com/name"), creating it under a parent studio for the platform if needed, and adds the performer whose name, alias or profile link matches the account. Fast; no AI (Better Tagging AI can also read watermarks).
+    description: Gives scenes without a studio a studio for the account in their file name, title, details or URLs (e.g. "onlyfans.com/name"), creating it under a parent studio for the platform if needed, and adds the performer whose name, alias or profile link matches the account. Fast; no AI (Better Organizing AI can also read watermarks).
     defaultArgs:
       mode: handle_studios_text
   - name: Preview dates from file names (no changes)
@@ -178,11 +178,11 @@ settings:
     type: BOOLEAN
   datesNewItems:
     displayName: Fill in dates of new scenes, images and galleries
-    description: When a scan adds a scene, image or gallery, set its date from the file name (see the "Fill in dates from file names" task). "Auto tag this" (and Better Tagging AI, if installed) also fill in empty dates.
+    description: When a scan adds a scene, image or gallery, set its date from the file name (see the "Fill in dates from file names" task). "Auto tag this" (and Better Organizing AI, if installed) also fill in empty dates.
     type: BOOLEAN
   titlesNewItems:
     displayName: Fill in titles of new scenes, images and galleries
-    description: When a scan adds a scene, image or gallery, give it a title from its file name (see the "Fill in titles from file names" task). "Auto tag this" (and Better Tagging AI, if installed) also fill in empty titles.
+    description: When a scan adds a scene, image or gallery, give it a title from its file name (see the "Fill in titles from file names" task). "Auto tag this" (and Better Organizing AI, if installed) also fill in empty titles.
     type: BOOLEAN
   titlesNoGallery:
     displayName: Don't title images after their gallery

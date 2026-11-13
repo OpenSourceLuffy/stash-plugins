@@ -1,4 +1,4 @@
-// Better Tagging Tools - shows suggested tags under tag boxes: the tags
+// Better Organizing Tools - shows suggested tags under tag boxes: the tags
 // most often found together with the tags already chosen, the top tags of the
 // performers picked in the same form (the "Tag performers with their top
 // tags" task fills those in), and - while there are no tags - the tags most
@@ -226,7 +226,7 @@
   // with each chosen tag, added up, so one that goes with several ranks
   // first. Up to the 12 most recently chosen. [{ tag, why }]
   const COTAG_FROM = 12, COTAG_MIN = 0.15; // shown if with one of them 15%+ of the time
-  // With Better Tagging AI installed, body tags (Tits, Ass, their sizes...)
+  // With Better Organizing AI installed, body tags (Tits, Ass, their sizes...)
   // are added by its body-part detector from what's shown: they're left out
   // here, both as tags to go by and as suggestions (same names as btt_core's
   // BODY_TAG_NAMES)
@@ -343,7 +343,7 @@
         // studio, and last the library's most used tags. The performers' top
         // tags are shown whenever there are performers.
         const out = [];
-        // body tags come from Better Tagging AI's detector, when it's here
+        // body tags come from Better Organizing AI's detector, when it's here
         const noBody = await aiInstalled("ai").catch(() => false);
         const ignored = await ignoredNames("ignored").catch(() => new Set());
         const skip = (t) => (noBody && isBody(t)) || ignored.has(String((t && t.name) || "").trim().toLowerCase());
@@ -448,7 +448,7 @@
           });
         }
         if (live) setRows(out);
-      })().catch((e) => console.warn("[Better Tagging Tools]", e));
+      })().catch((e) => console.warn("[Better Organizing Tools]", e));
       return () => {
         live = false;
       };
@@ -619,7 +619,7 @@
     React.useEffect(() => {
       if (!m) return;
       let live = true;
-      gallerySuggestionsFor(m[1], m[1]).then((l) => live && setList(l)).catch((e) => console.warn("[Better Tagging Tools]", e));
+      gallerySuggestionsFor(m[1], m[1]).then((l) => live && setList(l)).catch((e) => console.warn("[Better Organizing Tools]", e));
       return () => (live = false);
     }, [m && m[1]]);
     const chosen = new Set((values || []).map((g) => String(g.id)));
@@ -679,7 +679,7 @@
              runPluginTask(plugin_id: $p, description: $d, args_map: $a) }`,
           {
             p: PLUGIN_ID,
-            d: `Better Tagging Tools: ${remove ? "removing" : "adding"} ${plural(tags.length, "tag")} ${
+            d: `Better Organizing Tools: ${remove ? "removing" : "adding"} ${plural(tags.length, "tag")} ${
               remove ? "from" : "to"
             } ${target.what}`,
             a: Object.assign(target.args(keys), {
@@ -884,7 +884,7 @@
              runPluginTask(plugin_id: $p, description: $d, args_map: $a) }`,
           {
             p: PLUGIN_ID,
-            d: `Better Tagging Tools: tag ${studio.name}'s items with its tags`,
+            d: `Better Organizing Tools: tag ${studio.name}'s items with its tags`,
             a: {
               mode: "studiotags",
               studio_ids: String(studio.id),
@@ -1336,7 +1336,7 @@
             } else none++;
           } catch (e) {
             none++;
-            console.warn("[Better Tagging Tools] new picture failed", e);
+            console.warn("[Better Organizing Tools] new picture failed", e);
           }
           cards.forEach((c) => c.classList.remove("pts-repicking"));
         }
@@ -1492,7 +1492,7 @@
         try {
           if (ids.length > LIST_LIMIT) {
             await gql("mutation($p: ID!, $d: String, $a: Map) { runPluginTask(plugin_id: $p, description: $d, args_map: $a) }", {
-              p: PLUGIN_ID, d: `Better Tagging Tools: auto tag ${ids.length} ${kind}s`, a: args,
+              p: PLUGIN_ID, d: `Better Organizing Tools: auto tag ${ids.length} ${kind}s`, a: args,
             });
             Toast.success(`Auto tagging ${what} in the background. You can follow it under Settings → Tasks.`);
             return;
@@ -1520,7 +1520,7 @@
         try {
           await gql("mutation($p: ID!, $d: String, $a: Map) { runPluginTask(plugin_id: $p, description: $d, args_map: $a) }", {
             p: PLUGIN_ID,
-            d: `Better Tagging Tools: tag images with ${what} tags, performers & studio`,
+            d: `Better Organizing Tools: tag images with ${what} tags, performers & studio`,
             a: { mode: "gallerytags", gallery_ids: ids.join(",") },
           });
           Toast.success(`Tagging images with ${what} tags, performers & studio. You can follow it under Settings → Tasks.`);
@@ -1572,7 +1572,7 @@
 
   // ---- title ideas ----------------------------------------------------------
   // Under the Title box of a scene, image or gallery's edit form: titles made
-  // from its performers, studio, tags, date and file name (Better Tagging AI
+  // from its performers, studio, tags, date and file name (Better Organizing AI
   // adds AI-written ones in a row of its own). Clicking one puts it in the box
   // (still unsaved, like any edit).
   const TITLE_PAGE = /^\/(scenes|images|galleries)\/(\d+)/;
@@ -1744,7 +1744,7 @@
 
   // ---- Settings → Plugins: suggestions under "Tags to ignore" -------------
   // Big tags that look like housekeeping (their name, or that they group
-  // other tags; with Better Tagging AI also that their items don't look
+  // other tags; with Better Organizing AI also that their items don't look
   // alike). Tapping one adds it to the setting.
   let ignoreState = null; // { at, list } for this visit to the page
   function ignoreSuggestions() {

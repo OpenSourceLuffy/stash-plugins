@@ -1,4 +1,4 @@
-# Better Tagging Tools
+# Better Organizing Tools
 
 Tags each performer and studio with the tags used most often on their scenes, images and
 galleries (and each gallery with its photos' most used tags), then suggests tags while you edit. It also adds bulk tagging to performer and
@@ -8,7 +8,7 @@ names in more places than Stash does, fills in dates and titles from file names,
 and gives scenes a studio from the account link in their file name.
 
 No AI is involved. For AI tags, AI titles and reading watermarks, add the
-[Better Tagging AI Add-on](../BetterTaggingAI): its buttons and tasks sit next to these.
+[Better Organizing AI Add-on](../BetterTaggingAI): its buttons and tasks sit next to these.
 
 ![Suggested tags under the Tags box](../../docs/screenshots/Tag_Suggestions.png)
 
@@ -42,7 +42,7 @@ tags** is shown as well.
   suggested tag narrows the next suggestions.
 - Tags already on the item aren't suggested.
 - **Tags to ignore** are never suggested, and aren't used for **Goes with**.
-- With [Better Tagging AI](../BetterTaggingAI) installed, body tags (the ones its body-part detector
+- With [Better Organizing AI](../BetterTaggingAI) installed, body tags (the ones its body-part detector
   adds from what's shown, and their size tags) are left out of every row: they're neither suggested
   nor used for **Goes with**.
 
@@ -64,7 +64,7 @@ folder gallery. Each gallery scores points for:
 - a tag on the photo with **the gallery's name** (2).
 
 Hover over one to see why. Tap one to add it (then **Save**). Galleries it's already in aren't
-suggested. With [Better Tagging AI](../BetterTaggingAI) installed, an **AI** row adds galleries
+suggested. With [Better Organizing AI](../BetterTaggingAI) installed, an **AI** row adds galleries
 that the photo's look-alikes are in.
 
 ## Top tags for performers, studios and galleries
@@ -89,7 +89,7 @@ tags** gives each gallery the most used tags of its photos (gallery-name tags ne
 
 Under the **Tags to ignore** setting, the plugin suggests tags that look like housekeeping rather than
 what's shown: ones named like a note or a process ("Categories", "Site_Process", "To Review"...) or
-that group other tags. With [Better Tagging AI](../BetterTaggingAI), "its items don't look alike" backs
+that group other tags. With [Better Organizing AI](../BetterTaggingAI), "its items don't look alike" backs
 a suggestion up. Hover for how many items each is on and why; tap to add it to the list.
 
 ## Bulk tagging
@@ -336,14 +336,14 @@ Stash treats tag names that differ only in case as the same tag, so renaming nev
 
 ## Tasks
 
-Under **Settings → Tasks → Plugin Tasks → Better Tagging Tools** the tasks are grouped into
+Under **Settings → Tasks → Plugin Tasks → Better Organizing Tools** the tasks are grouped into
 sections you can open and close: **Top tags**, **Titles**, **Studios from accounts**, **Dates**, **Tag pictures**
 and **Tidy up tags** (capitalisation, gallery-name tags, and a gallery's tags, performers and studio
 on its images). Each section starts with its preview task, which only writes to the log.
 
 ## Settings
 
-Under **Settings → Plugins → Better Tagging Tools**:
+Under **Settings → Plugins → Better Organizing Tools**:
 
 | Setting | What it does |
 | --- | --- |

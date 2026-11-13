@@ -1,11 +1,12 @@
-# Better Tagging AI Add-on changelog
+# Better Organizing AI Add-on changelog
 
 Newest first. Versions are what Stash shows under Settings → Plugins. The add-on shares its code
-(`btt_core.py`) with [Better Tagging Tools](../BetterTaggingTools), so some versions only bring
+(`btt_core.py`) with [Better Organizing Tools](../BetterTaggingTools), so some versions only bring
 that plugin's changes.
 
 ## 1.5 (2026-11-11)
 
+- Renamed **Better Organizing AI Add-on (local AI)** (it was Better Tagging AI Add-on): it does a lot more than tagging now. Its ID and folder are unchanged, so settings and saved data carry over.
 - Now called **Better Tagging AI Add-on (local AI)**, with a shorter README: features first, setup at the end, and how it differs from other Stash AI plugins.
 - The face helper's small models (YuNet, SFace, NudeNet) now come with the plugin, with their
   licences, so setup doesn't depend on those downloads; NudeNet (body tags) is always set up.
