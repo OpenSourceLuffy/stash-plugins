@@ -9,6 +9,20 @@ It's an add-on for [Better Organizing Tools](../BetterTaggingTools) and works be
 uses that plugin's **Tags to ignore**, **Special spellings** and gallery-name tags), but it also
 works on its own.
 
+> **Models: what comes with it, and what you can change**
+>
+> | Model | Used for | Comes with the plugin? | Can you switch it? |
+> | --- | --- | --- | --- |
+> | YuNet (0.2 MB) | Finding faces | ✅ Included, in [`face-helper/models`](face-helper/models) | No |
+> | SFace (39 MB) | Recognising performers' faces | ✅ Included | No |
+> | NudeNet 320n (12 MB) | Body tags | ✅ Included | No |
+> | CLIP ViT-B/32 (350 MB) | Look-alike tags, galleries and suggestions | ⬇️ Downloaded by `setup.sh` (too big for GitHub) | No |
+> | Gemma 3 4B (3.3 GB) | Everything that says "AI": tags, titles, watermarks, hair and eye colour | ⬇️ You download it: `ollama pull gemma3:4b` ([ollama.com/library/gemma3](https://ollama.com/library/gemma3)) | **Yes**: set **AI: model** to any Ollama model that can see pictures (e.g. `gemma3:12b`, more accurate but slower). Only `gemma3:4b` has been tested. |
+>
+> The face helper's four models are fixed: the plugin's face fingerprints, look-alikes and body
+> tags are built around them, so they can't be swapped from the settings. See
+> [Setup](#setup) and [Which models, and why](#which-models-and-why).
+
 ## How it's different from other Stash AI plugins
 
 It was made because the existing Stash AI tagging plugins didn't work on a Mac: their models need
