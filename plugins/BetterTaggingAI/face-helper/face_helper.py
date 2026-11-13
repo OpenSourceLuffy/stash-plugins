@@ -20,7 +20,17 @@ zoo); CLIP ViT-B/32 (OpenAI, MIT licence) the picture fingerprints.
     POST /body   {"images": [...]}
       -> {"results": [[{"part": "FEMALE_BREAST_EXPOSED", "score": 0.8, "box": [x, y, w, h]}, ...], ...]}
          (NudeNet 320n, AGPL-3.0, only if downloaded: setup.sh --body)
-    GET /health  -> {"ok": true, "embed": true/false, "body": true/false}
+    POST /match  {"faces": ["<q8 fingerprint>", ...], "known": {"<performer id>": ["<q8>", ...], ...}}
+      -> {"results": [["<best performer id>", best, second best (anyone else)], ...]}
+         (q8: 128 bytes, each number x127, base64 - as the add-on stores them;
+         the likeness is the plain dot product, like the add-on's own)
+    POST /knn    {"vectors": ["<base64 int8 picture fingerprint>", ...], "base": [indexes], "k": 20}
+      -> {"results": [[[base index, dot], ...], ...]}: for every vector, the k
+         most alike of the base ones (dot product of the raw numbers, itself left out)
+    POST /cluster {"faces": ["<q8>", ...], "threshold": 0.45}
+      -> {"results": [[group number, likeness to the group], ...]}: the same
+         person's faces get the same number (for "new performers")
+    GET /health  -> {"ok": true, "embed": true/false, "body": true/false, "match": true, "knn": true, "cluster": true}
 
 Runs on 127.0.0.1 only (Stash's Docker container reaches it as
 host.docker.internal). Port: FACE_HELPER_PORT, default 11535.
@@ -198,6 +208,103 @@ def body_parts(data):
     return found
 
 
+def _q8(list_b64):
+    raw = np.frombuffer(b"".join(base64.b64decode(x) for x in list_b64), dtype=np.int8)
+    return raw.reshape(-1, 128).astype(np.float32) / 127.0
+
+
+def match_faces(faces, known):
+    """For each face: the performer it looks most like, how alike (0-1), and
+    how alike the closest *other* performer is. Many faces at once (the
+    add-on's face review), in chunks to keep memory small."""
+    owners, rows = [], []
+    for pid, embs in known.items():
+        for e in embs:
+            owners.append(pid)
+            rows.append(e)
+    if not faces or not rows:
+        return [[None, 0.0, 0.0] for _ in faces]
+    K = _q8(rows)                      # (k, 128)
+    order = np.argsort(np.array(owners, dtype=object).astype(str), kind="stable")
+    K = K[order]
+    owners = [owners[i] for i in order]
+    starts = [0] + [i for i in range(1, len(owners)) if owners[i] != owners[i - 1]]
+    pids = [owners[i] for i in starts]
+    out = []
+    for at in range(0, len(faces), 2000):
+        F = _q8(faces[at:at + 2000])   # (f, 128)
+        S = F @ K.T                    # (f, k)
+        per = np.maximum.reduceat(S, starts, axis=1)  # (f, performers): best fingerprint of each
+        top2 = np.argsort(-per, axis=1)[:, :2]
+        for r in range(per.shape[0]):
+            i1 = top2[r, 0]
+            i2 = top2[r, 1] if per.shape[1] > 1 else None
+            out.append([pids[i1], round(float(per[r, i1]), 4), round(float(per[r, i2]), 4) if i2 is not None else 0.0])
+    return out
+
+
+def nearest(vectors, base, k):
+    """The add-on's look-alike tags for many items at once: each vector's k
+    most alike base vectors (raw int8 dot products, as the add-on scores
+    them), leaving the vector itself out."""
+    if not vectors or not base:
+        return [[] for _ in vectors]
+    V = np.frombuffer(b"".join(base64.b64decode(x) for x in vectors), dtype=np.int8)
+    V = V.reshape(len(vectors), -1).astype(np.float32)
+    base = np.asarray(base, dtype=np.int64)
+    B = V[base]                                   # (b, d)
+    where = {int(b): j for j, b in enumerate(base)}  # vector index -> its column
+    k = max(1, min(k, len(base)))
+    out = []
+    for at in range(0, len(vectors), 2000):
+        S = V[at:at + 2000] @ B.T                 # (q, b)
+        for r in range(S.shape[0]):
+            j = where.get(at + r)
+            if j is not None:
+                S[r, j] = -np.inf
+        top = np.argpartition(-S, k - 1, axis=1)[:, :k] if k < S.shape[1] else np.tile(np.arange(S.shape[1]), (S.shape[0], 1))
+        for r in range(S.shape[0]):
+            idx = top[r][np.argsort(-S[r, top[r]])]
+            out.append([[int(base[i]), int(round(float(S[r, i])))] for i in idx if np.isfinite(S[r, i])])
+    return out
+
+
+def cluster_faces(faces, threshold):
+    """Group faces of the same person: each face joins the most alike group
+    (the average of its faces) if it's at least `threshold` alike, else
+    starts a new one; then every face is checked again against the final
+    groups. Returns [group, likeness] per face (group -1: alone)."""
+    if not faces:
+        return []
+    F = _q8(faces)
+    F /= np.linalg.norm(F, axis=1, keepdims=True) + 1e-9
+    n = len(F)
+    sums = np.zeros((n, F.shape[1]), dtype=np.float32)  # each group's summed faces
+    count = np.zeros(n, dtype=np.int32)
+    groups = 0
+    for i in range(n):
+        if groups:
+            C = sums[:groups]
+            sims = (C @ F[i]) / (np.linalg.norm(C, axis=1) + 1e-9)
+            j = int(np.argmax(sims))
+            if sims[j] >= threshold:
+                sums[j] += F[i]
+                count[j] += 1
+                continue
+        sums[groups] = F[i]
+        count[groups] = 1
+        groups += 1
+    C = sums[:groups] / (np.linalg.norm(sums[:groups], axis=1, keepdims=True) + 1e-9)
+    out = []
+    for at in range(0, n, 4000):
+        S = F[at:at + 4000] @ C.T
+        best = np.argmax(S, axis=1)
+        for r, j in enumerate(best):
+            sim = float(S[r, j])
+            out.append([int(j) if sim >= threshold else -1, round(sim, 4)])
+    return out
+
+
 class Handler(BaseHTTPRequestHandler):
     def _send(self, code, obj):
         body = json.dumps(obj).encode()
@@ -209,12 +316,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/health":
-            self._send(200, {"ok": True, "embed": os.path.exists(CLIP_MODEL), "body": os.path.exists(BODY_MODEL)})
+            self._send(200, {"ok": True, "embed": os.path.exists(CLIP_MODEL), "body": os.path.exists(BODY_MODEL),
+                             "match": True, "knn": True, "cluster": True})
         else:
             self._send(404, {"error": "not found"})
 
     def do_POST(self):
-        if self.path not in ("/faces", "/embed", "/body"):
+        if self.path not in ("/faces", "/embed", "/body", "/match", "/knn", "/cluster"):
             return self._send(404, {"error": "not found"})
         length = int(self.headers.get("Content-Length") or 0)
         if length <= 0 or length > MAX_BODY:
@@ -229,6 +337,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(413, {"error": "no body, or too big"})
         try:
             req = json.loads(self.rfile.read(length))
+            if self.path == "/match":
+                return self._send(200, {"results": match_faces(req.get("faces") or [], req.get("known") or {})})
+            if self.path == "/cluster":
+                return self._send(200, {"results": cluster_faces(req.get("faces") or [], float(req.get("threshold") or 0.45))})
+            if self.path == "/knn":
+                return self._send(200, {"results": nearest(req.get("vectors") or [], req.get("base") or [],
+                                                           int(req.get("k") or 20))})
             pictures = [base64.b64decode(b) for b in req.get("images") or []]
             if self.path == "/embed":
                 results = embed(pictures, req.get("boxes"))
