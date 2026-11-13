@@ -5,6 +5,8 @@ _site/
 
 # Files plugins write while running (per-install data, never published)
 plugins/*/auto_tags.json
+plugins/*/auto_titles.json
+plugins/*/handle_scan.json
 plugins/*/gallery_tags.json
 plugins/*/queue.json
 plugins/*/settings_cache.json
@@ -12,3 +14,19 @@ plugins/*/*.lock
 plugins/*/*.tmp
 plugins/*/.zip
 plugins/*/picture_hashes.json
+plugins/*/gallery_only_tags.json
+plugins/*/ai_done.json
+plugins/*/face_index.json
+plugins/*/face_items.json
+plugins/*/tag_review_cache.json
+plugins/*/tag_review_not.json
+plugins/*/new_perf_cache.json
+plugins/*/new_perf_not.json
+plugins/*/new_perf_ocr.json
+plugins/*/check_cache.json
+plugins/*/check_keep.json
+plugins/*/studio_review.json
+plugins/*/gallery_review.json
+plugins/*/gallery_look_cache.json
+plugins/*/gallery_check_cache.json
+plugins/*/handle_pending.json

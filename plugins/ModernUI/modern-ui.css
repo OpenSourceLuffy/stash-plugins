@@ -220,10 +220,16 @@ body.mui .scene-card .scene-specs-overlay span {
     padding-bottom: env(safe-area-inset-bottom);
   }
 
-  /* Scene page: full-width player */
+  /* Scene page: full-width player, edge to edge and centred (pulling it
+     out with negative margins alone left it 15px off to the left) */
   body.mui.mui-mobile .scene-player-container {
-    margin-left: -15px;
-    margin-right: -15px;
+    flex: 0 0 auto !important;
+    width: 100vw !important;
+    max-width: 100vw !important;
+    margin-left: calc(50% - 50vw) !important;
+    margin-right: calc(50% - 50vw) !important;
+    padding-left: 0 !important;
+    padding-right: 0 !important;
   }
 }
 
@@ -1829,10 +1835,11 @@ body.mui.mui-light .btn-group > .btn.active:focus {
   box-shadow: 0 0 0 3px rgba(74, 155, 224, 0.3) !important;
 }
 
-body.mui.mui-light .detail-header .detail-header-image img.logo {
-  background: #8a95a0;
+/* tag / studio / group picture: no frame, just rounded corners */
+body.mui .detail-header .detail-header-image img.logo {
+  background: transparent !important;
   border-radius: 12px;
-  padding: 10px;
+  padding: 0;
 }
 
 /* Favourite hearts: Stash's colours, not the dark button text,
@@ -1907,7 +1914,7 @@ body.mui.mui-light .preview-button .fa-icon {
     box-shadow: 0 0 0 3px var(--mui-accent), var(--mui-shadow) !important;
   }
 
-  body.mui .grid-card:has(.card-check:checked) .thumbnail-section {
+  body.mui .grid-card:has(.card-check:checked) .thumbnail-section > a {
     opacity: 0.85;
   }
 }
@@ -1918,6 +1925,9 @@ body.mui.mui-light .preview-button .fa-icon {
 
 body.mui .mui-gallery-title {
   margin: 14px 0 6px;
+}
+body.mui .mui-gallery-title h2 {
+  margin: 0;
   font-size: 1.6rem;
   font-weight: 700;
   line-height: 1.2;
@@ -1926,6 +1936,71 @@ body.mui .mui-gallery-title {
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
+}
+
+/* gallery name with its cover and "← Galleries" (details panel and above
+   the images) */
+body.mui .mui-gallery-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+body.mui .mui-gallery-head > h2,
+body.mui .mui-gallery-head > h3 {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-bottom: 0;
+}
+body.mui .mui-gallery-cover {
+  width: 64px;
+  height: 64px;
+  flex: none;
+  object-fit: cover;
+  border-radius: 10px;
+  background: rgba(128, 128, 128, 0.2);
+}
+body.mui .mui-exit {
+  flex: none;
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  padding: 6px 14px;
+  border: 1px solid rgba(128, 128, 128, 0.45);
+  border-radius: 999px;
+  background: rgba(128, 128, 128, 0.14);
+  color: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  line-height: 1.3;
+  white-space: nowrap;
+  cursor: pointer;
+}
+body.mui .mui-exit:hover {
+  background: rgba(128, 128, 128, 0.26);
+}
+
+/* image page: "← <gallery>" above everything (the page is a flex row) */
+body.mui .mui-image-crumb {
+  order: -10;
+  flex: 0 0 100%;
+  max-width: 100%;
+  padding: 8px 15px 6px;
+}
+body.mui .mui-image-crumb .mui-exit {
+  margin-left: 0;
+  padding: 4px 14px 4px 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+body.mui .mui-crumb-cover {
+  width: 32px;
+  height: 32px;
+  flex: none;
+  object-fit: cover;
+  border-radius: 50%;
+  background: rgba(128, 128, 128, 0.2);
 }
 
 /* Phones/tablets: the details panel (with the name) is already right
@@ -2777,4 +2852,658 @@ body.mui .scene-tabs .studio-logo .studio-name svg {
 
 body.mui .scene-tabs .scene-header-container:has(.studio-name) .scene-header {
   width: 100%;
+}
+
+/* ---- Image page: full-screen picture with zoom ---- */
+body.mui .image-container img.image-image {
+  cursor: zoom-in;
+}
+body.mui-viewer-open {
+  overflow: hidden;
+}
+.mui-viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.94);
+  touch-action: none;
+  overscroll-behavior: contain;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.mui-viewer-img {
+  max-width: 100vw;
+  max-height: 100vh;
+  max-height: 100dvh;
+  object-fit: contain;
+  transform-origin: center center;
+  cursor: zoom-in;
+  will-change: transform;
+  -webkit-touch-callout: none;
+}
+.mui-viewer-zoomed .mui-viewer-img {
+  cursor: grab;
+}
+.mui-viewer-zoomed .mui-viewer-img:active {
+  cursor: grabbing;
+}
+.mui-viewer-close {
+  position: absolute;
+  top: calc(12px + env(safe-area-inset-top, 0px));
+  right: calc(12px + env(safe-area-inset-right, 0px));
+  padding: 8px 14px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(40, 40, 40, 0.85);
+  color: #fff;
+  font-size: 15px;
+  line-height: 1.2;
+  cursor: pointer;
+}
+.mui-viewer-close:hover,
+.mui-viewer-close:focus-visible {
+  background: rgba(70, 70, 70, 0.95);
+}
+
+/* ---- Touch screens: hold a card, then slide to select more ---- */
+@media (hover: none) {
+  /* holding a card must not pick it up for drag-and-drop */
+  body.mui .grid-card,
+  body.mui .grid-card * {
+    -webkit-user-drag: none;
+  }
+}
+body.mui-drag-selecting {
+  overscroll-behavior: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Saved filters menu: the save button next to "Filter name…" looked the
+   same disabled (no name typed yet) and ready. Now it says "Save", is faded
+   until there's a name, and turns the accent colour when it can be used. */
+body.mui .saved-filter-list-menu .input-group-append > .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+body.mui .saved-filter-list-menu .input-group-append > .btn::after {
+  content: "Save";
+}
+body.mui .saved-filter-list-menu .input-group-append > .btn:disabled {
+  opacity: 0.4 !important;
+  cursor: not-allowed;
+}
+body.mui .saved-filter-list-menu .input-group-append > .btn:not(:disabled) {
+  background: var(--mui-accent, #3d8bfd) !important;
+  border-color: var(--mui-accent, #3d8bfd) !important;
+  color: #fff !important;
+  opacity: 1 !important;
+}
+
+/* ------------------------------------------------------------------
+   Quick filters: saved filters as a scrolling row of buttons between a
+   list's toolbar and the filters in use
+   ------------------------------------------------------------------ */
+.mui-quick-filters {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  margin: 0 auto 8px;
+}
+.mui-qf-row {
+  flex: none;
+}
+/* show / hide the filters in use */
+.mui-qf-toggle {
+  flex: none;
+  padding: 4px 10px;
+  border: 1px dashed rgba(255, 255, 255, 0.25);
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  white-space: nowrap;
+  opacity: 0.8;
+  cursor: pointer;
+}
+.mui-qf-toggle[hidden] {
+  display: none;
+}
+body.mui.mui-light .mui-qf-toggle {
+  border-color: var(--mui-l-border);
+}
+body.mui-has-quick-filters:not(.mui-filter-tags-shown) .main .filter-tags {
+  display: none !important;
+}
+/* Hide and Clear before the filters in use (they replace Stash's
+   "Clear all") */
+.mui-ft-actions {
+  display: inline-flex;
+  flex: none;
+  gap: 6px;
+  margin-right: 4px;
+}
+body.mui-has-quick-filters .main .filter-tags .clear-all-button {
+  display: none !important;
+}
+.mui-ft-btn {
+  flex: none;
+  padding: 2px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font-size: 0.8rem;
+  line-height: 1.6;
+  white-space: nowrap;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.mui-ft-clear {
+  border-color: rgba(220, 53, 69, 0.6);
+  color: #e35d6a;
+}
+body.mui.mui-light .mui-ft-btn {
+  border-color: var(--mui-l-border);
+}
+body.mui.mui-light .mui-ft-clear {
+  border-color: rgba(220, 53, 69, 0.5);
+  color: #c82333;
+}
+@media (hover: hover) and (pointer: fine) {
+  .mui-ft-btn:hover {
+    background: rgba(255, 255, 255, 0.12);
+  }
+  body.mui.mui-light .mui-ft-btn:hover {
+    background: var(--mui-l-hover);
+  }
+}
+/* the quick filters and the filters in use: one line each that scrolls
+   sideways, centred while it fits (the auto margins, unlike centring,
+   keep the start reachable once it's wider than the screen) */
+.mui-qf-row,
+body.mui .main .filter-tags {
+  display: flex;
+  flex-wrap: nowrap;
+  justify-content: flex-start;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 2px 4px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.mui-qf-row::-webkit-scrollbar,
+body.mui .main .filter-tags::-webkit-scrollbar {
+  display: none;
+}
+.mui-qf-row > :first-child,
+body.mui .main .filter-tags > :first-child {
+  margin-left: auto !important;
+}
+.mui-qf-row > :last-child,
+body.mui .main .filter-tags > :last-child {
+  margin-right: auto !important;
+}
+body.mui .main .filter-tags > * {
+  flex: none;
+  white-space: nowrap;
+}
+.mui-qf-btn {
+  flex: none;
+  padding: 4px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  white-space: nowrap;
+  cursor: pointer;
+}
+/* hover colour only with a mouse: on phones it sticks to whatever was
+   last under the finger */
+@media (hover: hover) and (pointer: fine) {
+  .mui-qf-btn:hover,
+  .mui-qf-toggle:hover {
+    background: rgba(255, 255, 255, 0.12);
+  }
+  body.mui.mui-light .mui-qf-btn:hover,
+  body.mui.mui-light .mui-qf-toggle:hover {
+    background: var(--mui-l-hover);
+  }
+}
+.mui-qf-btn,
+.mui-qf-toggle {
+  -webkit-tap-highlight-color: transparent;
+}
+.mui-qf-btn.active {
+  border-color: var(--mui-accent);
+  background: var(--mui-accent);
+  color: #fff;
+  font-weight: 600;
+}
+.mui-qf-btn:focus-visible {
+  outline: 2px solid var(--mui-accent);
+  outline-offset: 2px;
+}
+@media (max-width: 576px) {
+  .mui-qf-btn {
+    padding: 6px 14px;
+  }
+}
+body.mui.mui-light .mui-qf-btn {
+  border-color: var(--mui-l-border);
+  background: var(--mui-l-surface);
+}
+body.mui.mui-light .mui-qf-btn.active {
+  border-color: var(--mui-accent);
+  background: var(--mui-accent);
+  color: #fff;
+}
+/* while a quick filter loads it through Stash's saved-filter menu */
+body.mui-qf-busy .saved-filter-list-menu {
+  visibility: hidden !important;
+}
+
+/* ------------------------------------------------------------------
+   Edit dialog for several items: Overwrite / Add / Remove show which one
+   is chosen (all three were the same blue)
+   ------------------------------------------------------------------ */
+body.mui .multi-set .button-group-above.button-group-above > .btn.btn:not(.active):not(.active) {
+  background-color: rgba(128, 128, 128, 0.18) !important;
+  border-color: transparent !important;
+  color: inherit !important;
+  box-shadow: none !important;
+  font-weight: 400;
+}
+body.mui .multi-set .button-group-above.button-group-above > .btn.btn.active {
+  background-color: var(--mui-accent) !important;
+  border-color: var(--mui-accent) !important;
+  color: #fff !important;
+  font-weight: 600;
+}
+
+/* Remove mode: what the selected items have now, tap to remove */
+body.mui .mui-ms-current {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+body.mui .mui-ms-current-head {
+  flex: 0 0 100%;
+  font-size: 0.85rem;
+  opacity: 0.75;
+}
+body.mui .mui-ms-chip {
+  padding: 4px 12px;
+  border: 1px solid rgba(128, 128, 128, 0.45);
+  border-radius: 999px;
+  background: rgba(128, 128, 128, 0.14);
+  color: inherit;
+  font-size: 0.85rem;
+  line-height: 1.3;
+  -webkit-tap-highlight-color: transparent;
+}
+body.mui .mui-ms-chip.on {
+  border-color: #d9534f;
+  background: #d9534f;
+  color: #fff;
+  text-decoration: line-through;
+}
+body.mui .mui-ms-chip.mui-ms-all {
+  border-style: dashed;
+  background: transparent;
+  font-weight: 600;
+}
+
+/* Phones: swipe down goes back, so no back buttons (image and gallery
+   pages) */
+@media (max-width: 576px) {
+  body.mui.mui-mobile.mui-swipe-back .mui-image-crumb,
+  body.mui.mui-mobile.mui-swipe-back .mui-gallery-head > .mui-exit {
+    display: none;
+  }
+}
+
+/* The studio moved from the title box to a "Studio:" line by the
+   performers (scene, image and gallery pages) */
+body.mui.mui-studio-moved :is(.scene-header-container, .image-header-container, .gallery-header-container) > .studio-logo {
+  display: none !important;
+}
+body.mui .mui-studio-line a {
+  font-weight: 600;
+}
+
+/* The title box (scene and image pages): no box, the page's own colour;
+   the text stays where it was (same padding) */
+body.mui .scene-tabs > div:first-child,
+body.mui.mui-scene-stack .scene-tabs > div:first-child,
+body.mui.mui-image-stack .image-tabs > div:first-child,
+body.mui.mui-image-stack .image-tabs > .image-toolbar {
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+/* Home page > Customize: "Move" handle to drag rows (works with a finger) */
+body.mui .recommendations-container-edit .recommendation-row-head {
+  align-items: center;
+}
+body.mui .mui-move {
+  flex: none;
+  margin-right: 12px;
+  padding: 6px 12px;
+  border: 1px solid rgba(128, 128, 128, 0.45);
+  border-radius: 999px;
+  background: rgba(128, 128, 128, 0.14);
+  color: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  line-height: 1.2;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+body.mui-row-dragging,
+body.mui-row-dragging .mui-move {
+  cursor: grabbing;
+  user-select: none;
+  -webkit-user-select: none;
+}
+body.mui .recommendations-container-edit .mui-dragging .recommendation-row {
+  outline: 2px solid var(--mui-accent);
+  outline-offset: -2px;
+  border-radius: 12px;
+  background: rgba(128, 128, 128, 0.12);
+}
+body.mui .recommendations-container-edit .mui-dragging .mui-move {
+  background: var(--mui-accent);
+  border-color: var(--mui-accent);
+  color: #fff;
+}
+/* light theme: the rows were Stash's dark slate with dark text (the light
+   rule above only matched rows directly in the list; they sit deeper) */
+body.mui.mui-light .recommendations-container-edit .recommendation-row {
+  background-color: var(--mui-l-surface) !important;
+  color: var(--mui-l-text);
+  border-radius: 12px;
+  box-shadow: inset 0 0 0 1px var(--mui-l-border);
+}
+body.mui.mui-light .recommendations-container-edit .recommendation-row h2 {
+  color: var(--mui-l-text);
+}
+
+/* Gallery cover next to the name: like a tag's picture (whole picture,
+   not cropped square, rounded corners, no frame) and bigger */
+body.mui .mui-gallery-head {
+  align-items: center;
+}
+body.mui .mui-gallery-head > .mui-gallery-cover {
+  width: 180px;
+  height: auto;
+  max-height: 270px;
+  object-fit: contain;
+  padding: 0;
+  border-radius: 12px;
+  background: transparent;
+}
+@media (max-width: 576px) {
+  body.mui .mui-gallery-head > .mui-gallery-cover {
+    width: 130px;
+    max-height: 200px;
+    border-radius: 10px;
+  }
+}
+
+/* Gallery name under the cover (like a tag page), "← Galleries" top right */
+body.mui .mui-gallery-head {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: start;
+  column-gap: 12px;
+  row-gap: 10px;
+}
+body.mui .mui-gallery-head > .mui-gallery-cover {
+  grid-column: 1;
+  grid-row: 1;
+}
+body.mui .mui-gallery-head > .mui-exit {
+  grid-column: 3;
+  grid-row: 1;
+  margin-left: 0;
+}
+body.mui .mui-gallery-head > :is(h2, h3) {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  margin: 0 !important;
+}
+@media (max-width: 576px) {
+  /* phones: cover centred, name centred under it */
+  body.mui .mui-gallery-head > .mui-gallery-cover {
+    grid-column: 1 / -1;
+    justify-self: center;
+    width: 160px;
+    max-height: 240px;
+  }
+  body.mui .mui-gallery-head > :is(h2, h3) {
+    text-align: center;
+  }
+}
+/* (the copy above the pictures stays hidden below wide screens) */
+@media (max-width: 1199px) {
+  body.mui .mui-gallery-title.mui-gallery-head {
+    display: none;
+  }
+}
+
+/* gallery cover and tag / studio / group picture: a soft shadow, no box */
+body.mui .mui-gallery-head > .mui-gallery-cover,
+body.mui .detail-header .detail-header-image img.logo {
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35), 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+body.mui.mui-light .mui-gallery-head > .mui-gallery-cover,
+body.mui.mui-light .detail-header .detail-header-image img.logo {
+  box-shadow: 0 4px 14px rgba(16, 24, 40, 0.16), 0 1px 3px rgba(16, 24, 40, 0.12);
+}
+/* light theme: the "open the website" icon in the scene / image / gallery
+   toolbar was white (invisible on the light page) */
+body.mui.mui-light :is(.scene-toolbar, .image-toolbar, .gallery-toolbar) svg.fa-up-right-from-square {
+  color: var(--mui-l-text) !important;
+}
+/* without the box: title, date and buttons line up with the tab labels
+   below (8px in), and the gaps above/below are even */
+body.mui .scene-tabs > div:first-child,
+body.mui.mui-scene-stack .scene-tabs > div:first-child,
+body.mui.mui-image-stack .image-tabs > div:first-child {
+  margin-top: 0 !important;
+  padding: 14px 8px 6px !important;
+  border-radius: 0 !important;
+}
+body.mui.mui-image-stack .image-tabs > .image-toolbar {
+  margin: 0 !important;
+  padding: 0 8px 6px !important;
+  border-radius: 0 !important;
+}
+
+/* Scene / image pages: the info and the tabs fit together. The tabs sit
+   close under the info on a thin full-width line (the active tab's blue
+   underline sits on it), with the same spacing on every page */
+body.mui :is(.scene-tabs, .image-tabs) .nav-tabs {
+  margin: 4px 0 14px !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12) !important;
+}
+body.mui.mui-light :is(.scene-tabs, .image-tabs) .nav-tabs {
+  border-bottom-color: var(--mui-l-border) !important;
+}
+body.mui :is(.scene-tabs, .image-tabs) .nav-tabs .nav-link {
+  margin-bottom: -1px;
+}
+/* the scene's button row had extra space under it; match the image page */
+body.mui .scene-tabs .scene-toolbar {
+  margin-bottom: 0 !important;
+  padding-bottom: 0 !important;
+}
+
+/* Scene timeline: hidden from the ⋮ menu ("Hide timeline") */
+body.mui.mui-timeline-hidden .scene-player-container .scrubber-wrapper {
+  display: none !important;
+}
+/* phones: the strip fits the full-width player, with room to drag */
+@media (max-width: 576px) {
+  body.mui .scene-player-container .scrubber-wrapper {
+    margin: 6px 6px 0;
+    touch-action: pan-y;
+  }
+  body.mui .scene-player-container .scrubber-button {
+    width: 1.6rem;
+  }
+}
+
+/* the player's in-page full screen (phones without real full screen):
+   nothing of the page on top of it */
+body.vjs-full-window :is(.mui-bottom-nav, .mui-sheet, .top-nav) {
+  display: none !important;
+}
+
+/* iPhone, in-page full screen: "✕ Exit" (top left) and "Native Player"
+   (top right), shown with the player's controls; a short hint the first
+   few times */
+.video-js :is(.mui-native-fs, .mui-exit-fs) {
+  display: none;
+  position: absolute;
+  top: calc(10px + env(safe-area-inset-top));
+  right: calc(10px + env(safe-area-inset-right));
+  z-index: 5;
+  padding: 6px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 0.85rem;
+  font-weight: 600;
+  -webkit-tap-highlight-color: transparent;
+}
+.video-js .mui-exit-fs {
+  right: auto;
+  left: calc(10px + env(safe-area-inset-left));
+}
+.video-js.vjs-fullscreen :is(.mui-native-fs, .mui-exit-fs) {
+  display: block;
+  transition: opacity 0.3s;
+}
+.video-js.vjs-fullscreen.vjs-user-inactive.vjs-playing :is(.mui-native-fs, .mui-exit-fs) {
+  opacity: 0;
+  pointer-events: none;
+}
+.video-js .mui-native-hint {
+  position: absolute;
+  left: 50%;
+  top: 18%;
+  transform: translateX(-50%);
+  z-index: 6;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  font-size: 0.9rem;
+  white-space: nowrap;
+  pointer-events: none;
+  transition: opacity 0.4s;
+}
+.video-js .mui-native-hint.gone {
+  opacity: 0;
+}
+/* no double-tap zoom on the video */
+.scene-player-container .video-js {
+  touch-action: manipulation;
+}
+
+/* ===================================================================
+   Selected cards: organized / tags / performers strip
+   =================================================================== */
+
+body.mui .thumbnail-section { container-type: inline-size; }
+
+body.mui .mui-sel-info {
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  bottom: 6px;
+  z-index: 3;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 5px;
+  border-radius: 10px;
+  background: rgba(14, 16, 20, 0.62);
+  -webkit-backdrop-filter: blur(10px) saturate(140%);
+  backdrop-filter: blur(10px) saturate(140%);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+  animation: mui-sel-in 0.16s ease-out;
+}
+
+@keyframes mui-sel-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+
+body.mui .mui-sel-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1.5;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+body.mui .mui-sel-who { flex: 1 1 auto; }
+body.mui .mui-sel-who:not(.mui-sel-none) { display: block; }
+body.mui .mui-sel-none { color: rgba(255, 255, 255, 0.6); font-weight: 500; }
+
+body.mui .mui-sel-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+body.mui .mui-sel-yes { color: #7ee2a8; background: rgba(46, 160, 98, 0.22); }
+body.mui .mui-sel-no { color: #ffd27a; background: rgba(214, 150, 40, 0.22); }
+
+/* the specs (resolution, length) and studio sit under it while selected */
+body.mui .grid-card:has(.mui-sel-info) :is(.scene-specs-overlay, .studio-overlay) { opacity: 0; }
+
+/* small cards (3 images across on a phone): shorter words, tighter */
+@container (max-width: 150px) {
+  body.mui .mui-sel-info { left: 4px; right: 4px; bottom: 4px; gap: 3px; padding: 4px; border-radius: 8px; }
+  body.mui .mui-sel-chip { padding: 1px 6px; font-size: 0.64rem; gap: 4px; }
+  body.mui .mui-sel-dot { width: 6px; height: 6px; }
 }

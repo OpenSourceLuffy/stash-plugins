@@ -179,3 +179,29 @@ body.login #login-button:focus-visible {
 @media (prefers-reduced-motion: reduce) {
   body.login .card { animation: none; }
 }
+
+/* Phones: Stash's own login styles push the box down by half the screen
+   width (margin-top: 50%), which on top of the centring above put it near
+   the bottom with the Login button off screen. Undo that and sit the box in
+   the upper part of the screen, so the fields and button stay visible when
+   the keyboard opens. */
+@media (max-width: 576px) {
+  body.login .dialog {
+    margin-top: 0;
+    align-items: flex-start;
+    padding: max(8vh, calc(env(safe-area-inset-top) + 24px)) max(16px, env(safe-area-inset-right)) 24px max(16px, env(safe-area-inset-left));
+  }
+
+  body.login .card {
+    padding: 28px 22px 24px;
+    border-radius: 20px;
+  }
+
+  body.login .card::before {
+    font-size: 1.8rem;
+  }
+
+  body.login form::before {
+    margin-bottom: 20px;
+  }
+}

@@ -1,6 +1,6 @@
-name: Better Tagging Tools
-description: Tags each performer with the tags used most often in their scenes, images and galleries, shows those tags as one-click "Suggested tags" when editing tags, and adds "Bulk tag" buttons on performer pages (a performer's scenes, images and galleries) and gallery pages (a gallery's images). Can also tag every image in a gallery with the gallery's name, give tags without a picture one from your library, and keep tag names consistently capitalised.
-version: "1.0"
+name: Better Organizing Tools
+description: Tags each performer and studio with the tags used most often in their scenes, images and galleries, and each gallery with its images' most used tags, shows one-click "Suggested tags" and "Title ideas" when editing, adds "Bulk tag" buttons on performer and gallery pages, and can tag a studio's items with the studio's tags. Can also tag every image in a gallery with the gallery's name, give tags without a picture one from your library, keep tag names consistently capitalised, auto tag from file names, fill in dates and titles from file names, and give scenes a studio from the account link in their file name. No AI - for that, add Better Organizing AI (works with or without this plugin).
+version: "2.3"
 url: https://github.com/OpenSourceLuffy/stash-plugins/tree/main/plugins/BetterTaggingTools
 exec:
   - python
@@ -15,36 +15,83 @@ ui:
 
 hooks:
   - name: Refresh performer top tags on edit
-    description: When tags or performers change on a scene, image or gallery, queues that item's performers. A background job refreshes each of them once, a few seconds after the last edit, so batch edits are handled in one go.
+    description: When tags or performers change on a scene, image or gallery, queues that item's performers (and, if turned on, its studio and galleries). A background job refreshes each of them once, a few seconds after the last edit, so batch edits are handled in one go.
     triggeredBy:
       - Scene.Update.Post
       - Image.Update.Post
       - Gallery.Update.Post
-  - name: Tag gallery images with the gallery's name
-    description: When "Tag gallery images with the gallery's name" is on, new galleries, renamed galleries, newly scanned images and images moved into a gallery get queued, and the background job tags them.
+  - name: New galleries, scenes and images
+    description: When "Tag gallery images with the gallery's name" is on, new galleries and newly scanned images get their gallery-name tag; when "Fill in dates of new scenes, images and galleries" or "Fill in titles of new scenes, images and galleries" is on, they get the date or title from their file name. They're queued and a background job does the work once the scan is done.
     triggeredBy:
       - Gallery.Create.Post
       - Image.Create.Post
-  - name: Capitalise new tags
-    description: When "Capitalise new tags automatically" is on, capitalises a tag's name as soon as it's created.
+      - Scene.Create.Post
+  - name: New tags, performers and studios
+    description: When "Capitalise new tags automatically" is on, capitalises a tag's name as soon as it's created. When "Auto tag new performers, studios and tags" is on, runs Stash's Auto Tag for each new one.
     triggeredBy:
       - Tag.Create.Post
+      - Performer.Create.Post
+      - Studio.Create.Post
 
 tasks:
+  - name: Preview top tags (no changes)
+    description: Writes what the three "Tag ... with their top tags" tasks below would add and remove for performers, studios and galleries to the log, without changing anything.
+    defaultArgs:
+      mode: dryrun_all
   - name: Tag performers with their top tags
     description: Counts the tags on every performer's scenes, images and galleries and adds the most used ones to the performer. Tags this plugin added earlier that are no longer in the top list are taken off again; tags you added yourself are never removed.
     defaultArgs:
       mode: apply
-  - name: Preview performer top tags (no changes)
-    description: Writes what the task above would add and remove to the log, without changing anything.
+  - name: Tag studios with their top tags
+    description: The same for studios - counts the tags on each studio's scenes, images and galleries and adds the most used ones to the studio.
     defaultArgs:
-      mode: dryrun
-  - name: Tag gallery images with the gallery's name
-    description: Gives every image in every gallery a tag named after its gallery (its title, or the zip or folder name), creating the tags as needed. Use it once to catch up existing galleries; the setting below keeps new ones tagged.
+      mode: apply_studios
+  - name: Tag galleries with their top tags
+    description: The same for galleries - counts the tags on each gallery's images and adds the most used ones to the gallery. Gallery-name tags never count.
     defaultArgs:
-      mode: gallerynames
+      mode: apply_galleries
+  - name: Preview studio tags on their items (no changes)
+    description: Writes what "Tag studios' items with the studio's tags" would add to the log, without changing anything.
+    defaultArgs:
+      mode: studiotags_preview
+  - name: Tag studios' items with the studio's tags
+    description: Gives every scene, image and gallery of each studio the tags on the studio itself (the top tags this plugin added and any you added). Only a studio's own items, not its sub-studios'. Nothing is removed. A studio page also has a button to do one studio, choosing which of its tags to use.
+    defaultArgs:
+      mode: studiotags
+  - name: Preview titles from file names (no changes)
+    description: Writes the titles "Fill in titles from file names" (below) would give to the log, without changing anything.
+    defaultArgs:
+      mode: titles_preview
+  - name: Fill in titles from file names
+    description: Gives scenes, images and galleries without a title one made from the file name, cleaned up - no [ids] or [site names], dates, resolutions or codecs, and no performer or studio name as its own part (unless "Keep performer and studio names in titles" is on). Camera and app names (IMG_1234, screen recordings, FullSizeRender...) and random ids are left without a title. Titles you already have are never changed.
+    defaultArgs:
+      mode: titles
+  - name: Redo titles made from file names
+    description: Makes titles that came from file names again with the current settings, e.g. after turning "Keep performer and studio names in titles" on or off. Only titles that exactly match one this plugin makes are changed; titles you typed or scraped are left alone.
+    defaultArgs:
+      mode: retitles
+  - name: "Studios from accounts: from file names and links only"
+    description: Gives scenes without a studio a studio for the account in their file name, title, details or URLs (e.g. "onlyfans.com/name"), creating it under a parent studio for the platform if needed, and adds the performer whose name, alias or profile link matches the account. Fast; no AI (Better Organizing AI can also read watermarks).
+    defaultArgs:
+      mode: handle_studios_text
+  - name: Preview dates from file names (no changes)
+    description: Writes what "Fill in dates from file names" would set to the log, without changing anything.
+    defaultArgs:
+      mode: dates_preview
+  - name: Fill in dates from file names
+    description: Gives scenes, images and galleries that have no date the date in their file name (or their folder's name) - "2023-05-19_video", "Studio - 6 Nov 2026 - Title", "Studio.21.07.08.Name", "05-27-2014 17_26_15" and similar. Only full dates count, and dates you've already set are never changed.
+    defaultArgs:
+      mode: dates
+  - name: Preview tag descriptions on 30 tags (no changes)
+    description: Writes to the log the descriptions "Fill in empty tag descriptions" would give 30 random tags, and where each comes from, without changing anything.
+    defaultArgs:
+      mode: tagdescs_preview
+  - name: Fill in empty tag descriptions
+    description: Every tag without a description gets one - from the stash-box it's linked to (StashDB...), else StashDB by exact name or alias, else the E-Hentai wiki (comic and doujinshi tags), else Danbooru's wiki. Only empty descriptions are filled; names, aliases and descriptions you've written are never changed. Story or chapter names starting with a number are skipped.
+    defaultArgs:
+      mode: tagdescs
   - name: Give tags without a picture one from your library
-    description: Every tag that has no picture gets one from your library - the photo that's most "about" that tag (fewest other tags, then highest rated), else a scene screenshot, a marker screenshot or a gallery cover. Each tag gets a picture no other tag has where possible, if need be a different frame from one of its scenes. Tags that already have a picture are never changed.
+    description: Every tag that has no picture gets one from your library - the photo that's most "about" that tag (fewest other tags, then highest rated), else a scene screenshot, a marker screenshot or a gallery cover. A picture is never used for two tags - each tag gets one no other tag has, if need be a different frame from one of its scenes, or none if there's nothing unused. Tags that already have a picture are never changed.
     defaultArgs:
       mode: tagpictures
   - name: Give tags that share a picture their own
@@ -55,39 +102,59 @@ tasks:
     description: Gives EVERY tag a different picture from the one it has now - including pictures you chose yourself - picked the same way (most "about" the tag, unique where possible, rarest tags first, video frames if need be). Tags with no other picture available keep theirs. Old pictures can't be brought back, so make a backup first.
     defaultArgs:
       mode: newpictures
-  - name: Capitalise tag names
-    description: Capitalises every tag name the same way - "dating app" becomes "Dating App", small words like "on", "to" and "and" stay lowercase in the middle ("Behind the Scenes"). Capitals already in a name are never lowered.
-    defaultArgs:
-      mode: titlecase
   - name: Preview tag name capitalisation (no changes)
     description: Writes what "Capitalise tag names" would rename to the log, without changing anything.
     defaultArgs:
       mode: titlecase_preview
+  - name: Capitalise tag names
+    description: Capitalises every tag name the same way - "dating app" becomes "Dating App", small words like "on", "to" and "and" stay lowercase in the middle ("Behind the Scenes"). Capitals already in a name are never lowered.
+    defaultArgs:
+      mode: titlecase
+  - name: Tag gallery images with the gallery's name
+    description: Gives every image in every gallery a tag named after its gallery (its title, or the zip or folder name), creating the tags as needed. Use it once to catch up existing galleries; the setting below keeps new ones tagged.
+    defaultArgs:
+      mode: gallerynames
+  - name: Preview gallery tags, performers and studio on images (no changes)
+    description: Writes what "Tag gallery images with the gallery's tags, performers and studio" would add to the log, without changing anything.
+    defaultArgs:
+      mode: gallerytags_preview
+  - name: Tag gallery images with the gallery's tags, performers and studio
+    description: Gives every image in a gallery the gallery's tags and performers, and its studio if the image has no studio yet (a studio already set is kept). Nothing is removed. Top tags this plugin added to a gallery (counted from its images) aren't copied back down.
+    defaultArgs:
+      mode: gallerytags
 
 settings:
   topTagCount:
-    displayName: Top tags per performer
-    description: How many of a performer's most used tags to add to them. Default 10.
+    displayName: Top tags per performer, studio or gallery
+    description: How many of the most used tags to add to each performer, studio or gallery. Default 10.
     type: NUMBER
   minUses:
     displayName: Minimum uses
-    description: A tag must be on at least this many of the performer's scenes, images and galleries to count. Default 3.
+    description: A tag must be on at least this many of the performer's (or studio's) scenes, images and galleries, or of a gallery's images, to count. Default 3.
     type: NUMBER
   skipImages:
     displayName: Don't count images
-    description: Only count scenes and galleries. Useful if large image sets drown out everything else.
+    description: Only count scenes and galleries for performers and studios. Useful if large image sets drown out everything else. (Galleries always count their images.)
     type: BOOLEAN
   excludeTags:
     displayName: Tags to ignore
-    description: Comma-separated tag names that should never be added to performers (for example housekeeping tags like "Organized, To Review").
+    description: Comma-separated tag names that should never be added to performers, studios or galleries as top tags (for example housekeeping tags like "Organized, To Review"). This doesn't affect Auto Tag; for that, turn on "Ignore Auto Tag" on the tag itself.
     type: STRING
   noAutoRefresh:
     displayName: Don't refresh on edit
-    description: Turn off the automatic refresh of a performer's top tags when you change tags on their scenes, images or galleries. The task still works.
+    description: Turn off the automatic refresh of top tags (performers, and studios and galleries if turned on below) when you change tags on scenes, images or galleries. The tasks still work.
+    type: BOOLEAN
+  studioTopTags:
+    displayName: Refresh studios' top tags on edit
+    description: When tags or the studio change on a scene, image or gallery, refresh that studio's top tags too (like performers'). Run "Tag studios with their top tags" once to catch up.
+    type: BOOLEAN
+  galleryTopTags:
+    displayName: Refresh galleries' top tags on edit
+    description: When an image's tags or galleries change, refresh its galleries' top tags too. Run "Tag galleries with their top tags" once to catch up.
     type: BOOLEAN
   galleryNameTags:
     displayName: Tag gallery images with the gallery's name
-    description: Automatically tag images in a gallery with a tag named after the gallery (its title, or the zip or folder name). Runs for new and renamed galleries, newly scanned images and images moved into a gallery. Images added with a gallery's "Add" tab are picked up by the task. These tags never count towards performers' top tags.
+    description: Automatically tag images in a gallery with a tag named after the gallery (its title, or the zip or folder name, without the gallery's studio in it unless that's the whole name). Runs for new and renamed galleries, newly scanned images and images moved into a gallery. Images added with a gallery's "Add" tab are picked up by the task. These tags never count towards performers' top tags.
     type: BOOLEAN
   galleryTagParent:
     displayName: Parent tag for gallery-name tags
@@ -105,6 +172,26 @@ settings:
     displayName: Special spellings
     description: Comma-separated words or tag names to always write exactly like this when capitalising, for acronyms and odd capitals - for example "CNN, POV, HD, iPhone". Matched without caring about case.
     type: STRING
+  autoTagNew:
+    displayName: Auto tag new performers, studios and tags
+    description: When a performer, studio or tag is created (by hand, a scraper or another plugin), run Stash's Auto Tag for it, so files with its name in their path get it straight away. Ones set to "Ignore Auto Tag" are skipped.
+    type: BOOLEAN
+  datesNewItems:
+    displayName: Fill in dates of new scenes, images and galleries
+    description: When a scan adds a scene, image or gallery, set its date from the file name (see the "Fill in dates from file names" task). "Auto tag this" (and Better Organizing AI, if installed) also fill in empty dates.
+    type: BOOLEAN
+  titlesNewItems:
+    displayName: Fill in titles of new scenes, images and galleries
+    description: When a scan adds a scene, image or gallery, give it a title from its file name (see the "Fill in titles from file names" task). "Auto tag this" (and Better Organizing AI, if installed) also fill in empty titles.
+    type: BOOLEAN
+  titlesNoGallery:
+    displayName: Don't title images after their gallery
+    description: An image whose file name makes no title (a camera / app name or an id) normally gets one from its gallery - the gallery's name and its place in it, e.g. "Beach Trip #12" (a zip or folder gallery first, else the smallest one it's in). Turn this on to leave such images without a title.
+    type: BOOLEAN
+  titlesKeepNames:
+    displayName: Keep performer and studio names in titles
+    description: Titles from file names normally leave out performer and studio names (e.g. "Jane Doe - Beach Day" becomes "Beach Day"). Turn this on to keep them. A file named only after a performer still gets no title.
+    type: BOOLEAN
   maxSuggestions:
     displayName: Suggested tags to show
     description: The most suggestions shown under a tag box while editing. Default 15.

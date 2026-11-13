@@ -18,7 +18,7 @@ Under **Settings → Tasks → Plugin Tasks → Library Cleanup**:
 
 **Always kept:** favourites, tags that are the parent of other tags, parent studios with a child studio in use, the tags listed in
 **Tags to always keep**, and the parent tag
-[Better Tagging Tools](../BetterTaggingTools) files its gallery-name tags under.
+[Better Organizing Tools](../BetterTaggingTools) files its gallery-name tags under.
 
 ## Settings
 
@@ -31,3 +31,4 @@ Under **Settings → Tasks → Plugin Tasks → Library Cleanup**:
 - Python 3 (standard library only). Tested with Stash v0.31.
 - Performers with no content are often ones a scraper or StashDB created. Check the preview list, and mark any you want to keep as a favourite.
 - Face-recognition plugins that learned from a performer's picture will lose that performer once it's deleted.
+- Changes are listed in the [changelog](CHANGELOG.md).

@@ -409,8 +409,70 @@ a.mlt-similar-card.mlt-current {
   padding: 32px 15px 40px;
 }
 
-.mlt-perf-similar:empty {
+.mlt-perf-similar:empty,
+.mlt-perf-similar:not(:has(.mlt-related-row)) {
   display: none;
+}
+
+/* rows after the first in the section (performer pages: Galleries, Studios) */
+.mlt-ps-slot:empty {
+  display: none;
+}
+
+.mlt-ps-slot + .mlt-ps-slot:not(:empty) {
+  margin-top: 28px;
+}
+
+/* Galleries: portrait covers, like the performer cards */
+a.mlt-gal-card {
+  flex: 0 0 180px;
+  width: 180px;
+}
+
+.mlt-gal-card .mlt-rel-thumb {
+  aspect-ratio: 3 / 4;
+}
+
+/* Studios: the logo whole, on a soft panel */
+a.mlt-studio-card {
+  flex: 0 0 220px;
+  width: 220px;
+}
+
+.mlt-studio-card .mlt-rel-thumb {
+  aspect-ratio: 16 / 9;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.mlt-studio-card .mlt-rel-thumb img {
+  inset: 14%;
+  width: 72%;
+  height: 72%;
+  object-fit: contain;
+}
+
+.mlt-studio-card .mlt-studio-noimg {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  text-align: center;
+}
+
+.mlt-studio-noimg span {
+  font-size: 1.05rem;
+  font-weight: 700;
+  line-height: 1.2;
+  opacity: 0.85;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  word-break: break-word;
+}
+
+body.mlt-light :is(.mlt-gal-card, .mlt-studio-card) .mlt-rel-thumb {
+  background: var(--mui-l-surface-2);
 }
 
 /* On scene and image pages it comes last, after Suggested / Similar photos */
@@ -442,14 +504,20 @@ body.mlt-light .mlt-perf-card .mlt-rel-thumb {
     padding: 28px 12px 24px;
   }
 
-  a.mlt-perf-card {
+  a.mlt-perf-card,
+  a.mlt-gal-card {
     flex-basis: 38vw;
     width: 38vw;
     max-width: 180px;
+  }
+
+  a.mlt-studio-card {
+    flex-basis: 52vw;
+    width: 52vw;
+    max-width: 220px;
   }
 
   .mlt-perf-similar .mlt-related-arrows {
     display: none;
   }
 }
-

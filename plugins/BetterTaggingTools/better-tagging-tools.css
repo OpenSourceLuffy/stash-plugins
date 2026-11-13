@@ -130,3 +130,101 @@ body > .react-select__menu-portal {
   opacity: 0.5;
   transition: opacity 0.2s ease;
 }
+
+/* "Ask AI" row under the Tags box */
+.pts-ai-ask {
+  border-style: solid;
+}
+
+.pts-ai-note {
+  font-size: 0.8rem;
+  opacity: 0.75;
+}
+
+/* Title ideas under the Title box */
+.bt-title-ideas {
+  margin-top: 6px;
+}
+.bt-title-chips {
+  display: contents;
+}
+.bt-title-ideas .pts-chip {
+  white-space: normal;
+  text-align: left;
+}
+.bt-title-ideas .bt-title-ai::before {
+  content: "AI · ";
+  opacity: 0.7;
+}
+
+/* Settings → Tasks: task sections */
+.bt-task-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  width: 100%;
+  margin: 10px 0 2px;
+  padding: 10px 12px;
+  border: 1px solid rgba(128, 128, 128, 0.35);
+  border-radius: 8px;
+  background: rgba(128, 128, 128, 0.08);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.bt-task-group:hover,
+.bt-task-group:focus-visible {
+  background: rgba(19, 124, 189, 0.15);
+  outline: none;
+}
+.bt-tg-arrow::before {
+  content: "▸";
+  display: inline-block;
+  width: 1em;
+  transition: transform 0.15s ease;
+}
+.bt-task-group.open .bt-tg-arrow::before {
+  transform: rotate(90deg);
+}
+.bt-tg-title {
+  font-weight: 600;
+  font-size: 1.05rem;
+}
+.bt-tg-count {
+  font-size: 0.8rem;
+  opacity: 0.6;
+}
+.bt-tg-blurb {
+  flex-basis: 100%;
+  padding-left: calc(1em + 10px);
+  font-size: 0.85rem;
+  opacity: 0.75;
+}
+.setting.bt-task-hidden {
+  display: none !important;
+}
+
+/* studio page: "Tag all items with this studio's tags" window */
+.pts-studio-tags {
+  max-height: 50vh;
+  overflow-y: auto;
+  margin-bottom: 8px;
+}
+.pts-studio-count {
+  opacity: 0.65;
+  font-size: 0.85em;
+}
+
+/* Settings → Plugins: housekeeping-tag suggestions under "Tags to ignore" */
+.bt-ignore-suggest {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+.bt-ignore-label {
+  font-size: 0.85em;
+  opacity: 0.75;
+}

@@ -1,8 +1,10 @@
-// Better Tagging Tools - shows suggested tags under tag boxes: the
-// top tags of the performers picked in the same form (the "Tag performers
-// with their top tags" task fills those in), the tags most used in the picked
-// galleries, or the library's most used image/scene tags. Also adds the bulk
-// tag windows on performer and gallery pages.
+// Better Organizing Tools - shows suggested tags under tag boxes: the tags
+// most often found together with the tags already chosen, the top tags of the
+// performers picked in the same form (the "Tag performers with their top
+// tags" task fills those in), and - while there are no tags - the tags most
+// used in the picked galleries, on the picked performers' items or on the
+// studio's, or else the library's most used tags. Also adds the bulk tag
+// windows on performer and gallery pages, and title ideas under the Title box.
 (function () {
   "use strict";
 
@@ -35,7 +37,7 @@
   // ---- what's picked in the form right now ---------------------------------
   // Every mounted performer box and gallery box reports its picks here; tag
   // boxes listen.
-  const picks = { performers: new Map(), galleries: new Map() }; // type -> (reporter key -> [{id, name}])
+  const picks = { performers: new Map(), galleries: new Map(), studios: new Map() }; // type -> (reporter key -> [{id, name}])
   const listeners = new Set();
   const notify = () => listeners.forEach((fn) => fn());
 
@@ -146,44 +148,183 @@
     };
   });
 
+  // What kind of item a tag box is editing, from the page it's on: its
+  // query, filter argument and result field. Elsewhere, scenes.
+  const KINDS = {
+    scenes: ["findScenes", "scene_filter: $f", "SceneFilterType", "scenes", "scene"],
+    images: ["findImages", "image_filter: $f", "ImageFilterType", "images", "image"],
+    galleries: ["findGalleries", "gallery_filter: $f", "GalleryFilterType", "galleries", "gallery"],
+    performers: ["findPerformers", "performer_filter: $f", "PerformerFilterType", "performers", "performer"],
+    studios: ["findStudios", "studio_filter: $f", "StudioFilterType", "studios", "studio"],
+    groups: ["findGroups", "group_filter: $f", "GroupFilterType", "groups", "group"],
+  };
+  function editingKind() {
+    const m = location.pathname.match(/^\/(\w+)/);
+    return m && KINDS[m[1]] ? m[1] : "scenes";
+  }
+
+  // Tags -> the other tags most often found together with them: every item
+  // of that kind that has all of them (or, if none has, any of them) counts
+  // the rest of its tags. [{ tag, uses }], total, all
+  // by: "tags" or "performers" - the filter the ids go into
+  const tagsCommon = cached(15000, async (kind, ids, by = "tags") => {
+    const [query, arg, type, field] = KINDS[kind];
+    const items = async (modifier) => {
+      const d = await gql(
+        `query($f: ${type}) { ${query}(${arg}, filter: {per_page: -1}) { count ${field} { id tags { id } } } }`,
+        { f: { [by]: { value: ids, modifier } } }
+      );
+      return d[query];
+    };
+    const skip = await galleryNameTagIds();
+    let all = true;
+    let found = await items(by === "studios" ? "INCLUDES" : "INCLUDES_ALL");
+    if (by !== "studios" && found.count < 2 && ids.length > 1) {
+      all = false;
+      found = await items("INCLUDES");
+    }
+    const own = new Set(by === "tags" ? ids : []);
+    const counts = new Map();
+    found[field].forEach((it) =>
+      it.tags.forEach((t) => {
+        const id = String(t.id);
+        if (!own.has(id) && !skip.has(id)) counts.set(id, (counts.get(id) || 0) + 1);
+      })
+    );
+    const top = [...counts].sort((a, b) => b[1] - a[1]).slice(0, 60);
+    const details = await tagDetails(top.map(([id]) => id));
+    return {
+      total: found.count,
+      all,
+      items: top.filter(([id]) => details.has(id)).map(([id, uses]) => ({ tag: details.get(id), uses })),
+    };
+  });
+
+  // One tag -> how often each other tag is on the same items (of this kind):
+  // { total, share: Map(tag id -> fraction of the tag's items) }
+  const coTagsOf = cached(60000, async (kind, id) => {
+    const [query, arg, type, field] = KINDS[kind];
+    const [d, skip] = await Promise.all([
+      gql(`query($f: ${type}) { ${query}(${arg}, filter: {per_page: -1}) { count ${field} { tags { id } } } }`, {
+        f: { tags: { value: [id], modifier: "INCLUDES" } },
+      }),
+      galleryNameTagIds(),
+    ]);
+    const counts = new Map();
+    d[query][field].forEach((it) =>
+      it.tags.forEach((t) => {
+        const tid = String(t.id);
+        if (tid !== id && !skip.has(tid)) counts.set(tid, (counts.get(tid) || 0) + 1);
+      })
+    );
+    const total = d[query].count || 0;
+    return { total, share: new Map([...counts].map(([tid, n]) => [tid, total ? n / total : 0])) };
+  });
+
+  // Chosen tags -> other tags that often go with them, one chosen tag at a
+  // time (an item doesn't need all of them): a tag scores by how often it's
+  // with each chosen tag, added up, so one that goes with several ranks
+  // first. Up to the 12 most recently chosen. [{ tag, why }]
+  const COTAG_FROM = 12, COTAG_MIN = 0.15; // shown if with one of them 15%+ of the time
+  // With Better Organizing AI installed, body tags (Tits, Ass, their sizes...)
+  // are added by its body-part detector from what's shown: they're left out
+  // here, both as tags to go by and as suggestions (same names as btt_core's
+  // BODY_TAG_NAMES)
+  const BODY_TAGS = new Set([
+    "tits", "ass", "pussy", "cock",
+    "small tits", "tiny tits", "medium tits", "medium boobs", "big tits", "huge tits",
+    "small ass", "medium ass", "big ass", "bubble butt", "average dick", "big dick",
+    "natural tits", "fake tits", "fake boobs", "defined abs", "muscular", "muscular man",
+  ]);
+  const aiInstalled = cached(600000, async () => {
+    const d = await gql("{ plugins { id enabled } }");
+    return (d.plugins || []).some((p) => p.id === "BetterTaggingAI" && p.enabled);
+  });
+  const isBody = (t) => BODY_TAGS.has(String((t && t.name) || "").trim().toLowerCase());
+  // "Tags to ignore" (this plugin's setting): never suggested either
+  const ignoredNames = cached(30000, async () => {
+    const d = await gql("{ configuration { plugins } }");
+    const mine = (d.configuration.plugins || {})[PLUGIN_ID] || {};
+    return new Set(String(mine.excludeTags || "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean));
+  });
+  async function tagsAround(kind, chosen) {
+    const noBody = await aiInstalled("ai").catch(() => false);
+    const ignored = await ignoredNames("ignored").catch(() => new Set());
+    const from = chosen
+      .filter((t) => !(noBody && isBody(t)) && !ignored.has(String(t.name || "").trim().toLowerCase()))
+      .slice(-COTAG_FROM);
+    const lists = await Promise.all(from.map((t) => coTagsOf(kind + ":" + t.id, kind, t.id)));
+    const score = new Map(); // tag id -> { sum, best, why: [] }
+    lists.forEach((l, i) => {
+      if (l.total < 2) return; // a tag on one item says nothing
+      l.share.forEach((share, tid) => {
+        const e = score.get(tid) || { sum: 0, best: 0, why: [] };
+        e.sum += share;
+        e.best = Math.max(e.best, share);
+        e.why.push([share, from[i].name]);
+        score.set(tid, e);
+      });
+    });
+    const own = new Set(chosen.map((t) => t.id));
+    const top = [...score]
+      .filter(([tid, e]) => !own.has(tid) && e.best >= COTAG_MIN)
+      .sort((a, b) => b[1].sum - a[1].sum)
+      .slice(0, 60);
+    const details = await tagDetails(top.map(([tid]) => tid));
+    return top
+      .filter(([tid]) => details.has(tid) && !(noBody && isBody(details.get(tid))))
+      .map(([tid, e]) => ({
+        tag: details.get(tid),
+        why: e.why
+          .sort((a, b) => b[0] - a[0])
+          .slice(0, 3)
+          .map(([sh, name]) => `with ${name} ${Math.round(sh * 100)}% of the time`)
+          .join(" · "),
+      }));
+  }
+
   // The most used image or scene tags in the whole library
   const libraryCommon = cached(60000, async (kind) => {
-    const sort = kind === "image" ? "images_count" : "scenes_count";
+    const one = KINDS[kind][4];
     const [d, skip] = await Promise.all([
       gql(
-        `query($f: FindFilterType) { findTags(filter: $f) { tags { ${TAG_FIELDS} image_count scene_count } } }`,
-        { f: { sort, direction: "DESC", per_page: 80 } }
+        `query($f: FindFilterType) { findTags(filter: $f) { tags { ${TAG_FIELDS} ${one}_count } } }`,
+        { f: { sort: KINDS[kind][3] + "_count", direction: "DESC", per_page: 80 } }
       ),
       galleryNameTagIds(),
     ]);
     return d.findTags.tags
-      .filter((t) => !skip.has(String(t.id)))
-      .map((t) => ({ tag: t, uses: kind === "image" ? t.image_count : t.scene_count }));
+      .filter((t) => !skip.has(String(t.id)) && t[one + "_count"] > 0)
+      .map((t) => ({ tag: t, uses: t[one + "_count"] }));
   });
 
-  // On an image or scene's own page, what kind it is
-  function pageKind() {
-    const m = location.pathname.match(/^\/(images|scenes)\/\d+/);
-    return m ? (m[1] === "images" ? "image" : "scene") : null;
+  // On a scene, image, gallery, performer, studio or group page (or their
+  // lists, for bulk edit) rather than e.g. a tag's own page
+  function onItemPage() {
+    const m = location.pathname.match(/^\/(\w+)/);
+    return !!(m && KINDS[m[1]]);
   }
 
   // ---- the suggestion rows -------------------------------------------------
-  // Up to three rows: the picked performers' top tags, the tags most used in
-  // the picked galleries, and - when there are neither, on an image or scene
-  // page - the library's most used image/scene tags. `fixed` gives the
-  // performers directly (bulk tag window) and skips the other rows.
+  // Rows: the tags that go with the chosen ones; else the tags most used in
+  // the picked galleries; else on the picked performers' items; else on the
+  // studio's; else the library's most used tags. Plus the picked performers'
+  // top tags. `fixed` gives the performers directly (bulk tag window) and
+  // skips the other rows.
   function Suggestions({ values, onSelect, fixed, label }) {
     const [state, setState] = React.useState(() => ({
       performers: picked("performers"),
       galleries: picked("galleries"),
+      studios: picked("studios"),
     }));
     const performers = fixed || state.performers;
     const galleries = fixed ? [] : state.galleries;
+    const studios = fixed ? [] : state.studios;
     const [rows, setRows] = React.useState([]);
 
     React.useEffect(() => {
       if (fixed) return;
-      const fn = () => setState({ performers: picked("performers"), galleries: picked("galleries") });
+      const fn = () => setState({ performers: picked("performers"), galleries: picked("galleries"), studios: picked("studios") });
       listeners.add(fn);
       fn();
       return () => listeners.delete(fn);
@@ -191,10 +332,83 @@
 
     const pSig = performers.map((p) => p.id).sort().join(",");
     const gSig = galleries.map((g) => g.id).sort().join(",");
+    const sSig = studios.map((x) => x.id).sort().join(",");
+    const chosen = (values || []).map((t) => ({ id: String(t.id), name: t.name }));
+    const tSig = fixed ? "" : chosen.map((t) => t.id).sort().join(",");
     React.useEffect(() => {
       let live = true;
       (async () => {
+        // Each source is only asked when the ones before it found nothing:
+        // the chosen tags, the picked galleries, the picked performers, the
+        // studio, and last the library's most used tags. The performers' top
+        // tags are shown whenever there are performers.
         const out = [];
+        // body tags come from Better Organizing AI's detector, when it's here
+        const noBody = await aiInstalled("ai").catch(() => false);
+        const ignored = await ignoredNames("ignored").catch(() => new Set());
+        const skip = (t) => (noBody && isBody(t)) || ignored.has(String((t && t.name) || "").trim().toLowerCase());
+        const push = (row) => out.push({ ...row, items: row.items.filter((e) => !skip(e.tag)) });
+        // something found = a tag the item doesn't have yet (a row of only
+        // tags it already has mustn't stop the next source being asked)
+        const have = new Set(chosen.map((t) => t.id));
+        const found = () => out.some((r) => r.items.some((e) => !have.has(String(e.tag.id))));
+        const kind = editingKind();
+        const plural = KINDS[kind][3];
+        const nounOf = (n) => KINDS[kind][n === 1 ? 4 : 3];
+        const both = (names) => names.join(" & ");
+        const poss = (name) => name + (/s$/i.test(name) ? "'" : "'s");
+
+        if (chosen.length && !fixed) {
+          // each chosen tag's usual companions, not just the few items that
+          // have every chosen tag
+          const items = await tagsAround(kind, chosen);
+          const names = chosen.map((t) => t.name);
+          push({
+            key: "tags",
+            label: names.length <= 2 ? `Goes with ${both(names)}` : "Goes with these tags",
+            items: items.map((e) => ({ tag: e.tag, title: e.why[0].toUpperCase() + e.why.slice(1) })),
+          });
+        }
+
+        if (galleries.length && !found()) {
+          const ids = galleries.map((g) => g.id).sort();
+          const common = await galleryCommon(ids.join(","), ids);
+          const gNames = galleries.map((g) => g.name).filter(Boolean);
+          push({
+            key: "galleries",
+            label: gNames.length === galleries.length && gNames.length <= 2 ? `Common in ${both(gNames)}` : "Common in these galleries",
+            items: common.items.map((e) => ({ tag: e.tag, title: `On ${e.uses} of ${common.total} images` })),
+          });
+        }
+
+        if (performers.length && !fixed && !found() && ["scenes", "images", "galleries"].includes(kind)) {
+          const ids = performers.map((p) => p.id).sort();
+          const common = await tagsCommon(kind + ":p:" + pSig, kind, ids, "performers");
+          const names = performers.map((p) => p.name);
+          const who = !common.all ? "any of these performers" : names.length <= 2 ? both(names) : "all these performers";
+          push({
+            key: "perfcommon",
+            label: !common.all
+              ? `Common on these performers' ${plural}`
+              : names.length <= 2
+              ? `Common on ${poss(both(names))} ${plural}`
+              : `Common on their ${plural} together`,
+            items: common.items.map((e) => ({ tag: e.tag, title: `On ${e.uses} of the ${common.total} ${nounOf(common.total)} with ${who}` })),
+          });
+        }
+
+        if (studios.length && !fixed && !found() && ["scenes", "images", "galleries", "groups"].includes(kind)) {
+          const ids = studios.map((x) => x.id).sort();
+          const common = await tagsCommon(kind + ":s:" + sSig, kind, ids, "studios");
+          const names = studios.map((x) => x.name).filter(Boolean);
+          const which = names.length === 1 ? names[0] : "these studios";
+          push({
+            key: "studio",
+            label: `Common on ${poss(which)} ${plural}`,
+            items: common.items.map((e) => ({ tag: e.tag, title: `On ${e.uses} of the ${common.total} ${nounOf(common.total)} from ${which}` })),
+          });
+        }
+
         if (performers.length) {
           const lists = await performerTags(performers.map((p) => p.id));
           const byTag = new Map(); // tag id -> {tag, from: [names]}
@@ -209,42 +423,36 @@
             .sort((a, b) => b.from.length - a.from.length || a.tag.name.localeCompare(b.tag.name))
             .map((e) => ({ tag: e.tag, title: "Tagged on " + e.from.join(", ") }));
           const names = performers.map((p) => p.name);
-          out.push({
+          push({
             key: "performers",
-            label:
-              label ||
-              (names.length === 1 ? `${names[0]}'s top tags` : names.length === 2 ? `Top tags of ${names.join(" & ")}` : "Performers' top tags"),
+            label: label || (names.length === 1 ? `${poss(names[0])} top tags` : names.length === 2 ? `Top tags of ${both(names)}` : "Performers' top tags"),
             items,
           });
         }
-        if (galleries.length) {
-          const ids = galleries.map((g) => g.id).sort();
-          const common = await galleryCommon(ids.join(","), ids);
-          const gNames = galleries.map((g) => g.name).filter(Boolean);
-          out.push({
-            key: "galleries",
-            label:
-              gNames.length === galleries.length && gNames.length <= 2
-                ? `Common in ${gNames.join(" & ")}`
-                : "Common in these galleries",
-            items: common.items.map((e) => ({ tag: e.tag, title: `On ${e.uses} of ${common.total} images` })),
-          });
-        }
-        const kind = pageKind();
-        if (!fixed && !performers.length && !galleries.length && kind) {
-          const common = await libraryCommon(kind, kind);
-          out.push({
+
+        // Nothing else: the library's most used tags for this kind of item
+        // (galleries, studios and groups fall back to image / scene tags
+        // while none of them has tags)
+        if (!fixed && !found() && onItemPage()) {
+          let lk = kind;
+          let common = await libraryCommon(lk, lk);
+          if (!common.length && kind !== "scenes" && kind !== "images") {
+            lk = kind === "galleries" ? "images" : "scenes";
+            common = await libraryCommon(lk, lk);
+          }
+          const one = KINDS[lk][4];
+          push({
             key: "library",
-            label: `Most used ${kind} tags`,
-            items: common.map((e) => ({ tag: e.tag, title: `Used on ${e.uses} ${kind}s` })),
+            label: `Most used ${one} tags`,
+            items: common.map((e) => ({ tag: e.tag, title: `Used on ${e.uses} ${KINDS[lk][e.uses === 1 ? 4 : 3]}` })),
           });
         }
         if (live) setRows(out);
-      })().catch((e) => console.warn("[Better Tagging Tools]", e));
+      })().catch((e) => console.warn("[Better Organizing Tools]", e));
       return () => {
         live = false;
       };
-    }, [pSig, gSig, fixed ? "fixed" : pageKind()]);
+    }, [pSig, gSig, sSig, tSig, fixed ? "fixed" : location.pathname]);
 
     // Leave out tags already chosen, and repeats from an earlier row
     const seen = new Set((values || []).map((t) => String(t.id)));
@@ -300,11 +508,13 @@
   for (const [component, type] of [
     ["PerformerSelect", "performers"],
     ["GallerySelect", "galleries"],
+    ["StudioSelect", "studios"],
   ]) {
     api.patch.after(component, function (...args) {
       const props = args[0] || {};
       const result = args[args.length - 1];
-      if (!props.isMulti || !props.onSelect) return result;
+      // the studio box picks one studio; the others are multi-pick
+      if ((!props.isMulti && type !== "studios") || !props.onSelect) return result;
       return h(React.Fragment, null, result, h(PickReporter, { type, values: props.values }));
     });
   }
@@ -319,6 +529,126 @@
       result,
       h(Suggestions, { values: props.values, onSelect: props.onSelect })
     );
+  });
+
+  // ---- Galleries box on an image's edit page: suggested galleries ----------
+  // Only galleries made in Stash (a photo can't be put in a zip or folder
+  // gallery). Each scores by: the share of the other photos in the same
+  // folder that are in it (x3), the share of the same performers' photos in
+  // it (x2), and a gallery named like one of the photo's tags (+2).
+  const IMAGE_EDIT = /^\/images\/(\d+)/;
+  const madeGalleries = cached(60000, async () => {
+    const d = await gql("{ findGalleries(filter: {per_page: -1}) { galleries { id title files { path } folder { path } } } }");
+    return d.findGalleries.galleries.filter((g) => !g.files.length && !g.folder && (g.title || "").trim());
+  });
+  const libraryRoots = cached(600000, async () => {
+    const d = await gql("{ configuration { general { stashes { path } } } }");
+    return d.configuration.general.stashes.map((x) => x.path);
+  });
+  const gallerySuggestionsFor = cached(30000, async (imageId) => {
+    const [made, d] = await Promise.all([
+      madeGalleries("made"),
+      gql(`query ($id: ID!) { findImage(id: $id) { id visual_files { ... on ImageFile { path } ... on VideoFile { path } }
+             tags { name } performers { id name } galleries { id } } }`, { id: imageId }),
+    ]);
+    const image = d.findImage;
+    if (!image || !made.length) return [];
+    const madeIds = new Set(made.map((g) => g.id));
+    const score = new Map(); // gallery id -> { k, why: [] }
+    const bump = (gid, k, why) => {
+      const e = score.get(gid) || { k: 0, why: [] };
+      e.k += k;
+      e.why.push(why);
+      score.set(gid, e);
+    };
+    const shareIn = (list) => {
+      const counts = new Map();
+      list.forEach((x) => x.galleries.forEach((g) => madeIds.has(g.id) && counts.set(g.id, (counts.get(g.id) || 0) + 1)));
+      return counts;
+    };
+    const path = ((image.visual_files || [])[0] || {}).path || "";
+    const folder = path.replace(/[\\/][^\\/]*$/, "");
+    const parent = folder.replace(/[\\/][^\\/]*$/, "");
+    const reEsc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    // photos straight in a folder (an exact match: Stash's "includes"
+    // splits a path into words, so it would match far too much)
+    const inFolder = (dir, deep) =>
+      gql(`query ($f: ImageFilterType) { findImages(image_filter: $f, filter: {per_page: ${deep ? 2000 : 400}}) { images { id galleries { id } } } }`,
+        { f: { path: { value: "^" + reEsc(dir) + "[\\\\/]" + (deep ? "" : "[^\\\\/]+$"), modifier: "MATCHES_REGEX" } } })
+        .then((r) => r.findImages.images.filter((x) => x.id !== image.id));
+    const lookups = [];
+    if (folder) {
+      lookups.push(inFolder(folder, false).then((mates) => {
+        if (!mates.length) return;
+        shareIn(mates).forEach((n, gid) => n / mates.length >= 0.1 && bump(gid, 3 * n / mates.length, `${n} of the ${mates.length} other photos in its folder are in it`));
+      }));
+    }
+    // the folder it's in sits inside, e.g. "Celebs/<name>" -> all of Celebs
+    const roots = await libraryRoots("roots");
+    const trim = (x) => x.replace(/[\\/]+$/, "");
+    if (parent && !roots.some((r) => trim(r).startsWith(parent) || trim(r) === parent)) {
+      lookups.push(inFolder(parent, true).then((mates) => {
+        if (!mates.length) return;
+        shareIn(mates).forEach((n, gid) => n / mates.length >= 0.15 && bump(gid, 1.5 * n / mates.length, `${n} of the ${mates.length} photos in the folder around it are in it`));
+      }));
+    }
+    if (image.performers.length) {
+      lookups.push(gql(`query ($f: ImageFilterType) { findImages(image_filter: $f, filter: {per_page: 400}) { images { id galleries { id } } } }`,
+        { f: { performers: { value: image.performers.map((p) => p.id), modifier: "INCLUDES" } } })
+        .then((r) => {
+          const theirs = r.findImages.images.filter((x) => x.id !== image.id);
+          if (!theirs.length) return;
+          const who = image.performers.length === 1 ? image.performers[0].name + "'s" : "these performers'";
+          shareIn(theirs).forEach((n, gid) => bump(gid, 2 * n / theirs.length, `${n} of ${who} ${theirs.length} other photos are in it`));
+        }));
+    }
+    await Promise.all(lookups);
+    const tagNames = new Set(image.tags.map((t) => t.name.trim().toLowerCase()));
+    made.forEach((g) => tagNames.has(g.title.trim().toLowerCase()) && bump(g.id, 2, `it's tagged ${g.title}`));
+    const inAlready = new Set(image.galleries.map((g) => g.id));
+    return made
+      .filter((g) => score.has(g.id) && !inAlready.has(g.id) && score.get(g.id).k >= 0.3)
+      .map((g) => ({ gallery: g, k: score.get(g.id).k, why: score.get(g.id).why }))
+      .sort((a, b) => b.k - a.k)
+      .slice(0, 6);
+  });
+
+  function GallerySuggestions({ values, onSelect }) {
+    const m = location.pathname.match(IMAGE_EDIT);
+    const [list, setList] = React.useState([]);
+    React.useEffect(() => {
+      if (!m) return;
+      let live = true;
+      gallerySuggestionsFor(m[1], m[1]).then((l) => live && setList(l)).catch((e) => console.warn("[Better Organizing Tools]", e));
+      return () => (live = false);
+    }, [m && m[1]]);
+    const chosen = new Set((values || []).map((g) => String(g.id)));
+    const shown = list.filter((x) => !chosen.has(String(x.gallery.id)));
+    if (!m || !shown.length) return null;
+    const asOption = (g) => ({ id: g.id, title: g.title, files: [], folder: null });
+    return h(
+      "div",
+      { className: "pts-suggest-rows" },
+      h(
+        "div",
+        { className: "pts-suggest" },
+        h("span", { className: "pts-label" }, "Suggested"),
+        shown.map((x) =>
+          h("button", {
+            key: x.gallery.id, type: "button", className: "pts-chip",
+            title: x.why.join(" · "),
+            onClick: () => onSelect([...(values || []), asOption(x.gallery)]),
+          }, "+ " + x.gallery.title)
+        )
+      )
+    );
+  }
+
+  api.patch.after("GallerySelect", function (...args) {
+    const props = args[0] || {};
+    const result = args[args.length - 1];
+    if (!props.isMulti || !props.onSelect || props.isDisabled || !IMAGE_EDIT.test(location.pathname)) return result;
+    return h(React.Fragment, null, result, h(GallerySuggestions, { values: props.values, onSelect: props.onSelect }));
   });
 
   // ---- bulk tagging (performer pages and gallery pages) --------------------
@@ -349,7 +679,7 @@
              runPluginTask(plugin_id: $p, description: $d, args_map: $a) }`,
           {
             p: PLUGIN_ID,
-            d: `Better Tagging Tools: ${remove ? "removing" : "adding"} ${plural(tags.length, "tag")} ${
+            d: `Better Organizing Tools: ${remove ? "removing" : "adding"} ${plural(tags.length, "tag")} ${
               remove ? "from" : "to"
             } ${target.what}`,
             a: Object.assign(target.args(keys), {
@@ -514,6 +844,162 @@
     return h(React.Fragment, null, result, h(BulkTagButton, { performer: props.performer }));
   });
 
+  // -- studio pages: give the studio's scenes, images and galleries the
+  // studio's own tags. The window lists each tag (untick any you don't want)
+  // and how many items would get it.
+  const STUDIO_KINDS = [["scenes", "Scenes"], ["images", "Images"], ["galleries", "Galleries"]];
+
+  function StudioTagsModal({ studio, onClose }) {
+    const { Modal, Button, Form } = api.libraries.Bootstrap;
+    const Toast = api.hooks.useToast();
+    const [plan, setPlan] = React.useState(null); // null = loading
+    const [error, setError] = React.useState(null);
+    const [offTags, setOffTags] = React.useState({});
+    const [offKinds, setOffKinds] = React.useState({});
+    const [busy, setBusy] = React.useState(false);
+    React.useEffect(() => {
+      let live = true;
+      gql("mutation($p: ID!, $a: Map) { runPluginOperation(plugin_id: $p, args: $a) }", {
+        p: PLUGIN_ID,
+        a: { mode: "studiotagplan", studio_id: String(studio.id) },
+      })
+        .then((d) => live && setPlan(d.runPluginOperation || { tags: [], totals: {} }))
+        .catch((e) => live && setError(String(e.message || e)));
+      return () => (live = false);
+    }, [studio.id]);
+
+    const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+    const tags = plan ? plan.tags : [];
+    const kinds = STUDIO_KINDS.filter(([k]) => plan && plan.totals[k] > 0 && !offKinds[k]).map(([k]) => k);
+    const chosen = tags.filter((t) => !offTags[t.id]);
+    const missingFor = (t) => kinds.reduce((n, k) => n + (t.missing[k] || 0), 0);
+    const additions = chosen.reduce((n, t) => n + missingFor(t), 0);
+    const itemTotal = kinds.reduce((n, k) => n + (plan ? plan.totals[k] : 0), 0);
+
+    async function run() {
+      setBusy(true);
+      try {
+        await gql(
+          `mutation($p: ID!, $d: String, $a: Map) {
+             runPluginTask(plugin_id: $p, description: $d, args_map: $a) }`,
+          {
+            p: PLUGIN_ID,
+            d: `Better Organizing Tools: tag ${studio.name}'s items with its tags`,
+            a: {
+              mode: "studiotags",
+              studio_ids: String(studio.id),
+              tag_ids: chosen.map((t) => t.id).join(","),
+              kinds: kinds.join(","),
+            },
+          }
+        );
+        Toast.success(`Tagging ${studio.name}'s items. You can follow it under Settings → Tasks.`);
+        onClose();
+      } catch (e) {
+        Toast.error(e);
+        setBusy(false);
+      }
+    }
+
+    let body;
+    if (error) body = h("div", { className: "text-danger" }, "Couldn't load the studio's tags: " + error);
+    else if (!plan) body = h("div", { className: "text-muted" }, "Counting…");
+    else if (plan.blocked) body = h("div", { className: "text-muted" }, "This studio can't be used for this.");
+    else if (!tags.length)
+      body = h(
+        "div",
+        { className: "text-muted" },
+        "This studio has no tags yet. Add some on its Edit page, or run \"Tag studios with their top tags\" under Settings → Tasks."
+      );
+    else
+      body = h(
+        React.Fragment,
+        null,
+        h(Form.Label, null, "Apply to"),
+        h(
+          "div",
+          { className: "pts-bulk-kinds" },
+          STUDIO_KINDS.map(([k, label]) =>
+            h(Form.Check, {
+              key: k,
+              id: "pts-studio-kind-" + k,
+              type: "checkbox",
+              disabled: !plan.totals[k],
+              label: `${label} (${plan.totals[k] || 0})`,
+              checked: !!plan.totals[k] && !offKinds[k],
+              onChange: (e) => setOffKinds({ ...offKinds, [k]: !e.target.checked }),
+            })
+          )
+        ),
+        h(Form.Label, null, "Tags (untick any you don't want)"),
+        h(
+          "div",
+          { className: "pts-studio-tags" },
+          tags.map((t) => {
+            const n = missingFor(t);
+            return h(Form.Check, {
+              key: t.id,
+              id: "pts-studio-tag-" + t.id,
+              type: "checkbox",
+              checked: !offTags[t.id],
+              onChange: (e) => setOffTags({ ...offTags, [t.id]: !e.target.checked }),
+              label: h(
+                "span",
+                null,
+                t.name,
+                h("span", { className: "pts-studio-count" }, n ? ` adds to ${n} of ${itemTotal}` : " already on all")
+              ),
+            });
+          })
+        ),
+        h(
+          "div",
+          { className: "pts-bulk-note" },
+          "Only this studio's own items (not its sub-studios'). Nothing is removed."
+        )
+      );
+
+    return h(
+      Modal,
+      { show: true, onHide: onClose, className: "pts-bulk-modal" },
+      h(Modal.Header, { closeButton: true }, h(Modal.Title, null, `Tag ${studio.name}'s items with its tags`)),
+      h(Modal.Body, null, body),
+      h(
+        Modal.Footer,
+        null,
+        h(Button, { variant: "secondary", onClick: onClose }, "Cancel"),
+        h(
+          Button,
+          { variant: "primary", disabled: busy || !additions, onClick: run },
+          additions
+            ? `Add ${plural(chosen.filter((t) => missingFor(t)).length, "tag")} (${plural(additions, "addition")})`
+            : "Nothing to add"
+        )
+      )
+    );
+  }
+
+  function StudioTagsButton({ studio }) {
+    const [open, setOpen] = React.useState(false);
+    if (!studio || !studio.id) return null;
+    return h(
+      "div",
+      { className: "pts-bulk" },
+      h(
+        "button",
+        { type: "button", className: "btn btn-secondary btn-sm", onClick: () => setOpen(true) },
+        "Tag all items with this studio's tags…"
+      ),
+      open && h(StudioTagsModal, { studio, onClose: () => setOpen(false) })
+    );
+  }
+
+  api.patch.after("StudioDetailsPanel", function (...args) {
+    const props = args[0] || {};
+    const result = args[args.length - 1];
+    return h(React.Fragment, null, result, h(StudioTagsButton, { studio: props.studio }));
+  });
+
   // -- gallery pages: a "Bulk tag" button in the image list's toolbar. The
   // button lives in Stash's list, so it opens the window through this small
   // store, which the GalleryBulkHost below listens to.
@@ -582,6 +1068,10 @@
       ...(props.extraOperations || []),
       { ...open, text: "Bulk tag images…", icon: tagsIcon },
       { ...open, text: "Bulk tag images…" },
+      {
+        text: "Tag images with this gallery's tags, performers & studio",
+        onClick: () => requestAutotag("gallery", [String(gallery.id)], "gallerytags"),
+      },
     ];
     return [Object.assign({}, props, { extraOperations: extra }), ...args.slice(1)];
   });
@@ -846,7 +1336,7 @@
             } else none++;
           } catch (e) {
             none++;
-            console.warn("[Better Tagging Tools] new picture failed", e);
+            console.warn("[Better Organizing Tools] new picture failed", e);
           }
           cards.forEach((c) => c.classList.remove("pts-repicking"));
         }
@@ -882,4 +1372,440 @@
     const result = args[args.length - 1];
     return h(React.Fragment, null, result, h(RepickHost));
   });
+
+  // ---- Auto tag this / Auto tag selected ------------------------------------
+  // Adds the performers, studio and tags whose names are in the file path
+  // (the same matching as Stash's Auto Tag, which itself can only be run on
+  // whole folders). "Auto tag this" goes in the ⋮ menu of scene, image and
+  // gallery pages (for a gallery: the gallery and its images); "Auto tag
+  // selected" in the ••• menu of the scene, image and gallery lists. Stash
+  // doesn't let plugins add to the page menus, so the item is put in whenever
+  // the menu appears. A small component in the nav bar shows the results.
+  const AUTOTAG_ITEM_TEXT = "Auto tag this (from file name)";
+  const GALLERY_COPY_TEXT = "Tag images with this gallery's tags, performers & studio";
+  const LIST_LIMIT = 500; // more than this runs as a background task
+  const autotag = { request: null, listeners: new Set(), host: null };
+  const KIND_BY_PATH = { scenes: "scene", images: "image", galleries: "gallery" };
+
+  function requestAutotag(kind, ids, action) {
+    autotag.request = { kind, ids: ids.map(String), action: action || "autotag" };
+    autotag.listeners.forEach((fn) => fn());
+  }
+
+  // The scenes list (unlike images and galleries) has no way for plugins to add
+  // to its ••• menu, so the item goes in when the menu opens with scenes selected.
+  function selectedSceneIds() {
+    const ids = new Set();
+    document.querySelectorAll(".scene-card .card-check:checked, table input[type=checkbox]:checked").forEach((box) => {
+      const holder = box.closest(".scene-card, tr");
+      const link = holder && holder.querySelector('a[href^="/scenes/"]');
+      const m = link && link.getAttribute("href").match(/^\/scenes\/(\d+)/);
+      if (m) ids.add(m[1]);
+    });
+    return [...ids];
+  }
+
+  function placeSceneListItem(toggle) {
+    {
+      // the menu may be rendered next to the button or at the end of the page
+      const menu = (toggle.parentElement && toggle.parentElement.querySelector(".dropdown-menu")) ||
+        document.querySelector('.dropdown-menu[aria-labelledby="more-menu"]');
+      if (!menu) return;
+      menu.querySelectorAll(".bt-autotag-list-item").forEach((el) => el.remove());
+      if ([...menu.querySelectorAll(".dropdown-item")].some((el) => /^Auto tag selected/.test(el.textContent))) return;
+      if (!selectedSceneIds().length) return;
+      const item = document.createElement("a");
+      item.href = "#";
+      item.setAttribute("role", "button");
+      item.className = "dropdown-item bg-secondary text-white bt-autotag-list-item";
+      item.textContent = "Auto tag selected (from file names)";
+      item.addEventListener("click", (e) => {
+        e.preventDefault();
+        const ids = selectedSceneIds();
+        toggle.click(); // close the menu
+        if (ids.length) requestAutotag("scene", ids);
+      });
+      menu.appendChild(item);
+    }
+  }
+
+  // when the ••• button is tapped (the menu appears a moment later)
+  document.addEventListener("click", (e) => {
+    const toggle = e.target.closest && e.target.closest("#more-menu");
+    if (toggle) [0, 60, 200].forEach((ms) => setTimeout(() => placeSceneListItem(toggle), ms));
+  }, true);
+
+  function placeAutotagItems() {
+    const m = location.pathname.match(/^\/(scenes|images|galleries)\/(\d+)(?:\/|$)/);
+    if (!m) return;
+    document.querySelectorAll("#operation-menu").forEach((toggle) => {
+      const menu = toggle.parentElement && toggle.parentElement.querySelector(".dropdown-menu");
+      if (!menu || menu.querySelector(".bt-autotag-item")) return;
+      const item = document.createElement("a");
+      item.href = "#";
+      item.setAttribute("role", "button");
+      item.className = "dropdown-item bg-secondary text-white bt-autotag-item";
+      item.textContent = AUTOTAG_ITEM_TEXT;
+      item.addEventListener("click", (e) => {
+        e.preventDefault();
+        toggle.click(); // close the menu
+        const now = location.pathname.match(/^\/(scenes|images|galleries)\/(\d+)/);
+        if (now) requestAutotag(KIND_BY_PATH[now[1]], [now[2]]);
+      });
+      const items = [item];
+      if (m[1] === "galleries") {
+        // copy the gallery's tags, performers and studio to its images
+        const copy = document.createElement("a");
+        copy.href = "#";
+        copy.setAttribute("role", "button");
+        copy.className = "dropdown-item bg-secondary text-white bt-autotag-item";
+        copy.textContent = GALLERY_COPY_TEXT;
+        copy.addEventListener("click", (e) => {
+          e.preventDefault();
+          toggle.click(); // close the menu
+          const now = location.pathname.match(/^\/galleries\/(\d+)/);
+          if (now) requestAutotag("gallery", [now[1]], "gallerytags");
+        });
+        items.push(copy);
+      }
+      // above Delete, which stays last
+      const del = [...menu.querySelectorAll(".dropdown-item")].find((el) => /^delete/i.test(el.textContent.trim()));
+      items.forEach((el) => (del ? del.before(el) : menu.appendChild(el)));
+    });
+  }
+
+  function AutotagHost() {
+    const Toast = api.hooks.useToast();
+    const me = React.useRef({}).current;
+    React.useEffect(() => {
+      if (autotag.host) return; // only one host (the nav bar can render twice)
+      autotag.host = me;
+      placeAutotagItems();
+      const obs = new MutationObserver(placeAutotagItems);
+      obs.observe(document.body, { childList: true, subtree: true });
+
+      const run = async ({ kind, ids }) => {
+        const what = ids.length === 1
+          ? (kind === "gallery" ? "this gallery and its images" : `this ${kind}`)
+          : `${ids.length} ${kind === "gallery" ? "galleries and their images" : kind + "s"}`;
+        const args = { mode: "autotag", kind, ids: ids.join(","), with_images: kind === "gallery" ? "1" : "" };
+        try {
+          if (ids.length > LIST_LIMIT) {
+            await gql("mutation($p: ID!, $d: String, $a: Map) { runPluginTask(plugin_id: $p, description: $d, args_map: $a) }", {
+              p: PLUGIN_ID, d: `Better Organizing Tools: auto tag ${ids.length} ${kind}s`, a: args,
+            });
+            Toast.success(`Auto tagging ${what} in the background. You can follow it under Settings → Tasks.`);
+            return;
+          }
+          Toast.success(`Auto tagging ${what}…`);
+          const d = await gql("mutation($p: ID!, $a: Map) { runPluginOperation(plugin_id: $p, args: $a) }", { p: PLUGIN_ID, a: args });
+          const r = d.runPluginOperation || {};
+          if (!r.changed) {
+            Toast.success(`Auto tag: nothing new in the file name${r.items === 1 ? "" : "s"}`);
+            return;
+          }
+          const list = (r.added || []).slice(0, 8).join(", ") + ((r.added || []).length > 8 ? ", …" : "");
+          Toast.success(r.items === 1 ? `Auto tag added ${list}` : `Auto tag added ${list} on ${r.changed} of ${r.items} items`);
+          // show the new performers/tags without a reload
+          const client = api.utils && api.utils.StashService && api.utils.StashService.getClient && api.utils.StashService.getClient();
+          if (client && client.refetchQueries) client.refetchQueries({ include: "active" });
+        } catch (e) {
+          Toast.error(e);
+        }
+      };
+      // copy galleries' tags, performers and studio to their images: a task,
+      // as big galleries take a while
+      const copyGallery = async (ids) => {
+        const what = ids.length === 1 ? "this gallery's" : `${ids.length} galleries'`;
+        try {
+          await gql("mutation($p: ID!, $d: String, $a: Map) { runPluginTask(plugin_id: $p, description: $d, args_map: $a) }", {
+            p: PLUGIN_ID,
+            d: `Better Organizing Tools: tag images with ${what} tags, performers & studio`,
+            a: { mode: "gallerytags", gallery_ids: ids.join(",") },
+          });
+          Toast.success(`Tagging images with ${what} tags, performers & studio. You can follow it under Settings → Tasks.`);
+        } catch (e) {
+          Toast.error(e);
+        }
+      };
+      const fn = () => {
+        const req = autotag.request;
+        autotag.request = null;
+        if (!req || !req.ids.length) return;
+        if (req.action === "gallerytags") copyGallery(req.ids);
+        else run(req);
+      };
+      autotag.listeners.add(fn);
+      return () => {
+        obs.disconnect();
+        autotag.listeners.delete(fn);
+        autotag.host = null;
+        document.querySelectorAll(".bt-autotag-item, .bt-autotag-list-item").forEach((el) => el.remove());
+      };
+    }, []);
+    return null;
+  }
+
+  api.patch.after("MainNavBar.UtilityItems", function (...args) {
+    const result = args[args.length - 1];
+    return h(React.Fragment, null, result, h(AutotagHost));
+  });
+
+  for (const [component, kind] of [["FilteredImageList", "image"], ["FilteredGalleryList", "gallery"]]) {
+    api.patch.before(component, function (...args) {
+      const props = args[0] || {};
+      const op = {
+        text: "Auto tag selected (from file names)",
+        isDisplayed: (result, filter, selectedIds) => !!selectedIds && selectedIds.size > 0,
+        onClick: (result, filter, selectedIds) => requestAutotag(kind, [...(selectedIds || [])]),
+      };
+      const ops = [op];
+      if (kind === "gallery")
+        ops.push({
+          text: "Tag images with their gallery's tags, performers & studio",
+          isDisplayed: (result, filter, selectedIds) => !!selectedIds && selectedIds.size > 0,
+          onClick: (result, filter, selectedIds) => requestAutotag("gallery", [...(selectedIds || [])], "gallerytags"),
+        });
+      return [Object.assign({}, props, { extraOperations: [...(props.extraOperations || []), ...ops] }), ...args.slice(1)];
+    });
+  }
+
+  // ---- title ideas ----------------------------------------------------------
+  // Under the Title box of a scene, image or gallery's edit form: titles made
+  // from its performers, studio, tags, date and file name (Better Organizing AI
+  // adds AI-written ones in a row of its own). Clicking one puts it in the box
+  // (still unsaved, like any edit).
+  const TITLE_PAGE = /^\/(scenes|images|galleries)\/(\d+)/;
+  const KIND_OF = { scenes: "scene", images: "image", galleries: "gallery" };
+
+  function setInputValue(input, value) {
+    // React keeps its own copy of the value: go through the native setter
+    // and fire "input" so the form sees the change
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+    setter.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.focus();
+  }
+
+  function titleIdeas(kind, id) {
+    return gql("mutation($p: ID!, $a: Map) { runPluginOperation(plugin_id: $p, args: $a) }", {
+      p: PLUGIN_ID,
+      a: { mode: "title_ideas", kind, id },
+    }).then((d) => d.runPluginOperation || {});
+  }
+
+  function mountTitleIdeas(input) {
+    const m = location.pathname.match(TITLE_PAGE);
+    if (!m) return;
+    const kind = KIND_OF[m[1]], id = m[2];
+    const row = document.createElement("div");
+    row.className = "pts-suggest bt-title-ideas";
+    row.dataset.item = kind + ":" + id;
+    const label = document.createElement("span");
+    label.className = "pts-label";
+    label.textContent = "Title ideas";
+    const chips = document.createElement("span");
+    chips.className = "bt-title-chips";
+    const note = document.createElement("span");
+    note.className = "pts-ai-note";
+    row.append(label, chips, note);
+    input.insertAdjacentElement("afterend", row);
+
+    const shown = new Set();
+    const add = (titles) =>
+      titles.forEach((t) => {
+        if (!t || shown.has(t.toLowerCase())) return;
+        shown.add(t.toLowerCase());
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "pts-chip";
+        b.textContent = t;
+        b.title = "Click to use this title";
+        b.addEventListener("click", () => setInputValue(input, t));
+        chips.appendChild(b);
+      });
+
+    note.textContent = "…";
+    titleIdeas(kind, id)
+      .then((r) => {
+        add(r.ideas || []);
+        note.textContent = (r.ideas || []).length ? "" : "No ideas from its details yet";
+      })
+      .catch((e) => (note.textContent = "Couldn't load ideas: " + e.message));
+  }
+
+  let titleTimer = null;
+  new MutationObserver(() => {
+    clearTimeout(titleTimer);
+    titleTimer = setTimeout(() => {
+      const m = location.pathname.match(TITLE_PAGE);
+      if (!m) return;
+      document.querySelectorAll("form input#title").forEach((input) => {
+        const next = input.nextElementSibling;
+        if (next && next.classList.contains("bt-title-ideas")) {
+          if (next.dataset.item === KIND_OF[m[1]] + ":" + m[2]) return;
+          next.remove(); // another item (moved on without leaving the form)
+        }
+        mountTitleIdeas(input);
+      });
+    }, 150);
+  }).observe(document.body, { childList: true, subtree: true });
+
+  // ---- Settings → Tasks: this plugin's tasks in sections --------------------
+  // Stash lists a plugin's tasks one after another. Put a heading above each
+  // group that shows / hides its tasks (closed to start with; the page
+  // remembers which you opened). The task rows themselves stay where Stash
+  // put them, only hidden or shown.
+  const TASK_GROUPS = [
+    ["toptags", "Top tags", "Performers, studios and galleries get their most used tags; a studio's items get its tags",
+      ["Preview top tags (no changes)", "Tag performers with their top tags", "Tag studios with their top tags",
+       "Tag galleries with their top tags", "Preview studio tags on their items (no changes)",
+       "Tag studios' items with the studio's tags"]],
+    ["titles", "Titles", "Titles from file names",
+      ["Preview titles from file names (no changes)", "Fill in titles from file names", "Redo titles made from file names"]],
+    ["studios", "Studios from accounts", "Studios for the OnlyFans / Fansly / Patreon / Instagram / TikTok account in a scene's file name or links",
+      ["Studios from accounts: from file names and links only"]],
+    ["dates", "Dates", "Dates from file names",
+      ["Preview dates from file names (no changes)", "Fill in dates from file names"]],
+    ["pictures", "Tag pictures", "Give tags a picture from your library",
+      ["Give tags without a picture one from your library", "Give tags that share a picture their own",
+       "Give every tag a new picture (replaces existing ones)"]],
+    ["descs", "Tag descriptions", "Descriptions from StashDB, the E-Hentai wiki and Danbooru",
+      ["Preview tag descriptions on 30 tags (no changes)", "Fill in empty tag descriptions"]],
+    ["tidy", "Tidy up tags", "Capitalisation and gallery-name tags",
+      ["Preview tag name capitalisation (no changes)", "Capitalise tag names", "Tag gallery images with the gallery's name",
+       "Preview gallery tags, performers and studio on images (no changes)",
+       "Tag gallery images with the gallery's tags, performers and studio"]],
+  ];
+  const GROUP_OF = new Map();
+  TASK_GROUPS.forEach(([key], g) => TASK_GROUPS[g][3].forEach((name) => GROUP_OF.set(name, key)));
+  const OPEN_KEY = "bt-task-groups-open";
+
+  function openGroups() {
+    try {
+      return new Set(JSON.parse(localStorage.getItem(OPEN_KEY) || "[]"));
+    } catch (e) {
+      return new Set();
+    }
+  }
+
+  function groupTasks() {
+    if (!location.pathname.startsWith("/settings")) return;
+    const rows = [...document.querySelectorAll(".setting > div > h3")]
+      .filter((h3) => GROUP_OF.has(h3.textContent.trim()))
+      .map((h3) => h3.closest(".setting"));
+    if (rows.length < 2) return;
+    const section = rows[0].parentElement;
+    const open = openGroups();
+    for (const [key, title, blurb, names] of TASK_GROUPS) {
+      const mine = rows.filter((r) => r.parentElement === section && names.includes(r.querySelector("h3").textContent.trim()));
+      if (!mine.length) continue;
+      let head = section.querySelector(`.bt-task-group[data-group="${key}"]`);
+      if (!head) {
+        head = document.createElement("button");
+        head.type = "button";
+        head.className = "bt-task-group";
+        head.dataset.group = key;
+        head.innerHTML = '<span class="bt-tg-arrow" aria-hidden="true"></span><span class="bt-tg-title"></span>' +
+          '<span class="bt-tg-count"></span><span class="bt-tg-blurb"></span>';
+        head.querySelector(".bt-tg-title").textContent = title;
+        head.querySelector(".bt-tg-blurb").textContent = blurb;
+        head.addEventListener("click", () => {
+          const now = openGroups();
+          now.has(key) ? now.delete(key) : now.add(key);
+          try {
+            localStorage.setItem(OPEN_KEY, JSON.stringify([...now]));
+          } catch (e) {}
+          groupTasks();
+        });
+      }
+      // keep the heading just above the group's first task
+      if (head.nextElementSibling !== mine[0]) section.insertBefore(head, mine[0]);
+      const isOpen = open.has(key);
+      head.classList.toggle("open", isOpen);
+      head.setAttribute("aria-expanded", String(isOpen));
+      // only when it changes: writing it counts as a page change, which
+      // would run this again (and again)
+      const count = `${mine.length} task${mine.length > 1 ? "s" : ""}`;
+      const countEl = head.querySelector(".bt-tg-count");
+      if (countEl.textContent !== count) countEl.textContent = count;
+      mine.forEach((r) => r.classList.toggle("bt-task-hidden", !isOpen));
+    }
+  }
+
+  let groupTimer = null;
+  new MutationObserver(() => {
+    clearTimeout(groupTimer);
+    groupTimer = setTimeout(() => {
+      groupTasks();
+      ignoreSuggestions();
+    }, 100);
+  }).observe(document.body, { childList: true, subtree: true });
+
+  // ---- Settings → Plugins: suggestions under "Tags to ignore" -------------
+  // Big tags that look like housekeeping (their name, or that they group
+  // other tags; with Better Organizing AI also that their items don't look
+  // alike). Tapping one adds it to the setting.
+  let ignoreState = null; // { at, list } for this visit to the page
+  function ignoreSuggestions() {
+    const row = document.getElementById("plugin-" + PLUGIN_ID + "-excludeTags");
+    if (!row) {
+      ignoreState = null;
+      return;
+    }
+    if (row.querySelector(".bt-ignore-suggest")) return;
+    const box = document.createElement("div");
+    box.className = "bt-ignore-suggest";
+    (row.firstElementChild || row).appendChild(box);
+    const load = ignoreState
+      ? Promise.resolve(ignoreState.list)
+      : gql("mutation($p: ID!, $a: Map) { runPluginOperation(plugin_id: $p, args: $a) }", { p: PLUGIN_ID, a: { mode: "ignore_suggest" } })
+          .then((d) => d.runPluginOperation || []);
+    load.then((list) => {
+      ignoreState = { list };
+      render();
+    }).catch((e) => (box.textContent = "Couldn't look for housekeeping tags: " + e.message));
+
+    function render() {
+      box.innerHTML = "";
+      const list = ignoreState.list;
+      if (!list.length) return;
+      const label = document.createElement("span");
+      label.className = "bt-ignore-label";
+      label.textContent = "Look like housekeeping:";
+      box.appendChild(label);
+      list.forEach((t) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "pts-chip";
+        b.textContent = "+ " + t.name;
+        b.title = `On ${t.uses.toLocaleString()} items (${t.share}%) - ${t.why.join("; ")}`;
+        b.addEventListener("click", () => add(t.name, b));
+        box.appendChild(b);
+      });
+    }
+
+    async function add(name, button) {
+      button.disabled = true;
+      try {
+        const d = await gql("{ configuration { plugins } }");
+        const mine = Object.assign({}, (d.configuration.plugins || {})[PLUGIN_ID] || {});
+        const now = String(mine.excludeTags || "").split(",").map((x) => x.trim()).filter(Boolean);
+        if (!now.some((x) => x.toLowerCase() === name.toLowerCase())) now.push(name);
+        mine.excludeTags = now.join(", ");
+        await gql("mutation($p: ID!, $i: Map!) { configurePlugin(plugin_id: $p, input: $i) }", { p: PLUGIN_ID, i: mine });
+        ignoreState.list = ignoreState.list.filter((t) => t.name !== name);
+        const shown = row.querySelector(".value span");
+        if (shown) shown.textContent = mine.excludeTags;
+        render();
+        // so the page's own copy of the settings has it too (and editing
+        // another setting doesn't put the old list back)
+        const client = api.utils && api.utils.StashService && api.utils.StashService.getClient && api.utils.StashService.getClient();
+        if (client && client.refetchQueries) client.refetchQueries({ include: "active" });
+      } catch (e) {
+        button.disabled = false;
+        button.title = "Couldn't add it: " + e.message;
+      }
+    }
+  }
 })();
