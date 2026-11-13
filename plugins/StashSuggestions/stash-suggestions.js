@@ -82,6 +82,86 @@
     return a;
   }
 
+  // ------------------------------------------------------------------
+  // Optional: the Better Tagging AI add-on. When it's installed and
+  // enabled, the rows also use what it knows - how alike performers' faces
+  // look, and which scenes / photos look most alike (picture fingerprints).
+  // Without it (or if it fails), every row works exactly as before: each
+  // call below then gives "nothing extra".
+  // ------------------------------------------------------------------
+  const AI = (() => {
+    const PLUGIN = "BetterTaggingAI";
+    const call = async (query, variables) => {
+      const res = await fetch("/graphql", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query, variables }),
+      });
+      const json = await res.json();
+      if (json.errors) throw new Error(json.errors[0].message);
+      return json.data;
+    };
+    let present = null;
+    const has = () =>
+      (present = present || call("{ plugins { id enabled } }")
+        .then((d) => (d.plugins || []).some((p) => p.id === PLUGIN && p.enabled))
+        .catch(() => false));
+    const ask = (args) =>
+      has().then((yes) => !yes ? null :
+        call("mutation ($p: ID!, $a: Map) { runPluginOperation(plugin_id: $p, args: $a) }", { p: PLUGIN, a: args })
+          .then((d) => d.runPluginOperation)
+          .catch((e) => {
+            console.warn("[Stash Suggestions] Better Tagging AI:", e.message);
+            return null;
+          }));
+
+    // A performer's face matches: {scores: {id: %}, p95, top}. How alike faces
+    // score differs a lot between performers, so only their own top 5% count.
+    const NO_FACES = { scores: {}, p95: 100, top: 100 };
+    const faceCache = new Map();
+    function faces(pid) {
+      if (!faceCache.has(pid)) {
+        faceCache.set(pid, ask({ mode: "face_similar", id: String(pid) }).then((r) => {
+          if (!r || !r.scores) return NO_FACES;
+          return { scores: r.scores, p95: r.p95 ?? 100, top: Math.max(0, ...Object.values(r.scores)) };
+        }));
+      }
+      return faceCache.get(pid);
+    }
+    // at the top-5% line: 2 points, their closest face: 10
+    const facePoints = (f, pct) =>
+      pct && pct >= f.p95 ? 2 + 8 * ((pct - f.p95) / Math.max(f.top - f.p95, 1)) : 0;
+
+    // The scenes / photos that look most like one: [{ id, pct }], closest
+    // first (up to 40). Brand-new items get a fingerprint on the spot.
+    const lookCache = new Map();
+    function looks(kind, id) {
+      const key = kind + ":" + id;
+      if (!lookCache.has(key)) {
+        lookCache.set(key, ask({ mode: "look_similar", kind, id: String(id) })
+          .then((r) => (r && r.items ? r.items.map(([i, pct]) => ({ id: String(i), pct })) : [])));
+      }
+      return lookCache.get(key);
+    }
+    // closest: `max` points, the last of the list: 2 (in between by how alike)
+    function lookPoints(list, max) {
+      if (!list.length) return () => 0;
+      const hi = list[0].pct, lo = list[list.length - 1].pct;
+      const by = new Map(list.map((x) => [x.id, x.pct]));
+      return (id) => (by.has(id) ? 2 + (max - 2) * ((by.get(id) - lo) / Math.max(hi - lo, 1)) : 0);
+    }
+    // Scenes / images by id, skipping ones that no longer exist (looking up
+    // several ids at once fails if any is gone, e.g. a deleted scene still
+    // in the add-on's fingerprints). Any failure: none.
+    function byIds(kind, ids, fields) {
+      if (!ids.length) return Promise.resolve([]);
+      const one = kind === "scene" ? "findScene" : "findImage";
+      const q = "{ " + ids.map((id, i) => `x${i}: ${one}(id: ${JSON.stringify(String(id))}) { ${fields} }`).join(" ") + " }";
+      return call(q).then((d) => ids.map((_, i) => d["x" + i]).filter(Boolean)).catch(() => []);
+    }
+    return { has, faces, facePoints, looks, lookPoints, byIds };
+  })();
+
   function setupSuggested() {
     const SCENE_PAGE = /^\/scenes\/(\d+)\/?$/;
     const MAX = 12;
@@ -168,7 +248,16 @@
       const len = file && file.duration;
       const studioId = scene.studio && scene.studio.id;
 
-      const [byTags, byStudio, byShape, byPerformers] = await Promise.all([
+      // With Better Tagging AI: scenes that look alike, and the scene's
+      // performers' face matches (else nothing extra)
+      const [alike, faceMaps] = await Promise.all([
+        AI.looks("scene", scene.id),
+        Promise.all(scene.performers.slice(0, 3).map((p) => AI.faces(p.id))),
+      ]);
+      const LOOKS_MAX_POINTS = 8;
+      const alikePoints = AI.lookPoints(alike, LOOKS_MAX_POINTS);
+
+      const [byTags, byStudio, byShape, byPerformers, byLooks] = await Promise.all([
         tagIds.size
           ? findScenes({ tags: { value: [...tagIds], modifier: "INCLUDES", depth: 0 } }, 150).then(notThis)
           : Promise.resolve([]),
@@ -184,6 +273,9 @@
         perf.size
           ? findScenes({ performers: { value: [...perf], modifier: "INCLUDES" } }, 60).then(notThis)
           : Promise.resolve([]),
+        alike.length
+          ? AI.byIds("scene", alike.map((a) => a.id), CARD_FIELDS).then(notThis)
+          : Promise.resolve([]),
       ]);
 
       const rows = [];
@@ -194,21 +286,29 @@
 
       // Suggested: every candidate scored on
       //   each shared tag 2, same studio 3, performers who look alike
-      //   (best pair, half of lookAlikePoints: up to 5), similar length 1,
-      //   same orientation 1
+      //   (best pair, half of lookAlikePoints or - with Better Tagging AI -
+      //   of their face score, whichever is closer: up to 5), similar
+      //   length 1, same orientation 1, and with Better Tagging AI how
+      //   alike the scene itself looks (the 40 closest: 2-8)
       const score = (s) => {
         let k = 2 * s.tags.filter((t) => tagIds.has(t.id)).length;
         if (studioId && s.studio && s.studio.id === studioId) k += 3;
         let look = 0;
-        for (const a of scene.performers) for (const b of s.performers) look = Math.max(look, lookAlikePoints(a, b));
-        k += look / 2;
+        scene.performers.forEach((a, i) => {
+          for (const b of s.performers) {
+            look = Math.max(look, lookAlikePoints(a, b));
+            if (faceMaps[i]) look = Math.max(look, AI.facePoints(faceMaps[i], faceMaps[i].scores[b.id]));
+          }
+        });
+        k += Math.min(look, 10) / 2;
+        k += alikePoints(s.id);
         const f = s.files[0];
         if (len && f && f.duration && Math.abs(f.duration - len) <= len * 0.25) k += 1;
         if (shape && orientationOf(f) === shape) k += 1;
         return k;
       };
       const pool = new Map();
-      for (const s of [...byTags, ...byStudio, ...byShape]) {
+      for (const s of [...byTags, ...byStudio, ...byShape, ...byLooks]) {
         if (!inPerformerRow.has(s.id)) pool.set(s.id, s);
       }
       let suggested = rank([...pool.values()], score); // closest match first
@@ -343,7 +443,10 @@
   // "More with <performer>" grid). Everything else that shares a tag, a
   // gallery, or has a look-alike performer gets a score: 2 points per
   // shared tag or gallery, plus up to 5 for the closest look-alike
-  // (half their Similar Performers score: looks + shared performer tags).
+  // (half their Similar Performers score: looks + shared performer tags,
+  // or with Better Tagging AI their face, if that's closer). With Better
+  // Tagging AI, the 40 photos that look most like it (picture
+  // fingerprints) are candidates too, worth 2-8 points by how alike.
   // The highest scores come first (ties in random order). If there are
   // few or none, it's topped up with images that have no performers, tags
   // or galleries yet (same orientation first), then random ones. A Load
@@ -358,6 +461,7 @@
     const TAG_POINTS = 2;
     const GALLERY_POINTS = 2;
     const LOOKALIKE_MAX_POINTS = 5;
+    const LOOKS_MAX_POINTS = 8;    // the photo that looks most alike (Better Tagging AI)
     const LOOKALIKE_MIN = 4;       // look-alike score (out of ~10+) to count at all
     const LOOKALIKES = 15;         // closest look-alike performers to pull photos from
     const CANDIDATES = 500;        // images fetched per match type before scoring
@@ -411,6 +515,15 @@
             if (!prev || k > prev.k) out.set(x.id, { name: x.name, k });
           }
         }
+        // With Better Tagging AI: performers whose face looks like theirs
+        // (2-10, the same scale), the better of the two counting
+        const f = await AI.faces(p.id);
+        for (const [pid, pct] of Object.entries(f.scores)) {
+          if (skip.has(pid)) continue;
+          const k = AI.facePoints(f, pct);
+          const prev = out.get(pid);
+          if (k && (!prev || k > prev.k)) out.set(pid, { name: prev ? prev.name : "", k });
+        }
       }));
       return new Map([...out].sort((a, b) => b[1].k - a[1].k).slice(0, LOOKALIKES));
     }
@@ -419,23 +532,47 @@
     // Resolves to { items, done }.
     async function similarSource(id) {
       const image = (await gql(
-        `query ($id: ID!) { findImage(id: $id) { id tags { id } galleries { id } performers { ${PERF_FIELDS} }
+        `query ($id: ID!) { findImage(id: $id) { id tags { id name scene_count image_count }
+          galleries { id title image_count files { basename } folder { path } } performers { ${PERF_FIELDS} }
           visual_files { ... on ImageFile { width height } ... on VideoFile { width height } } } }`,
         { id }
       )).findImage;
       if (!image) return async () => ({ items: [], done: true });
-      const tagIds = new Set(image.tags.map((t) => t.id));
+      // A tag that's just its gallery's name (a comic's title: named after the
+      // gallery and on little else) doesn't count as a shared tag - the
+      // shared gallery already does. Category folders ("BDSM"...) whose tag
+      // is used elsewhere too still count.
+      const galleryName = (g) => (g.title || (g.files[0] && g.files[0].basename.replace(/\.[^.]+$/, "")) ||
+        (g.folder && g.folder.path.split(/[\\/]/).filter(Boolean).pop()) || "").trim().toLowerCase();
+      const galleryImages = new Map();
+      for (const g of image.galleries) {
+        const n = galleryName(g);
+        if (n) galleryImages.set(n, (galleryImages.get(n) || 0) + (g.image_count || 0));
+      }
+      const justGalleryName = (t) => {
+        const n = galleryImages.get(String(t.name || "").trim().toLowerCase());
+        return n !== undefined && !t.scene_count && t.image_count <= n * 1.05;
+      };
+      const tagIds = new Set(image.tags.filter((t) => !justGalleryName(t)).map((t) => t.id));
       const perfIds = new Set(image.performers.map((p) => p.id));
       const galleryIds = new Set(image.galleries.map((g) => g.id));
       const seen = new Set([image.id]);
       // Same performer: that's what "More with <performer>" is for
       const samePerformer = (x) => x.performers.some((p) => perfIds.has(p.id));
 
-      const lookAlikes = perfIds.size ? await lookAlikesOf(image.performers.slice(0, 3), perfIds) : new Map();
+      const [lookAlikes, alike] = await Promise.all([
+        perfIds.size ? lookAlikesOf(image.performers.slice(0, 3), perfIds) : new Map(),
+        AI.looks("image", image.id), // photos that look alike (Better Tagging AI; else none)
+      ]);
+      const alikePoints = AI.lookPoints(alike, LOOKS_MAX_POINTS);
 
-      // Everything sharing a tag or gallery, or with a look-alike in it
+      // Everything sharing a tag or gallery, with a look-alike in it, or
+      // that looks alike
       const candidates = new Map();
       const lookups = [];
+      if (alike.length) {
+        lookups.push(AI.byIds("image", alike.map((a) => a.id), FIELDS));
+      }
       if (tagIds.size) lookups.push(findImages({ tags: { value: [...tagIds], modifier: "INCLUDES", depth: 0 } }, CANDIDATES));
       if (galleryIds.size) lookups.push(findImages({ galleries: { value: [...galleryIds], modifier: "INCLUDES" } }, CANDIDATES));
       if (lookAlikes.size) lookups.push(findImages({ performers: { value: [...lookAlikes.keys()], modifier: "INCLUDES" } }, CANDIDATES));
@@ -451,7 +588,7 @@
           let lookAlike = 0;
           for (const p of x.performers) lookAlike = Math.max(lookAlike, lookAlikes.get(p.id)?.k || 0);
           const lookPoints = Math.min(LOOKALIKE_MAX_POINTS, Math.round(lookAlike / 2));
-          return { x, score: tags * TAG_POINTS + galleries * GALLERY_POINTS + lookPoints };
+          return { x, score: tags * TAG_POINTS + galleries * GALLERY_POINTS + lookPoints + alikePoints(x.id) };
         })
         .filter((r) => r.score > 0)
         .map((r) => ({ x: r.x, k: r.score + Math.random() * 0.5 }))
@@ -890,7 +1027,7 @@
   // "Similar Performers" row at the bottom of performer, scene and image
   // pages
   // ------------------------------------------------------------------
-  // Same gender, then scored on shared tags, hair colour, ethnicity, eye
+  // Same gender, then scored on shared tags (1 point each), hair colour, ethnicity, eye
   // colour, country, breast type, height (within 5cm) and age (within 5
   // years). The 12 best are shown, closest match first. On a scene or
   // image it's based on the performers in it (up to 3), and leaves them out.
@@ -923,6 +1060,12 @@
         { f: filter, n: perPage }
       )).findPerformers.performers;
 
+    // With the Better Tagging AI add-on: how alike performers' faces look
+    // counts too, and the closest few join the row whatever else they share
+    const FACE_PULL = 8;
+    const facesLike = AI.faces;
+    const facePoints = AI.facePoints;
+
     // The performers to base it on
     async function sourcesFor(kind, id) {
       if (kind === "performer") return [id];
@@ -934,7 +1077,7 @@
     }
 
     // Scores every candidate against one performer; returns Map id -> {x, k}
-    async function scoresFor(p) {
+    async function scoresFor(p, faces) {
       const base = p.gender ? { gender: { value: p.gender, modifier: "EQUALS" } } : {};
       const with_ = (extra) => Object.assign({}, base, extra);
       const queries = [findPerformers(base, 100)];
@@ -943,9 +1086,17 @@
       if (p.ethnicity) queries.push(findPerformers(with_({ ethnicity: { value: p.ethnicity, modifier: "EQUALS" } }), 100));
 
       const tagIds = new Set(p.tags.map((t) => t.id));
+      // performers whose face looks a lot like theirs, whatever else they share
+      const pull = Object.entries(faces.scores).sort((a, b) => b[1] - a[1]).slice(0, FACE_PULL).map(([id]) => id);
+      if (pull.length) {
+        queries.push(Promise.all(pull.map((id) =>
+          gql(`query ($id: ID!) { findPerformer(id: $id) { ${FIELDS} } }`, { id }).then((d) => d.findPerformer).catch(() => null)))
+          .then((list) => list.filter((x) => x && (!p.gender || x.gender === p.gender))));
+      }
       const score = (x) => {
-        let k = 2 * x.tags.filter((t) => tagIds.has(t.id)).length;
+        let k = x.tags.filter((t) => tagIds.has(t.id)).length; // 1 point per shared tag
         k += lookAlikePoints(p, x);
+        k += facePoints(faces, faces.scores[x.id] || 0);
         if (x.gender === "FEMALE") k += 2;
         return k;
       };
@@ -955,7 +1106,7 @@
         for (const x of list) {
           if (out.has(x.id)) continue;
           if (!x.scene_count && !x.image_count && !x.gallery_count) continue; // nothing to see
-          out.set(x.id, { x, k: score(x) });
+          out.set(x.id, { x, k: score(x), face: faces.scores[x.id] || 0 });
         }
       }
       return out;
@@ -970,20 +1121,22 @@
       )).findPerformers.performers;
 
       // Best score against any of the source performers
+      const faces = await Promise.all(sources.map((p) => facesLike(p.id)));
       const best = new Map();
-      for (const scores of await Promise.all(sources.map(scoresFor))) {
+      for (const scores of await Promise.all(sources.map((p, i) => scoresFor(p, faces[i])))) {
         for (const [pid, r] of scores) {
           const prev = best.get(pid);
-          if (!prev || r.k > prev.k) best.set(pid, r);
+          if (!prev || r.k > prev.k) best.set(pid, { ...r, face: Math.max(r.face, (prev && prev.face) || 0) });
+          else if (r.face > prev.face) prev.face = r.face;
         }
       }
       const skip = new Set(ids);
       return [...best.values()]
         .filter((r) => !skip.has(r.x.id))
-        .map((r) => ({ x: r.x, k: r.k + Math.random() * 0.5 })) // mix up equal matches
+        .map((r) => ({ x: r.x, k: r.k + Math.random() * 0.5, face: r.face })) // mix up equal matches
         .sort((a, b) => b.k - a.k)
         .slice(0, MAX)
-        .map((r) => r.x)
+        .map((r) => Object.assign({}, r.x, { _face: r.face }))
         // Women first, then everyone else; closest match first within each
         .sort((a, b) => (b.gender === "FEMALE") - (a.gender === "FEMALE"));
     }
@@ -1005,20 +1158,131 @@
       );
     }
 
+    // ---- performer pages: their galleries and their studios -----------
+    const plural = (n, one, many) => `${n} ${n === 1 ? one : many || one + "s"}`;
+    const baseName = (path) => String(path || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop().replace(/\.(zip|cbz|rar|cbr|7z)$/i, "");
+
+    // Galleries they're in: tagged on the gallery, or with photos in it.
+    // Most of their photos first.
+    async function theirGalleries(pid) {
+      const has = { performers: { value: [pid], modifier: "INCLUDES" } };
+      const d = await gql(
+        `query ($g: GalleryFilterType, $i: ImageFilterType) {
+           tagged: findGalleries(gallery_filter: $g, filter: { per_page: -1 }) { galleries { id } }
+           photos: findImages(image_filter: $i, filter: { per_page: -1 }) { images { galleries { id } } } }`,
+        { g: has, i: has });
+      const mine = new Map(); // gallery id -> their photos in it
+      d.photos.images.forEach((im) => im.galleries.forEach((g) => mine.set(g.id, (mine.get(g.id) || 0) + 1)));
+      const tagged = new Set(d.tagged.galleries.map((g) => g.id));
+      const ids = [...new Set([...tagged, ...mine.keys()])];
+      if (!ids.length) return [];
+      const info = (await gql(
+        `query ($ids: [ID!]) { findGalleries(ids: $ids, filter: { per_page: -1 }) { galleries {
+           id title image_count paths { cover } files { path } folder { path } } } }`, { ids })).findGalleries.galleries;
+      return info
+        .map((g) => ({ ...g, name: g.title || baseName((g.files[0] || {}).path) || baseName((g.folder || {}).path) || "Gallery",
+          theirs: mine.get(g.id) || 0, tagged: tagged.has(g.id) }))
+        .sort((a, b) => b.theirs - a.theirs || b.tagged - a.tagged || b.image_count - a.image_count)
+        .slice(0, 30);
+    }
+
+    // Studios of their scenes, photos and galleries: most of their items first
+    async function theirStudios(pid) {
+      const has = { performers: { value: [pid], modifier: "INCLUDES" } };
+      const d = await gql(
+        `query ($s: SceneFilterType, $i: ImageFilterType, $g: GalleryFilterType) {
+           s: findScenes(scene_filter: $s, filter: { per_page: -1 }) { scenes { studio { id } } }
+           i: findImages(image_filter: $i, filter: { per_page: -1 }) { images { studio { id } } }
+           g: findGalleries(gallery_filter: $g, filter: { per_page: -1 }) { galleries { studio { id } } } }`,
+        { s: has, i: has, g: has });
+      const count = new Map(); // studio id -> { scenes, images, galleries }
+      const add = (list, key) => list.forEach((x) => {
+        if (!x.studio) return;
+        const c = count.get(x.studio.id) || { scenes: 0, images: 0, galleries: 0 };
+        c[key] += 1;
+        count.set(x.studio.id, c);
+      });
+      add(d.s.scenes, "scenes");
+      add(d.i.images, "images");
+      add(d.g.galleries, "galleries");
+      if (!count.size) return [];
+      const info = (await gql(
+        `query ($ids: [ID!]) { findStudios(ids: $ids, filter: { per_page: -1 }) { studios { id name image_path parent_studio { name } } } }`,
+        { ids: [...count.keys()] })).findStudios.studios;
+      const total = (c) => c.scenes + c.images + c.galleries;
+      return info
+        .map((st) => ({ ...st, c: count.get(st.id) }))
+        .sort((a, b) => total(b.c) - total(a.c) || a.name.localeCompare(b.name))
+        .slice(0, 30);
+    }
+
+    function galleryCard(g) {
+      const meta = g.theirs && g.theirs < g.image_count
+        ? `${g.theirs} of ${plural(g.image_count, "photo")}`
+        : plural(g.image_count, "photo");
+      return (
+        `<a class="mlt-rel-card mlt-gal-card" href="/galleries/${esc(g.id)}">` +
+        `<div class="mlt-rel-thumb">` +
+        (g.paths && g.paths.cover ? `<img src="${esc(g.paths.cover)}" alt="" loading="lazy" decoding="async">` : "") +
+        `</div>` +
+        `<div class="mlt-rel-title" title="${esc(g.name)}">${esc(g.name)}</div>` +
+        `<div class="mlt-rel-meta">${esc(meta)}</div>` +
+        `</a>`
+      );
+    }
+
+    function studioCard(st) {
+      const meta = [
+        st.c.scenes ? plural(st.c.scenes, "scene") : "",
+        st.c.images ? plural(st.c.images, "photo") : "",
+        st.c.galleries ? plural(st.c.galleries, "gallery", "galleries") : "",
+      ].filter(Boolean).join(" · ");
+      const logo = st.image_path && !/[?&]default=true/.test(st.image_path);
+      return (
+        `<a class="mlt-rel-card mlt-studio-card" href="/studios/${esc(st.id)}">` +
+        `<div class="mlt-rel-thumb${logo ? "" : " mlt-studio-noimg"}">` +
+        (logo ? `<img src="${esc(st.image_path)}" alt="" loading="lazy" decoding="async">`
+              : `<span>${esc(st.name)}</span>`) +
+        `</div>` +
+        `<div class="mlt-rel-title" title="${esc(st.name)}">${esc(st.name)}</div>` +
+        `<div class="mlt-rel-meta">${esc(meta)}${st.parent_studio ? " · " + esc(st.parent_studio.name) : ""}</div>` +
+        `</a>`
+      );
+    }
+
+    function rowHtml(title, cards) {
+      return (
+        '<div class="mlt-related-row">' +
+        `<div class="mlt-related-head"><h3>${esc(title)}</h3>` +
+        '<div class="mlt-related-arrows">' +
+        '<button type="button" data-dir="-1" aria-label="Scroll left">&#8249;</button>' +
+        '<button type="button" data-dir="1" aria-label="Scroll right">&#8250;</button></div></div>' +
+        `<div class="mlt-related-strip">${cards}</div>` +
+        "</div>"
+      );
+    }
+
     function build(kind, id) {
       const key = kind + ":" + id;
       const section = document.createElement("section");
       section.className = "mlt-perf-similar mlt-perf-similar-" + kind;
       section.dataset.key = key;
+      // a slot per row, so they keep their order whichever loads first
+      const slots = kind === "performer" ? ["galleries", "studios", "similar"] : ["similar"];
+      section.innerHTML = slots.map((n) => `<div class="mlt-ps-slot" data-slot="${n}"></div>`).join("");
+      const fill = (slot, html) => {
+        if (section.dataset.key !== key || !section.isConnected) return;
+        section.querySelector(`[data-slot="${slot}"]`).innerHTML = html;
+      };
 
       section.addEventListener("click", (e) => {
         const arrow = e.target.closest("button[data-dir]");
         if (arrow) {
-          const strip = section.querySelector(".mlt-related-strip");
+          const strip = arrow.closest(".mlt-related-row").querySelector(".mlt-related-strip");
           strip.scrollBy({ left: Number(arrow.dataset.dir) * strip.clientWidth * 0.8, behavior: "smooth" });
           return;
         }
-        const a = e.target.closest("a.mlt-perf-card");
+        const a = e.target.closest("a.mlt-rel-card");
         if (!a || e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
         e.preventDefault();
         routerNavigate(a.getAttribute("href"));
@@ -1026,16 +1290,16 @@
       });
 
       similarTo(kind, id).then((list) => {
-        if (section.dataset.key !== key || !section.isConnected || !list.length) return;
-        section.innerHTML =
-          '<div class="mlt-related-row">' +
-          '<div class="mlt-related-head"><h3>Similar Performers</h3>' +
-          '<div class="mlt-related-arrows">' +
-          '<button type="button" data-dir="-1" aria-label="Scroll left">&#8249;</button>' +
-          '<button type="button" data-dir="1" aria-label="Scroll right">&#8250;</button></div></div>' +
-          `<div class="mlt-related-strip">${list.map(card).join("")}</div>` +
-          "</div>";
+        if (list.length) fill("similar", rowHtml("Similar Performers", list.map(card).join("")));
       }).catch((e) => console.warn("[Stash Suggestions] could not load similar performers", e));
+      if (kind === "performer") {
+        theirGalleries(id).then((list) => {
+          if (list.length) fill("galleries", rowHtml("Galleries", list.map(galleryCard).join("")));
+        }).catch((e) => console.warn("[Stash Suggestions] could not load their galleries", e));
+        theirStudios(id).then((list) => {
+          if (list.length) fill("studios", rowHtml("Studios", list.map(studioCard).join("")));
+        }).catch((e) => console.warn("[Stash Suggestions] could not load their studios", e));
+      }
       return section;
     }
 

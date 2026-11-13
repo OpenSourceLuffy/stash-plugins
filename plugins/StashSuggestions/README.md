@@ -1,7 +1,7 @@
 # Stash Suggestions
 
 "Suggested", "Similar photos" and "Similar Performers" rows at the bottom of scene, image and
-performer pages, so there's always something to go to next. Works with any theme, and picks up
+performer pages (plus a performer's galleries and studios), so there's always something to go to next. Works with any theme, and picks up
 [Modern UI](../ModernUI)'s look when that's installed.
 
 ![Suggested and More with rows under a scene](../../docs/screenshots/Stash_Suggestions_Scene.jpeg)
@@ -27,7 +27,17 @@ performer pages, so there's always something to go to next. Works with any theme
 
 ![Similar Performers row](../../docs/screenshots/Similar_Performers_light.png)
 
-- **Similar Performers**: scored by shared tags, ethnicity, hair and eye colour, country, height and age (same gender only).
+- **With the [Better Tagging AI Add-on](../BetterTaggingAI)** installed (optional), Similar photos and
+  Suggested also include the photos / scenes that look most alike, and every row counts how alike
+  performers' faces look. Without it, everything works the same as before.
+- **Similar Performers**: scored by shared tags, ethnicity, hair and eye colour, country, height and age (same gender only). With the [Better Tagging AI Add-on](../BetterTaggingAI) installed, how alike their faces look (from the faces it has learned) counts too, and the closest look-alikes are included even with nothing else in common.
+- **Galleries**: the galleries they're in - tagged on the gallery, or with their photos in it - most of
+  their photos first, e.g. "28 of 932 photos".
+- **Studios**: the studios of their scenes, photos and galleries, most of their items first, with how
+  many of each ("61 scenes · 804 photos") and the parent studio. Studios without a logo show their
+  name instead.
+- On a performer's page the order is Galleries, Studios, then Similar Performers. A row with nothing
+  in it isn't shown.
 
 ## Notes
 
