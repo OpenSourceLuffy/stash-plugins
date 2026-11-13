@@ -16,8 +16,8 @@ a particular graphics card (NVIDIA, with CUDA). Other options send your pictures
 service, or come with a fixed list of tags they were trained on. This add-on:
 
 - **Runs on a Mac (and any ordinary computer).** No special graphics card: it uses models that run
-  well on Apple Silicon and on a normal processor (about 5 seconds a picture on an Apple M4), as well
-  as on Linux and Windows.
+  well on Apple Silicon and on a normal processor (about 5 seconds a picture on an Apple M4). Linux
+  works too; on Windows, Ollama works but the face helper is untested.
 - **Stays on your computer.** A small open model in Ollama and a tiny local helper; nothing is
   uploaded, nothing needs an account.
 - **Learns your tags, not someone else's.** It only ever picks from your own tag list, and learns
