@@ -163,13 +163,17 @@ right ones and press **Add them to … selected**. **✕ Not them** takes one of
 
 ## Review
 
+<table><tr><td><img src="../../docs/screenshots/Review_Swipe.png" width="260" alt="A Tags → Suggested card: Tag it Outdoors?"></td><td><img src="../../docs/screenshots/Review_Batch.png" width="260" alt="Tags → Check in Batch view, two pictures marked to remove"></td><td><img src="../../docs/screenshots/Review_Edit.png" width="260" alt="Editing a scene by hand from the big view"></td></tr></table>
+
+*A suggestion to swipe, Batch view (tap the ones that don't fit), and editing a scene by hand from the big view.* *(Pictures blurred, and every name, title and tag replaced with an example.)*
+
 **Review** in Stash's menu (on a phone with [Modern UI](../ModernUI): **More → Review**) shows
 suggestions one at a time. The tabs are what's reviewed - **Faces**, **Tags**, **Studios** and **Galleries** - and
 under each, what to do: **Suggested** (what's likely missing), **Check** (what's already there that
 may be wrong) and **New** (performers or studios you don't have yet). Faces → Check is the Check list
 below for performers, Tags → Check for tags; Faces → New is New below; Studios and Galleries have all
 three (below).
-Tapping Faces, Tags or Studios goes back to the one you used last there. Swipe right (or **✓ Yes, add**) to add it, left
+Tapping Faces, Tags, Studios or Galleries goes back to the one you used last there. Swipe right (or **✓ Yes, add**) to add it, left
 (**✕ Not them** / **✕ No**) to never suggest it again, **Skip** to leave it, **↶ Undo** to take the
 last answer back. On a computer: → yes, ← no, ↓ skip, Z undo. **Swipe | List | Batch** switches to a grid
 of all of them, each with its own **✕** and **✓ Add** (and **Show more** at the bottom), or to
@@ -267,6 +271,11 @@ while it plays; the Faces card says when they're seen ("seen at 5:56,
     Undo takes back a merge or delete too: the studio is made again (name, aliases, links, picture,
     details) and gets its scenes, photos and galleries back. **✕ No** never suggests it again (kept
     in `studio_review.json`). One at a time, with no list view.
+
+<table><tr><td><img src="../../docs/screenshots/Review_Studio_New.png" width="260" alt="Studios → New: New studio? with the name read in a watermark"></td><td><img src="../../docs/screenshots/Review_Studio_Pick.png" width="260" alt="…or add to a studio you already have, with the closest names listed"></td></tr></table>
+
+  *A name read in a watermark, and adding it to a studio you have instead.* *(Pictures blurred, and every name, title and tag replaced with an example.)*
+
 - **Galleries**:
   - **Suggested** has two kinds of card. **Add these to [gallery]?** offers photos that are in no
     gallery and either look like the gallery's photos (60%+ of their 20 closest look-alikes are in
@@ -284,6 +293,10 @@ while it plays; the Faces card says when they're seen ("seen at 5:56,
   - Look-alikes need **Look-alike tags: scan scenes and images** to have run. Undo takes anything
     back: added photos come out again, a new gallery is deleted (its photos are kept), and details
     go back to what they were. **✕ No** is kept in `gallery_review.json`.
+
+<table><tr><td><img src="../../docs/screenshots/Review_Galleries_Check.png" width="260" alt="Galleries → Check: Does it belong in Outdoors?"></td><td><img src="../../docs/screenshots/Review_Galleries_New.png" width="260" alt="Galleries → New: New gallery? from a folder of loose photos"></td></tr></table>
+
+  *A photo that doesn't look like the rest of its gallery, and a folder of loose photos that could be one.* *(Pictures blurred, and every name, title and tag replaced with an example.)*
 
 Only items the face scan and look-alike scan have looked at count, and what's already on an item isn't
 shown. Comparing every face with every performer, and every picture with every tagged one, is done by

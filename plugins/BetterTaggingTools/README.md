@@ -48,6 +48,10 @@ tags** is shown as well.
 
 ## Suggested galleries
 
+![Suggested galleries under the Galleries box](../../docs/screenshots/Gallery_Suggestions.png)
+
+*Editing a photo: one tap puts it in a suggested gallery (example names).*
+
 Under the **Galleries** box when you edit an image, **Suggested** shows up to 6 galleries it
 might belong in. Only galleries made in Stash are suggested, since a photo can't be put in a zip or
 folder gallery. Each gallery scores points for:

@@ -28,6 +28,8 @@ that plugin's changes.
   studios (the closest names listed first); the one you pick gets the items and the watermark's
   name as an alias.
 - Review on a phone: the tabs get a line of their own under the title.
+- Review's edit form: the **Organized** label is readable again (it was dark on the dark big view with
+  Modern UI's light theme).
 - Studios → New / Suggested: the **See all** view's button is **✓ Create** / **✓ Add N** and does it
   straight away (with only the ticked items), instead of **Done**.
 - Review's Batch view on a phone: the pictures scroll in their own area above the buttons, so the

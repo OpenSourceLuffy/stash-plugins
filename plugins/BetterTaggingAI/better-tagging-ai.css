@@ -1747,7 +1747,7 @@ body.mui-light .bta-batch-foot { background: linear-gradient(to bottom, transpar
   font-size: 0.86rem;
 }
 .bta-edit-hit.on { opacity: 0.5; }
-.bta-edit-org { display: flex; align-items: center; gap: 8px; margin: 18px 0 4px; font-weight: 600; }
+.bta-edit-org { display: flex; align-items: center; gap: 8px; margin: 18px 0 4px; color: #fff !important; font-weight: 600; } /* (Modern UI colours every label for the light theme; this one sits on the dark big view) */
 .bta-edit-org input { width: 20px; height: 20px; }
 .bta-edit-err { margin-top: 10px; color: #ff8a80; }
 .bta-edit-actions { display: grid; grid-template-columns: 1fr 1.6fr; gap: 8px; margin-top: 16px; }

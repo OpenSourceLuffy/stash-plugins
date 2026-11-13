@@ -28,6 +28,11 @@ A cleaner, app-like look for Stash, built to feel good on a phone as well as a c
 **Lists**
 - Once you select a card (press and hold on a phone), every scene, image or gallery card in the list
   shows a strip with whether it's organized, how many tags it has, and its performers.
+
+  ![Selected scene cards with their strips](../../docs/screenshots/MUI_Selected_Info.png)
+
+  *Two scenes selected: every card shows organized, tags and performers (pictures blurred, example names).*
+
 - A labelled **Filters** button at the start of the list toolbar opens Stash's filter panel (instead
   of the half-hidden tab on the left edge).
 - **Quick filters**: on scene, image, gallery, performer, studio, tag, group and marker lists that
@@ -41,6 +46,11 @@ A cleaner, app-like look for Stash, built to feel good on a phone as well as a c
   **Clear** (take them all off; your saved filters aren't touched) at the start of the row. With
   no filter in use it shows **Filters (0)** and opens the filter panel. Lists without saved
   filters show their filter tags as usual.
+
+  <img src="../../docs/screenshots/MUI_Quick_Filters.png" width="300" alt="Quick filters under the toolbar, with the filters in use shown">
+
+  *On a phone: quick filters under the toolbar, and the filters in use after tapping Filters (1).*
+
 - In the saved-filter menu, the **Save** button says "Save" and only lights up once you've typed a
   name.
 - On an image's page, click the picture to see it full screen. Zoom in with the mouse wheel, a
@@ -99,9 +109,9 @@ A cleaner, app-like look for Stash, built to feel good on a phone as well as a c
 **Tags**
 - Tag cards look like gallery cards: the tag's picture fills the card, with the name underneath. Tags without a picture show a small tag icon instead. (The [Better Tagging Tools](../BetterTaggingTools) plugin can give your tags pictures from your library.)
 
-![Tag cards](../../docs/screenshots/Tag_Cards.jpeg)
+![Tag cards](../../docs/screenshots/Tag_Cards.png)
 
-*Tag cards in the light theme (pictures blurred with Privacy Blur, example tag names).*
+*Tag cards in the light theme (pictures blurred, example tag names).*
 
 - A–Z index view: a new button next to the grid/list buttons on the Tags page. It only lists tags that are used on at least one scene or image.
 
