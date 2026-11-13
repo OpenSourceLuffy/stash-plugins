@@ -3,6 +3,19 @@
   const MOBILE_QUERY = window.matchMedia("(max-width: 576px)");
   const body = document.body.classList;
   body.add("mui");
+  // set by setupGalleryTitle on an image page in a gallery: back to that
+  // gallery. Only used when we don't know where you came from.
+  let galleryBack = null;
+  // a single item's page: images, scenes, galleries, performers, tags...
+  const ITEM_PATH = /^\/(images|scenes|galleries|performers|tags|studios|groups)\/(\d+)/;
+  const itemAt = (path = location.pathname) => {
+    const m = path.match(ITEM_PATH);
+    return m ? { kind: m[1], id: m[2] } : null;
+  };
+  // set by setupItemReturn: leave an item's page (swipe down on phones)
+  let itemBack = null;
+  // set by setupGalleryTitle: the galleries list as you left it
+  let galleriesBack = null;
 
   // ------------------------------------------------------------------
   // Light / dark theme
@@ -32,6 +45,7 @@
   // loaded, so a list sorted by Count can ask for its items while the
   // settings below are still loading. The Count sort has to be ready by then.
   setupCountSort();
+  setupSceneTimeline();
 
   let cfg = {};
   let cfgLoaded = false;
@@ -83,14 +97,20 @@
   setupHomeFlag();
   setupLongPressSelect();
   setupGalleryTitle();
+  setupBulkRemoveList();
+  setupStudioLine();
+  setupHomeCustomiseDrag();
+  setupItemReturn();
   setupTagIndex();
   if (!cfg.stayOnEditAfterSave) setupBackToDetailsOnSave();
   setupVerticalPoster();
+  if (!cfg.hideSelectedInfo) setupSelectedInfo();
   if (!cfg.showGalleryDetails) setupGalleryPanelClosed();
   if (!cfg.disableQuickFilters) setupQuickFilters();
 
   // the full-screen viewer swipes between images too, unless that's off
   const imageNav = cfg.disableImageSwipe ? null : setupImageSwipe();
+  if (!cfg.disableImageSwipe) setupSceneSwipeUp();
   setupImageViewer(imageNav);
 
   // ------------------------------------------------------------------
@@ -170,7 +190,7 @@
     row.className = "mui-qf-row";
     const tagsToggle = document.createElement("button");
     tagsToggle.type = "button";
-    tagsToggle.className = "mui-qf-toggle";
+    tagsToggle.className = "mui-qf-toggle ignore-sidebar-outside-click";
     bar.append(row, tagsToggle);
     const tagActions = document.createElement("span");
     tagActions.className = "mui-ft-actions";
@@ -186,7 +206,9 @@
       const tags = filterTags();
       const count = tagCount(tags);
       body.toggle("mui-filter-tags-shown", tagsShown);
-      tagsToggle.hidden = tagsShown || count === 0;
+      // with no filter in use it's still there, as a way into the filter panel
+      tagsToggle.hidden = tagsShown;
+      tagsToggle.classList.toggle("mui-qf-toggle-empty", count === 0);
       const text = `Filters (${count})`;
       if (tagsToggle.textContent !== text) tagsToggle.textContent = text;
       tagsToggle.setAttribute("aria-expanded", String(tagsShown));
@@ -218,7 +240,11 @@
       setTagsShown(false);
     }
 
-    tagsToggle.addEventListener("click", () => setTagsShown(true));
+    tagsToggle.addEventListener("click", () => {
+      if (tagCount(filterTags())) { setTagsShown(true); return; }
+      const open = document.querySelector(".main .mui-sidebar-btn") || document.querySelector(".main .sidebar-toggle-button");
+      if (open) open.click();
+    });
     tagActions.addEventListener("click", (e) => {
       const btn = e.target.closest(".mui-ft-btn");
       if (btn) e.preventDefault();
@@ -431,6 +457,11 @@
         sync();
       });
     }).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["class"] });
+    // and every second as well: Safari on a phone doesn't always run the
+    // page-change check above (it waits for the next frame, which it can
+    // hold back), which left some lists with Stash's own sidebar tab
+    setInterval(sync, 1000);
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) sync(); });
   }
 
   // ------------------------------------------------------------------
@@ -703,6 +734,7 @@
 
     const toGalleries = () =>
       goBack(store.get(LIST_KEY) || "/galleries", (path) => path === "/galleries");
+    galleriesBack = toGalleries;
 
     function syncGallery(id) {
       store.set(LAST_KEY, { id, url: here() });
@@ -748,6 +780,7 @@
       let bar = row.querySelector(":scope > .mui-image-crumb");
       if (bar && bar.dataset.image === imageId) return;
       bar?.remove();
+      galleryBack = null;
       const list = galleriesOf.get(imageId);
       if (!list) {
         galleriesOf.set(imageId, null);
@@ -775,8 +808,8 @@
       bar = document.createElement("div");
       bar.className = "mui-image-crumb";
       bar.dataset.image = imageId;
-      const btn = exitButton("", "Back to the gallery " + g.title, () =>
-        goBack(url, (path) => path === "/galleries/" + g.id));
+      galleryBack = () => goBack(url, (path) => path === "/galleries/" + g.id);
+      const btn = exitButton("", "Back to the gallery " + g.title, () => galleryBack());
       btn.append(cover(g.id, "mui-crumb-cover"), document.createTextNode("← " + g.title));
       bar.appendChild(btn);
       row.insertBefore(bar, row.firstChild);
@@ -790,7 +823,10 @@
       if (g) syncGallery(g[1]);
       else document.querySelector(".mui-gallery-title")?.remove();
       if (i) syncImage(i[1]);
-      else document.querySelectorAll(".mui-image-crumb").forEach((e) => e.remove());
+      else {
+        galleryBack = null;
+        document.querySelectorAll(".mui-image-crumb").forEach((e) => e.remove());
+      }
     }
 
     let queued = false;
@@ -804,6 +840,672 @@
     }
     new MutationObserver(schedule).observe(document.body, { childList: true, subtree: true, characterData: true });
     sync();
+  }
+
+  // ------------------------------------------------------------------
+  // Edit dialog for several selected items: in Remove mode, list everything
+  // the selected items currently have (tags, performers, galleries, groups)
+  // so you can tap what to remove instead of guessing.
+  // ------------------------------------------------------------------
+  // Reads Stash's own dialog state (React props): the selected items and the
+  // field's onUpdate, so a tapped item goes into the Remove box itself.
+  function setupBulkRemoveList() {
+    const reactProps = (el, test) => {
+      const key = Object.keys(el).find((k) => k.startsWith("__reactFiber$"));
+      for (let f = key && el[key]; f; f = f.return) {
+        const p = f.memoizedProps;
+        if (p && typeof p === "object" && test(p)) return p;
+      }
+      return null;
+    };
+    const FIELDS = {
+      tags: (it) => it.tags,
+      performers: (it) => it.performers,
+      galleries: (it) => it.galleries,
+      groups: (it) => (it.groups || []).map((g) => g.group || g),
+      scenes: (it) => it.scenes,
+    };
+    const label = (type, x) => {
+      if (type === "galleries") return x.title || (x.files?.[0]?.path || x.folder?.path || "").split("/").pop() || "Gallery " + x.id;
+      if (type === "scenes") return x.title || "Scene " + x.id;
+      return x.name + (x.disambiguation ? " (" + x.disambiguation + ")" : "");
+    };
+
+    function sync() {
+      document.querySelectorAll(".modal .multi-set").forEach((ms) => {
+        const props = reactProps(ms, (p) => typeof p.onSetMode === "function" && typeof p.onUpdate === "function" && "mode" in p);
+        let box = ms.querySelector(":scope > .mui-ms-current");
+        const dialog = props && reactProps(ms, (p) => Array.isArray(p.selected));
+        const pick = props && FIELDS[props.type];
+        if (!props || String(props.mode).toUpperCase() !== "REMOVE" || !dialog || !pick) {
+          box?.remove();
+          return;
+        }
+        // every item on any selected item, most common first
+        const all = new Map();
+        for (const it of dialog.selected) {
+          for (const x of pick(it) || []) {
+            if (!x || x.id == null) continue;
+            const e = all.get(x.id) || { id: String(x.id), name: label(props.type, x), n: 0 };
+            e.n++;
+            all.set(x.id, e);
+          }
+        }
+        const items = [...all.values()].sort((a, b) => b.n - a.n || a.name.localeCompare(b.name));
+        const ids = (props.ids || []).map(String);
+        const total = dialog.selected.length;
+        const sig = JSON.stringify([items, ids]);
+        if (box && box.dataset.sig === sig) return;
+        box?.remove();
+        box = document.createElement("div");
+        box.className = "mui-ms-current";
+        box.dataset.sig = sig;
+        const head = document.createElement("div");
+        head.className = "mui-ms-current-head";
+        head.textContent = items.length ? "On the selected items (tap to remove):" : "None of the selected items have any.";
+        box.appendChild(head);
+        const current = () => reactProps(ms, (p) => typeof p.onUpdate === "function" && "mode" in p);
+        const chip = (text, cls, onClick) => {
+          const b = document.createElement("button");
+          b.type = "button";
+          b.className = "mui-ms-chip " + cls;
+          b.textContent = text;
+          b.addEventListener("click", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const p = current();
+            if (p) onClick(p, (p.ids || []).map(String));
+          });
+          box.appendChild(b);
+          return b;
+        };
+        for (const x of items) {
+          const on = ids.includes(x.id);
+          const b = chip(x.name + (x.n < total ? " · " + x.n + "/" + total : ""), on ? "on" : "", (p, cur) =>
+            p.onUpdate(cur.includes(x.id) ? cur.filter((i) => i !== x.id) : [...cur, x.id]));
+          b.setAttribute("aria-pressed", on ? "true" : "false");
+        }
+        if (items.length > 1) {
+          const allOn = items.every((x) => ids.includes(x.id));
+          chip(allOn ? "Clear" : "All", "mui-ms-all", (p) => p.onUpdate(allOn ? [] : items.map((x) => x.id)));
+        }
+        ms.appendChild(box);
+      });
+    }
+
+    // Stash keeps what's in the box when you go from Remove to Add, which
+    // would add the things you meant to remove: empty it instead
+    document.addEventListener("click", (e) => {
+      const btn = e.target instanceof Element && e.target.closest(".modal .multi-set .button-group-above .btn");
+      if (!btn || btn.classList.contains("active")) return;
+      const ms = btn.closest(".multi-set");
+      const p = reactProps(ms, (q) => typeof q.onSetMode === "function" && typeof q.onUpdate === "function" && "mode" in q);
+      if (p && String(p.mode).toUpperCase() === "REMOVE" && (p.ids || []).length) p.onUpdate([]);
+    }, true);
+
+    let queued = false;
+    new MutationObserver(() => {
+      if (queued || !document.querySelector(".modal .multi-set")) return;
+      queued = true;
+      requestAnimationFrame(() => {
+        queued = false;
+        sync();
+      });
+    }).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["class"] });
+  }
+
+  // ------------------------------------------------------------------
+  // Scene, image and gallery pages: the studio as a "Studio:" line just
+  // above the performers (or with the other details if there are none)
+  // instead of in the title box; CSS hides the one in the title box.
+  // ------------------------------------------------------------------
+  function setupStudioLine() {
+    const KINDS = ["scene", "image", "gallery"];
+    function sync() {
+      for (const k of KINDS) {
+        const tabs = document.querySelector("." + k + "-tabs");
+        let line = tabs?.querySelector(".mui-studio-line");
+        const link = tabs?.querySelector("." + k + "-header-container > .studio-logo a[href*='/studios/']");
+        if (!link) {
+          line?.remove();
+          continue;
+        }
+        const name = link.textContent.trim() || (link.querySelector("img")?.alt || "").replace(/\s+logo$/i, "");
+        const perfHeading = tabs.querySelector("." + k + "-performers")?.previousElementSibling;
+        const spot = perfHeading || tabs.querySelector("." + k + "-details");
+        if (!spot || !name) continue;
+        const href = link.getAttribute("href");
+        if (line && line.dataset.href === href && (perfHeading ? line.nextElementSibling === perfHeading : line.parentElement === spot)) continue;
+        line?.remove();
+        line = document.createElement("h6");
+        line.className = "mui-studio-line";
+        line.dataset.href = href;
+        const a = document.createElement("a");
+        a.href = href;
+        a.textContent = name;
+        a.addEventListener("click", (e) => {
+          if (e.metaKey || e.ctrlKey || e.shiftKey) return;
+          e.preventDefault();
+          routerNavigate(href);
+        });
+        line.append("Studio: ", a);
+        if (perfHeading) perfHeading.before(line);
+        else spot.appendChild(line);
+        body.add("mui-studio-moved");
+      }
+    }
+    let queued = false;
+    new MutationObserver(() => {
+      if (queued) return;
+      queued = true;
+      requestAnimationFrame(() => {
+        queued = false;
+        sync();
+      });
+    }).observe(document.body, { childList: true, subtree: true });
+    sync();
+  }
+
+  // ------------------------------------------------------------------
+  // Scene pages: the timeline under the video (the strip of thumbnails and
+  // markers). "Show timeline" / "Hide timeline" in the scene's ⋮ menu, kept
+  // separately for phones and bigger screens. Stash never shows it on
+  // phones; when you ask for it there we answer the player's "is this a
+  // phone?" check with no (only that exact check, only on scene pages), and
+  // turn finger drags on the strip into the mouse drags it understands.
+  // ------------------------------------------------------------------
+  function setupSceneTimeline() {
+    const PHONE_CHECK = "only screen and (max-width: 576px)"; // Stash's isMobile()
+    const PHONE = window.matchMedia("(max-width: 576px)");
+    const SCENE = /^\/scenes\/\d+/;
+    const key = () => (PHONE.matches ? "mui-timeline-phone" : "mui-timeline-wide");
+    const wantShow = () => {
+      let v = null;
+      try {
+        v = localStorage.getItem(key());
+      } catch (e) {}
+      return v ? v === "show" : !PHONE.matches; // Stash's default
+    };
+    const onScene = () => SCENE.test(location.pathname);
+
+    const realMatchMedia = window.matchMedia.bind(window);
+    window.matchMedia = function (q) {
+      if (q === PHONE_CHECK && PHONE.matches && onScene() && wantShow()) {
+        return {
+          matches: false, media: q, onchange: null,
+          addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {},
+          dispatchEvent() { return false; },
+        };
+      }
+      return realMatchMedia(q);
+    };
+
+    function sync() {
+      document.body.classList.toggle("mui-timeline-hidden", onScene() && !wantShow());
+    }
+    function set(show) {
+      try {
+        localStorage.setItem(key(), show ? "show" : "hide");
+      } catch (e) {}
+      sync();
+      window.dispatchEvent(new Event("resize")); // the player checks again
+    }
+
+    // the ⋮ menu entry
+    function placeItem(toggle) {
+      const menu = toggle.parentElement?.querySelector(".dropdown-menu");
+      if (!menu || !onScene()) return;
+      let item = menu.querySelector(".mui-timeline-item");
+      if (!item) {
+        item = document.createElement("a");
+        item.href = "#";
+        item.setAttribute("role", "button");
+        item.className = "dropdown-item bg-secondary text-white mui-timeline-item";
+        item.addEventListener("click", (e) => {
+          e.preventDefault();
+          toggle.click(); // close the menu
+          set(!wantShow());
+        });
+        menu.insertBefore(item, menu.firstChild);
+      }
+      item.textContent = wantShow() ? "Hide timeline" : "Show timeline";
+    }
+    document.addEventListener("click", (e) => {
+      const toggle = e.target instanceof Element && e.target.closest("#operation-menu");
+      if (toggle) [0, 60, 200].forEach((ms) => setTimeout(() => placeItem(toggle), ms));
+    }, true);
+
+    // finger drags on the strip -> mouse drags (it only listens for the mouse)
+    let drag = null; // {target, x, y, last, moved}
+    const mouse = (type, target, t, extra) =>
+      target.dispatchEvent(new MouseEvent(type, Object.assign({
+        bubbles: true, cancelable: true, view: window, button: 0, buttons: type === "mouseup" ? 0 : 1,
+        clientX: t.clientX, clientY: t.clientY, screenX: t.screenX, screenY: t.screenY,
+      }, extra)));
+    window.addEventListener("touchstart", (e) => {
+      const content = e.target instanceof Element && e.target.closest(".scrubber-content");
+      if (!content || e.touches.length !== 1) return;
+      const t = e.touches[0];
+      drag = { target: e.target, x: t.clientX, y: t.clientY, last: t.clientX, moved: false };
+      mouse("mousedown", e.target, t);
+    }, { capture: true, passive: true });
+    window.addEventListener("touchmove", (e) => {
+      if (!drag) return;
+      const t = e.touches[0];
+      if (!drag.moved && Math.abs(t.clientY - drag.y) > Math.abs(t.clientX - drag.x) + 6) {
+        // mostly up/down: let the page scroll instead
+        mouse("mouseup", drag.target, { clientX: drag.x + 50, clientY: drag.y, screenX: 0, screenY: 0 });
+        drag = null;
+        return;
+      }
+      if (Math.abs(t.clientX - drag.x) > 3) drag.moved = true;
+      if (e.cancelable) e.preventDefault();
+      mouse("mousemove", drag.target, t, { movementX: t.clientX - drag.last });
+      drag.last = t.clientX;
+    }, { capture: true, passive: false });
+    const end = (e) => {
+      if (!drag) return;
+      const t = e.changedTouches[0];
+      // a tap seeks to that thumbnail; stop the browser's own mouse
+      // events after the tap so it doesn't happen twice
+      if (e.cancelable) e.preventDefault();
+      mouse("mouseup", drag.target, drag.moved ? t : { clientX: drag.x, clientY: drag.y, screenX: t.screenX, screenY: t.screenY });
+      drag = null;
+    };
+    window.addEventListener("touchend", end, { capture: true, passive: false });
+    window.addEventListener("touchcancel", end, { capture: true, passive: false });
+
+    window.addEventListener("popstate", sync);
+    for (const fn of ["pushState", "replaceState"]) {
+      const orig = history[fn];
+      history[fn] = function () {
+        const r = orig.apply(this, arguments);
+        sync();
+        return r;
+      };
+    }
+    PHONE.addEventListener("change", sync);
+    if (document.body) sync();
+  }
+
+  // ------------------------------------------------------------------
+  // Scene pages: in full screen (playing or paused), swipe up on the video for
+  // the next scene in the queue (down for the previous one), which starts
+  // playing straight away.
+  // Uses the player's own "next" (the ⏭ button), so it follows Stash's
+  // queue; with no queue, the next scene in the list you came from.
+  // On phones without real full screen for page elements (iPhone), the
+  // player's full screen is made to fill the page instead of handing the
+  // video to the phone's own player, where swipes never reach the page.
+  // ------------------------------------------------------------------
+  function setupSceneSwipeUp() {
+    const SCENE = /^\/scenes\/(\d+)/;
+    const noElementFullscreen = !(document.fullscreenEnabled || document.webkitFullscreenEnabled);
+    const playerOf = (el) => el && el.player;
+
+    // iPhone: double-tap the video (or "Native Player" in full screen) to
+    // switch to the phone's own player; Done there comes back
+    const canNative = (video) => noElementFullscreen && video && typeof video.webkitEnterFullscreen === "function";
+    function toNative(el) {
+      const p = playerOf(el);
+      const video = el.querySelector("video");
+      if (!canNative(video)) return;
+      if (p && p.isFullWindow) p.exitFullWindow();
+      try {
+        video.webkitEnterFullscreen();
+      } catch (e) {}
+    }
+    const HINT_KEY = "mui-native-hint";
+    function hint(el) {
+      let n = 0;
+      try {
+        n = Number(localStorage.getItem(HINT_KEY)) || 0;
+        if (n >= 3) return;
+        localStorage.setItem(HINT_KEY, String(n + 1));
+      } catch (e) {
+        return;
+      }
+      const h = document.createElement("div");
+      h.className = "mui-native-hint";
+      h.textContent = "Double-tap for the native player";
+      el.appendChild(h);
+      setTimeout(() => h.classList.add("gone"), 2200);
+      setTimeout(() => h.remove(), 2700);
+    }
+
+    if (noElementFullscreen) {
+      new MutationObserver(() => {
+        document.querySelectorAll(".scene-player-container .video-js").forEach((el) => {
+          const p = playerOf(el);
+          if (!p || !p.options_ || el.dataset.muiFs) return;
+          el.dataset.muiFs = "1";
+          p.options_.preferFullWindow = true;
+          // a double-tap is ours (native player), not the player's full screen
+          if (p.options_.userActions) p.options_.userActions.doubleClick = false;
+          else p.options_.userActions = { doubleClick: false };
+          // "✕ Exit" (top left) leaves full screen
+          const x = document.createElement("button");
+          x.type = "button";
+          x.className = "mui-exit-fs";
+          x.textContent = "✕ Exit";
+          x.title = "Leave full screen";
+          x.addEventListener("click", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (p.isFullWindow) p.exitFullWindow();
+            else p.exitFullscreen();
+          });
+          el.appendChild(x);
+          if (!canNative(el.querySelector("video"))) return;
+          const b = document.createElement("button");
+          b.type = "button";
+          b.className = "mui-native-fs";
+          b.textContent = "Native Player";
+          b.title = "Open in the phone's own video player";
+          b.addEventListener("click", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            toNative(el);
+          });
+          el.appendChild(b);
+          p.on("fullscreenchange", () => {
+            if (p.isFullWindow) hint(el);
+          });
+        });
+      }).observe(document.body, { childList: true, subtree: true });
+
+      let lastTap = null; // {t, x, y, playing}
+      window.addEventListener("touchend", (e) => {
+        if (e.touches.length || e.changedTouches.length !== 1) return;
+        const t = e.target instanceof Element ? e.target : null;
+        const el = t && t.closest(".scene-player-container .video-js");
+        // (the big ▶ in the middle counts: the first tap pauses, so the
+        // second often lands on it)
+        if (!el || t.closest(".vjs-control-bar, .vjs-menu, .vjs-modal-dialog, .scrubber-wrapper, .mui-native-fs")) { lastTap = null; return; }
+        const c = e.changedTouches[0];
+        const now = performance.now();
+        const video = el.querySelector("video");
+        if (lastTap && now - lastTap.t < 320 && Math.hypot(c.clientX - lastTap.x, c.clientY - lastTap.y) < 40) {
+          const wasPlaying = lastTap.playing;
+          lastTap = null;
+          // no zoom, and the player's own buttons (the big ▶/❚❚) don't get
+          // this tap
+          if (e.cancelable) e.preventDefault();
+          e.stopPropagation();
+          toNative(el);
+          // keep playing if it was (a tap can pause it)
+          const resume = () => { if (wasPlaying && video && video.paused) video.play().catch(() => {}); };
+          resume();
+          setTimeout(resume, 80);
+          return;
+        }
+        // (the tap's own pause/play happens after this, on its click)
+        lastTap = { t: now, x: c.clientX, y: c.clientY, playing: !!video && !video.paused };
+      }, { capture: true, passive: false });
+      // a swipe in between isn't a tap
+      window.addEventListener("touchmove", () => (lastTap = null), { capture: true, passive: true });
+    }
+
+    // step: 1 = next, -1 = previous
+    function next(p, step = 1) {
+      const before = location.pathname;
+      const skip = typeof p.skipButtons === "function" ? p.skipButtons() : null;
+      if (step > 0 && skip && typeof skip.handleForward === "function" && p.hasClass("vjs-skip-buttons-next")) skip.handleForward();
+      if (step < 0 && skip && typeof skip.handleBackward === "function" && p.hasClass("vjs-skip-buttons-prev")) skip.handleBackward();
+      // nothing in the queue: the next / previous scene in the list you came from
+      setTimeout(() => {
+        if (location.pathname !== before) return;
+        const id = (before.match(SCENE) || [])[1];
+        let ids = [];
+        try {
+          ids = JSON.parse(sessionStorage.getItem("mui-list-scenes") || "[]");
+        } catch (e) {}
+        const i = ids.indexOf(id);
+        if (i !== -1 && ids[i + step]) routerNavigate("/scenes/" + ids[i + step] + "?autoplay=true");
+      }, 900);
+    }
+
+    let st = null; // {x, y, t, el, video, dir, dy}
+    const look = (v, dy) => {
+      v.style.transition = dy ? "" : "transform 0.2s ease, opacity 0.2s ease";
+      v.style.transform = dy ? `translateY(${dy * 0.5}px)` : "";
+      v.style.opacity = dy ? String(1 - Math.min(Math.abs(dy) / 400, 0.5)) : "";
+    };
+    window.addEventListener("touchstart", (e) => {
+      st = null;
+      if (e.touches.length !== 1 || !SCENE.test(location.pathname)) return;
+      const t = e.target instanceof Element ? e.target : null;
+      const el = t && t.closest(".scene-player-container .video-js");
+      // (a swipe may start on the big ▶ in the middle; a tap still works it)
+      if (!el || t.closest(".vjs-control-bar, .vjs-menu, .vjs-modal-dialog, .scrubber-wrapper, .mui-native-fs")) return;
+      const video = el.querySelector("video");
+      if (!video) return;
+      // only in full screen (in the page's own view, dragging scrolls the
+      // page); playing or paused, the new one starts playing
+      const p = playerOf(el);
+      if (!p || !(p.isFullscreen() || p.isFullWindow)) return;
+      st = { x: e.touches[0].clientX, y: e.touches[0].clientY, t: performance.now(), el, video, dir: null, dy: 0 };
+    }, { capture: true, passive: true });
+    window.addEventListener("touchmove", (e) => {
+      if (!st) return;
+      if (e.touches.length !== 1) { look(st.video, 0); st = null; return; }
+      const dx = e.touches[0].clientX - st.x;
+      const dy = e.touches[0].clientY - st.y;
+      if (!st.dir) {
+        if (Math.abs(dx) < 8 && Math.abs(dy) < 8) {
+          // starting up or down: hold the page still (iOS can't stop a
+          // scroll, or pull-to-refresh, once it has begun)
+          if (Math.abs(dy) >= Math.abs(dx) && e.cancelable) e.preventDefault();
+          return;
+        }
+        st.dir = Math.abs(dy) > Math.abs(dx) ? (dy < 0 ? "up" : "down") : "other";
+      }
+      if (st.dir === "other") { look(st.video, 0); st = null; return; }
+      if (e.cancelable) e.preventDefault();
+      st.dy = st.dir === "up" ? Math.min(dy, 0) : Math.max(dy, 0);
+      look(st.video, st.dy);
+    }, { capture: true, passive: false });
+    const end = (e) => {
+      if (!st) return;
+      const { el, video, dir, dy, t } = st;
+      st = null;
+      look(video, 0);
+      if (dir === "up" || dir === "down") {
+        // a swipe, not a tap: the player's buttons (big ▶) don't get it
+        if (e.cancelable) e.preventDefault();
+        e.stopPropagation();
+      }
+      const fast = Math.abs(dy) / Math.max(performance.now() - t, 1) > 0.5;
+      if ((dir === "up" || dir === "down") && (Math.abs(dy) > 70 || (fast && Math.abs(dy) > 30))) {
+        const p = playerOf(el);
+        if (p) next(p, dir === "up" ? 1 : -1); // up: next, down: previous
+      }
+    };
+    window.addEventListener("touchend", end, { capture: true, passive: false });
+    window.addEventListener("touchcancel", end, { capture: true, passive: false });
+  }
+
+  // ------------------------------------------------------------------
+  // Home page > Customize: a "Move" handle on each row to drag it up or
+  // down with a finger (Stash's own drag and drop only works with a mouse).
+  // It calls Stash's own drag handlers, so Save / Cancel work as before.
+  // ------------------------------------------------------------------
+  function setupHomeCustomiseDrag() {
+    const LIST = ".recommendations-container-edit";
+    const rows = () => [...document.querySelectorAll(LIST + " > div > div[draggable]")];
+    const props = (el) => {
+      const k = Object.keys(el).find((x) => x.startsWith("__reactProps$"));
+      return k ? el[k] : null;
+    };
+    const fake = () => ({ dataTransfer: { effectAllowed: "", dropEffect: "" }, preventDefault() {} });
+
+    let drag = null; // {at, y, raf}
+    function mark() {
+      rows().forEach((r, i) => r.classList.toggle("mui-dragging", !!drag && i === drag.at));
+    }
+    function moveTo(y) {
+      const list = rows();
+      for (let i = 0; i < list.length; i++) {
+        const r = list[i].getBoundingClientRect();
+        if (i === drag.at || y < r.top || y > r.bottom) continue;
+        // past the middle of the row we're over: take its place
+        const mid = r.top + r.height / 2;
+        if ((i < drag.at && y < mid) || (i > drag.at && y > mid)) {
+          props(list[i])?.onDragEnter?.(fake());
+          drag.at = i;
+          requestAnimationFrame(mark);
+        }
+        break;
+      }
+    }
+    function autoScroll() {
+      if (!drag) return;
+      const edge = 70;
+      const bottom = window.innerHeight - (document.querySelector(".mui-bottom-nav")?.offsetHeight || 0);
+      if (drag.y < edge) window.scrollBy(0, -Math.ceil((edge - drag.y) / 6));
+      else if (drag.y > bottom - edge) window.scrollBy(0, Math.ceil((drag.y - bottom + edge) / 6));
+      moveTo(drag.y);
+      drag.raf = requestAnimationFrame(autoScroll);
+    }
+    function end() {
+      if (!drag) return;
+      cancelAnimationFrame(drag.raf);
+      const row = rows()[drag.at];
+      if (row) props(row)?.onDrop?.(fake());
+      drag = null;
+      document.body.classList.remove("mui-row-dragging");
+      mark();
+    }
+
+    function addHandles() {
+      rows().forEach((row) => {
+        const head = row.querySelector(".recommendation-row-head");
+        if (!head || head.querySelector(":scope > .mui-move")) return;
+        const h = document.createElement("button");
+        h.type = "button";
+        h.className = "mui-move";
+        h.title = "Drag to move this row";
+        h.textContent = "⠿ Move";
+        h.addEventListener("pointerdown", (e) => {
+          if (e.button !== 0) return;
+          e.preventDefault();
+          const r = h.closest(LIST + " > div > div[draggable]");
+          const at = rows().indexOf(r);
+          if (at < 0) return;
+          try { h.setPointerCapture(e.pointerId); } catch (err) {}
+          props(r)?.onDragStart?.(fake());
+          drag = { at, y: e.clientY, raf: 0 };
+          document.body.classList.add("mui-row-dragging");
+          mark();
+          drag.raf = requestAnimationFrame(autoScroll);
+        });
+        h.addEventListener("pointermove", (e) => {
+          if (drag) drag.y = e.clientY;
+        });
+        h.addEventListener("pointerup", end);
+        h.addEventListener("pointercancel", end);
+        h.addEventListener("click", (e) => e.preventDefault());
+        head.insertBefore(h, head.firstChild);
+      });
+    }
+
+    let queued = false;
+    new MutationObserver(() => {
+      if (queued || !document.querySelector(LIST)) return;
+      queued = true;
+      requestAnimationFrame(() => {
+        queued = false;
+        addHandles();
+      });
+    }).observe(document.body, { childList: true, subtree: true });
+  }
+
+  // ------------------------------------------------------------------
+  // Item pages (image, scene, gallery, performer, tag...): going back (swipe
+  // down on a phone) returns to the page you opened the first one from (a
+  // list, a gallery, the home page...) at the same scroll position, however
+  // many of the same kind you swiped through since.
+  // ------------------------------------------------------------------
+  function setupItemReturn() {
+    const KEY = "mui-item-origins"; // url -> {depth, scroll}
+    let map = {};
+    try {
+      map = JSON.parse(sessionStorage.getItem(KEY)) || {};
+    } catch (e) {}
+    const save = () => {
+      const keys = Object.keys(map);
+      if (keys.length > 300) keys.slice(0, keys.length - 300).forEach((k) => delete map[k]);
+      try {
+        sessionStorage.setItem(KEY, JSON.stringify(map));
+      } catch (e) {}
+    };
+    const full = () => location.pathname + location.search;
+    let scrollNow = window.scrollY; // where the page you're leaving was
+    let restoreTo = null;
+    window.addEventListener("scroll", () => (scrollNow = window.scrollY), { passive: true });
+
+    const orig = history.pushState;
+    history.pushState = function () {
+      const from = itemAt();
+      const fromInfo = map[full()];
+      const scroll = scrollNow;
+      const r = orig.apply(this, arguments);
+      const to = itemAt();
+      if (to) {
+        // same kind as the page before (swiped, or picked another): one more
+        // step from the same place; anything else is a new starting point
+        map[full()] = from && from.kind === to.kind && fromInfo
+          ? { depth: fromInfo.depth + 1, scroll: fromInfo.scroll }
+          : { depth: 1, scroll };
+        save();
+      }
+      return r;
+    };
+    // Stash swaps the address in place (a performer page becomes
+    // /performers/1/scenes): the entry keeps its place
+    const origReplace = history.replaceState;
+    history.replaceState = function () {
+      const info = map[full()];
+      const r = origReplace.apply(this, arguments);
+      if (info && itemAt() && !map[full()]) {
+        map[full()] = info;
+        save();
+      }
+      return r;
+    };
+
+    function restore(y) {
+      const t0 = performance.now();
+      let ok = 0;
+      (function tick() {
+        if (performance.now() - t0 > 4000 || itemAt()) return;
+        if (Math.abs(window.scrollY - y) < 4) {
+          if (++ok >= 4) return; // stayed put for a moment: done
+        } else {
+          ok = 0;
+          window.scrollTo(0, y);
+        }
+        setTimeout(tick, 100);
+      })();
+    }
+    window.addEventListener("popstate", (e) => {
+      if (!e.isTrusted || restoreTo === null) return;
+      const y = restoreTo;
+      restoreTo = null;
+      restore(y);
+    });
+
+    itemBack = () => {
+      const info = map[full()];
+      const kind = itemAt()?.kind;
+      if (info && info.depth > 0 && history.length > info.depth) {
+        restoreTo = info.scroll;
+        history.go(-info.depth);
+      } else if (kind === "images" && galleryBack) galleryBack();
+      else if (kind === "galleries" && galleriesBack) galleriesBack();
+      else if (history.length > 1) history.back();
+      else routerNavigate("/" + (kind || ""));
+    };
   }
 
   // Gallery page: start with the details panel closed (wide screens).
@@ -1209,8 +1911,34 @@
     const STORE_KEY = "mui-image-list";
     const IMAGE_PAGE = /^\/images\/(\d+)\/?$/;
     const SWIPE_MIN = 60; // px
+    // other kinds: the order of the cards you picked from ("mui-list-scenes"...)
+    const listKey = (kind) => (kind === "images" ? STORE_KEY : "mui-list-" + kind);
+    const CARD = { scenes: "scene", galleries: "gallery", performers: "performer", tags: "tag", studios: "studio", groups: "group" };
 
     const currentImageId = () => (window.location.pathname.match(IMAGE_PAGE) || [])[1] || null;
+
+    // Picking a scene / gallery / performer... card: remember that list (the
+    // grid or row it's in), to swipe through on the item's page
+    document.addEventListener("click", (e) => {
+      const a = e.target instanceof Element && e.target.closest("a[href]");
+      if (!a) return;
+      for (const [kind, cls] of Object.entries(CARD)) {
+        const card = a.closest("." + cls + "-card");
+        if (!card) continue;
+        const re = new RegExp("/" + kind + "/(\\d+)");
+        if (!re.test(a.getAttribute("href"))) return;
+        const box = card.closest(".slick-track, .row, .mlt-similar-grid") || card.parentElement;
+        const ids = [];
+        box.querySelectorAll("." + cls + "-card a[href]").forEach((l) => {
+          const m = l.getAttribute("href").match(re);
+          if (m && !ids.includes(m[1])) ids.push(m[1]);
+        });
+        try {
+          sessionStorage.setItem(listKey(kind), JSON.stringify(ids));
+        } catch (err) {}
+        return;
+      }
+    }, true);
 
     function rememberList() {
       if (currentImageId()) return; // don't overwrite while viewing an image
@@ -1223,20 +1951,20 @@
     }
 
     function neighbour(step) {
-      const id = currentImageId();
-      if (!id) return null;
+      const item = itemAt();
+      if (!item) return null;
       let ids = [];
       try {
-        ids = JSON.parse(sessionStorage.getItem(STORE_KEY) || "[]");
+        ids = JSON.parse(sessionStorage.getItem(listKey(item.kind)) || "[]");
       } catch (e) {}
-      const i = ids.indexOf(id);
+      const i = ids.indexOf(item.id);
       if (i === -1) return null;
       return ids[i + step] || null;
     }
 
     function go(step) {
       const next = neighbour(step);
-      if (next) routerNavigate(`/images/${next}`);
+      if (next) routerNavigate(`/${itemAt().kind}/${next}`);
       return !!next;
     }
 
@@ -1245,6 +1973,42 @@
       clearTimeout(timer);
       timer = setTimeout(rememberList, 300);
     }).observe(document.body, { childList: true, subtree: true });
+
+    // Other item pages: the top section (scene: the video and title box;
+    // gallery: the title box; performer, tag, studio, group: the header).
+    // The video's controls, text boxes and scrolling rows are left alone.
+    const ZONES = {
+      scenes: ".scene-player-container, .scene-tabs > div:first-child",
+      galleries: ".gallery-tabs > div:first-child",
+      performers: ".detail-header",
+      tags: ".detail-header",
+      studios: ".detail-header",
+      groups: ".detail-header",
+    };
+    function swipeZone(target) {
+      const item = itemAt();
+      if (!item || !(target instanceof Element)) return null;
+      if (item.kind === "images") return mainMedia(target);
+      // a scene that's playing: no swiping (left/right or down), so touching
+      // the video or its title box can't take you away from it
+      if (item.kind === "scenes") {
+        const v = document.querySelector(".scene-player-container video");
+        if (v && !v.paused && !v.ended) return null;
+        // full screen has its own swipes (up / down: next / previous video)
+        const pl = document.querySelector(".scene-player-container .video-js")?.player;
+        if (pl && (pl.isFullscreen() || pl.isFullWindow)) return null;
+      }
+      if (document.body.classList.contains("mui-viewer-open")) return null;
+      if (target.closest("input, textarea, select, [contenteditable], .scrubber-wrapper, .vjs-control-bar, .vjs-menu, .vjs-modal-dialog, .react-select, .modal, .dropdown-menu, .top-nav, .mui-bottom-nav, .mui-sheet, .slick-slider, " + LIGHTBOX)) return null;
+      // the edit form on a performer / tag / studio page
+      if (target.closest("form, .edit-form, .mlt-editing")) return null;
+      const zone = target.closest(ZONES[item.kind]);
+      // something inside that scrolls sideways (tabs, a row of tags...)
+      for (let el = target; zone && el && el !== zone; el = el.parentElement) {
+        if (el.scrollWidth > el.clientWidth + 2 && /auto|scroll/.test(getComputedStyle(el).overflowX)) return null;
+      }
+      return zone;
+    }
 
     // The big image/video on the image page (not thumbnails or icons)
     function mainMedia(target) {
@@ -1256,7 +2020,13 @@
       return media;
     }
 
-    let media = null, startX = 0, startY = 0, startT = 0, dx = 0, dir = null;
+    let media = null, startX = 0, startY = 0, startT = 0, dx = 0, dy = 0, dir = null;
+    // Phones: with the page scrolled to the top, swipe down on the picture to
+    // go back to where you opened it from. Dragging up scrolls as usual.
+    let downBack = false, startScroll = 0;
+    const BACK_MIN = 80; // px
+    const zoomedIn = () => !!window.visualViewport && window.visualViewport.scale > 1.05;
+    body.add("mui-swipe-back");
 
     const reset = (el, animate) => {
       if (!el) return;
@@ -1267,12 +2037,15 @@
 
     window.addEventListener("touchstart", (e) => {
       if (e.touches.length !== 1) { media = null; return; } // pinch-zoom: leave alone
-      media = mainMedia(e.target);
+      media = swipeZone(e.target);
       if (!media) return;
       startX = e.touches[0].clientX;
       startY = e.touches[0].clientY;
       startT = performance.now();
+      startScroll = window.scrollY;
+      downBack = MOBILE_QUERY.matches && body.contains("mui-mobile") && startScroll <= 5 && !!itemBack;
       dx = 0;
+      dy = 0;
       dir = null;
       media.style.transition = "";
     }, { capture: true, passive: true });
@@ -1282,12 +2055,25 @@
       if (e.touches.length !== 1) { reset(media, true); media = null; return; }
       const t = e.touches[0];
       dx = t.clientX - startX;
-      const dy = t.clientY - startY;
+      dy = t.clientY - startY;
       if (!dir) {
-        if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+        if (Math.abs(dx) < 8 && Math.abs(dy) < 8) {
+          if (dy < 0 && -dy > Math.abs(dx)) dir = "scroll"; // dragging up: the browser scrolls
+          // starting down: hold the page still (no pull-to-refresh) in case
+          // it's a swipe back; iOS can't stop a scroll once it has begun
+          else if (downBack && dy > 0 && !zoomedIn() && e.cancelable) e.preventDefault();
+          return;
+        }
         dir = Math.abs(dx) > Math.abs(dy) ? "x" : "y";
       }
-      if (dir !== "x") return;
+      if (dir === "scroll") return;
+      if (dir === "y") {
+        if (!downBack || dy <= 0 || zoomedIn()) return;
+        e.preventDefault();
+        media.style.transform = `translateY(${dy}px)`;
+        media.style.opacity = String(1 - Math.min(dy / 500, 0.5));
+        return;
+      }
       // Image is zoomed in: let the user pan it instead
       if (window.visualViewport && window.visualViewport.scale > 1.05) return;
       e.preventDefault();
@@ -1301,7 +2087,23 @@
       if (!media) return;
       const el = media;
       media = null;
-      const fast = Math.abs(dx) / Math.max(performance.now() - startT, 1) > 0.5;
+      const ms = Math.max(performance.now() - startT, 1);
+      if (dir === "y" && downBack && dy > 0) {
+        if (dy > BACK_MIN || (dy / ms > 0.5 && dy > 30)) {
+          const back = itemBack;
+          el.style.transition = "transform 0.15s ease, opacity 0.15s ease";
+          el.style.transform = `translateY(${window.innerHeight}px)`;
+          el.style.opacity = "0";
+          setTimeout(() => {
+            back();
+            setTimeout(() => reset(el, false), 300);
+          }, 150);
+          return;
+        }
+        reset(el, true);
+        return;
+      }
+      const fast = Math.abs(dx) / ms > 0.5;
       if (dir === "x" && (Math.abs(dx) > SWIPE_MIN || (fast && Math.abs(dx) > 25))) {
         const step = dx < 0 ? 1 : -1;
         if (neighbour(step)) {
@@ -1311,6 +2113,20 @@
           setTimeout(() => {
             go(step);
             setTimeout(() => reset(el, false), 50);
+          }, 150);
+          return;
+        }
+        // past the end of the list: back to where you came from, like
+        // swiping down (a longer swipe, so the springy end isn't left by
+        // accident)
+        if (itemBack && MOBILE_QUERY.matches && (Math.abs(dx) > SWIPE_MIN * 1.5 || (fast && Math.abs(dx) > 50))) {
+          const back = itemBack;
+          el.style.transition = "transform 0.15s ease, opacity 0.15s ease";
+          el.style.transform = `translateY(${window.innerHeight}px)`;
+          el.style.opacity = "0";
+          setTimeout(() => {
+            back();
+            setTimeout(() => reset(el, false), 300);
           }, 150);
           return;
         }
@@ -1616,10 +2432,17 @@
             tx = gesture.tx + dx;
             ty = gesture.ty + dy;
             apply(false);
-          } else if (nav && !busy && moved) {
-            // not zoomed: the picture follows the finger sideways
+          } else if (!busy && moved) {
+            // not zoomed: the picture follows the finger sideways (next /
+            // previous), or down (close)
             if (!gesture.dir) gesture.dir = Math.abs(dx) > Math.abs(dy) ? "x" : "y";
-            if (gesture.dir === "x") {
+            if (gesture.dir === "y") {
+              gesture.dy = Math.max(dy, 0);
+              pic.style.transition = "none";
+              pic.style.transform = `translate(0px, ${gesture.dy}px) scale(${1 - Math.min(gesture.dy / 2000, 0.15)})`;
+              box.style.transition = "none";
+              box.style.opacity = String(1 - Math.min(gesture.dy / 500, 0.6));
+            } else if (nav && gesture.dir === "x") {
               const end = !nav.neighbour(dx < 0 ? 1 : -1);
               gesture.dx = dx;
               pic.style.transition = "none";
@@ -1641,10 +2464,35 @@
         if (pointers.size) return;
         const g = gesture;
         gesture = null;
+        if (g && g.dir === "y" && s <= 1.01) {
+          // swipe down far enough (or quickly): close
+          const dy = g.dy || 0;
+          const fast = dy / Math.max(performance.now() - swipeT, 1) > 0.5;
+          if (e.type !== "pointercancel" && (dy > 90 || (fast && dy > 30))) {
+            pic.style.transition = "transform 0.18s ease-in";
+            pic.style.transform = `translate(0px, ${box.clientHeight}px)`;
+            box.style.transition = "opacity 0.18s ease-in";
+            box.style.opacity = "0";
+            setTimeout(shut, 180);
+          } else {
+            box.style.transition = "opacity 0.2s ease";
+            box.style.opacity = "";
+            apply(true); // not far enough: spring back
+          }
+          return;
+        }
         if (g && g.dir === "x" && s <= 1.01) {
           const dx = g.dx || 0;
           const fast = Math.abs(dx) / Math.max(performance.now() - swipeT, 1) > 0.5;
-          if (e.type !== "pointercancel" && (Math.abs(dx) > 60 || (fast && Math.abs(dx) > 25))) step(dx < 0 ? 1 : -1);
+          const atEnd = nav && !nav.neighbour(dx < 0 ? 1 : -1);
+          if (e.type !== "pointercancel" && atEnd && (Math.abs(dx) > 90 || (fast && Math.abs(dx) > 50))) {
+            // past the last (or first) picture: close, like swiping down
+            pic.style.transition = "transform 0.18s ease-in";
+            pic.style.transform = `translate(0px, ${box.clientHeight}px)`;
+            box.style.transition = "opacity 0.18s ease-in";
+            box.style.opacity = "0";
+            setTimeout(shut, 180);
+          } else if (e.type !== "pointercancel" && !atEnd && (Math.abs(dx) > 60 || (fast && Math.abs(dx) > 25))) step(dx < 0 ? 1 : -1);
           else apply(true); // not far enough: spring back
           return;
         }
@@ -1684,8 +2532,49 @@
   // message shows (so the save went through), switch to the Details tab. If
   // saving fails, Stash shows an error instead and you stay on Edit.
 
+  // ------------------------------------------------------------------
+  // Selected cards: organized, how many tags, and who's in it
+  // ------------------------------------------------------------------
+  // A frosted strip along the bottom of a scene, image or gallery card's
+  // picture on every card in the list once one is selected - so you can see
+  // what to pick for a bulk edit without opening each one.
+  function setupSelectedInfo() {
+    const api = window.PluginApi;
+    if (!api || !api.patch || !api.React) return;
+    const React = api.React;
+    const h = React.createElement;
+
+    function SelectedInfo({ item }) {
+      const tags = (item.tags || []).length;
+      const people = (item.performers || []).map((p) => p.name);
+      const who = !people.length ? "No performer"
+        : people.length <= 2 ? people.join(", ")
+        : `${people.slice(0, 2).join(", ")} +${people.length - 2}`;
+      return h("div", { className: "mui-sel-info", "aria-label": "Selected item details" },
+        h("span", { className: "mui-sel-chip " + (item.organized ? "mui-sel-yes" : "mui-sel-no") },
+          h("span", { className: "mui-sel-dot" }),
+          item.organized ? "Organized" : "Not organized"),
+        h("span", { className: "mui-sel-chip" + (tags ? "" : " mui-sel-none") },
+          tags === 1 ? "1 tag" : `${tags} tags`),
+        h("span", { className: "mui-sel-chip mui-sel-who" + (people.length ? "" : " mui-sel-none"),
+          title: people.join(", ") || "No performer" }, who));
+    }
+
+    for (const [name, key] of [["SceneCard.Overlays", "scene"], ["ImageCard.Overlays", "image"], ["GalleryCard.Overlays", "gallery"]]) {
+      api.patch.after(name, function (...args) {
+        const props = args[0] || {};
+        const result = args[args.length - 1];
+        // once anything in the list is selected, every card shows it
+        if (!(props.selected || props.selecting) || !props[key]) return result;
+        return h(React.Fragment, null, result, h(SelectedInfo, { item: props[key] }));
+      });
+    }
+  }
+
   function setupBackToDetailsOnSave() {
-    const PAGE = /^\/(scenes|images)\/\d+\/?$/;
+    // (performer, studio, tag and group pages already leave edit mode)
+    const PAGE = /^\/(scenes|images|galleries)\/\d+\/?$/;
+    const KIND = { scenes: "scene", images: "image", galleries: "gallery" };
     let pending = null; // { path, until }
 
     document.addEventListener("click", (e) => {
@@ -1707,7 +2596,7 @@
           const toast = node.matches(".toast") ? node : node.querySelector(".toast");
           if (!toast) continue;
           if (toast.classList.contains("success")) {
-            const kind = location.pathname.startsWith("/images") ? "image" : "scene";
+            const kind = KIND[location.pathname.split("/")[1]];
             const tab = document.querySelector(`.nav-link[data-rb-event-key="${kind}-details-panel"]`);
             pending = null;
             if (tab) {
@@ -1780,7 +2669,11 @@
 
     function clear(poster) {
       ["backgroundSize", "backgroundPosition", "backgroundRepeat", "backgroundColor"].forEach((k) => (poster.style[k] = ""));
-      if (poster.dataset.muiUrl) poster.style.backgroundImage = `url("${poster.dataset.muiUrl}")`;
+      // only undo our own layers: if the player has since set the next
+      // scene's picture, leave it
+      if (poster.dataset.muiUrl && poster.style.backgroundImage.startsWith("linear-gradient")) {
+        poster.style.backgroundImage = `url("${poster.dataset.muiUrl}")`;
+      }
       delete poster.dataset.muiFit;
       delete poster.dataset.muiUrl;
     }
@@ -1793,10 +2686,17 @@
       const urls = [...poster.style.backgroundImage.matchAll(/url\(["']?(.*?)["']?\)/g)].map((x) => x[1]);
       const url = urls[urls.length - 1];
       if (!url) return;
+      // after swiping to another scene the player can still show the last
+      // one's picture for a moment: wait for this scene's
+      if (!url.includes("/scene/" + m[1] + "/")) return;
       const W = player.clientWidth, H = player.clientHeight;
       const key = [url, W, H].join("|");
       if (poster.dataset.muiFit === key && poster.style.backgroundImage.startsWith("linear-gradient")) return;
       const [scene, cover, count] = await Promise.all([getScene(m[1]), getImage(url), getFrameCount()]);
+      // moved on while we were looking (swiped to the next scene): the
+      // player has a new picture, don't paint the old one over it
+      const nowUrls = [...poster.style.backgroundImage.matchAll(/url\(["']?(.*?)["']?\)/g)].map((x) => x[1]);
+      if (nowUrls[nowUrls.length - 1] !== url || !location.pathname.startsWith("/scenes/" + m[1])) return;
       // only vertical videos with a wide cover, in a tall player (in a wide
       // one, e.g. on a computer, the whole cover fits nicely as it is)
       if (!(scene.h > scene.w && scene.w && cover.w > cover.h && cover.h && H > W)) {

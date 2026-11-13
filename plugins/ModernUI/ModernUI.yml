@@ -1,6 +1,6 @@
 name: Modern UI
 description: Cleaner scene, performer, image, gallery, studio, group and tag cards, plus a mobile-friendly layout.
-version: "0.53"
+version: "0.56"
 ui:
   javascript:
     - modern-ui.js
@@ -60,13 +60,17 @@ settings:
     displayName: Disable mobile tweaks
     description: Turn off the phone layout changes.
     type: BOOLEAN
+  hideSelectedInfo:
+    displayName: Hide details on selected cards
+    description: Once a card is selected, scene, image and gallery cards normally show whether they're organized, how many tags they have and their performers. Turn this on to hide that strip.
+    type: BOOLEAN
   stayOnEditAfterSave:
     displayName: Stay on Edit after saving
-    description: Saving a scene or image normally takes you back to its Details tab. Turn this on to stay on the Edit tab, like Stash does by default.
+    description: Saving a scene, image or gallery normally takes you back to its Details tab. Turn this on to stay on the Edit tab, like Stash does by default.
     type: BOOLEAN
   disableImageSwipe:
-    displayName: Disable swiping between images
-    description: Turn off swipe left/right (and arrow keys) to move between images on an image's page.
+    displayName: Disable swiping between images and other items
+    description: Turn off swipe left/right to the next/previous item and swipe down to go back on image, scene, gallery, performer, tag, studio and group pages (and the arrow keys on image pages). The back buttons then stay on phones.
     type: BOOLEAN
   disableBottomNav:
     displayName: Disable bottom tab bar on phones
