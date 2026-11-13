@@ -6,6 +6,7 @@ that plugin's changes.
 
 ## 1.5 (2026-11-11)
 
+- Now called **Better Tagging AI Add-on (local AI)**, with a shorter README: features first, setup at the end, and how it differs from other Stash AI plugins.
 - The face helper's small models (YuNet, SFace, NudeNet) now come with the plugin, with their
   licences, so setup doesn't depend on those downloads; NudeNet (body tags) is always set up.
   `setup.sh --from DIR` restores every model from a backup folder. `setup.sh` picks a Python that
