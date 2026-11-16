@@ -838,6 +838,32 @@
     }
   }
 
+  // "Setup & troubleshooting" links: above this add-on's tasks (Settings →
+  // Tasks) and under its settings (Settings → Plugins)
+  function setupLinks() {
+    if (!location.pathname.startsWith("/settings")) return;
+    const make = (where) => {
+      const a = document.createElement("a");
+      a.href = SETUP_PAGE;
+      a.className = "bta-setup-link";
+      a.dataset.where = where;
+      a.innerHTML = '<span aria-hidden="true">🩺</span> <b>Setup &amp; troubleshooting</b><span> - check the AI model, face helper and scans, with fixes for common problems</span>';
+      a.addEventListener("click", (e) => { e.preventDefault(); goTo(SETUP_PAGE); });
+      return a;
+    };
+    // tasks: before the first of our task groups
+    const first = document.querySelector('.bt-task-group[data-group="ai-night"], .bt-task-group[data-group^="ai-"]');
+    if (first && !document.querySelector('.bta-setup-link[data-where="tasks"]')) first.parentElement.insertBefore(make("tasks"), first);
+    // plugins: under our plugin's name
+    if (/[?&]tab=plugins/.test(location.search) && !document.querySelector('.bta-setup-link[data-where="plugins"]')) {
+      // the plugin's row (its name) at the top of its collapsible group
+      const head = [...document.querySelectorAll(".setting-group .setting > div > h3")]
+        .find((e) => /Better (Organizing|Tagging) AI Add-on/.test(e.textContent || ""));
+      const row = head && head.closest(".setting");
+      if (row) row.after(make("plugins"));
+    }
+  }
+
   new MutationObserver(() => {
     clearTimeout(titleTimer);
     titleTimer = setTimeout(() => {
@@ -845,6 +871,7 @@
       checkPerformerForm();
       checkPerformerPage();
       groupTasks();
+      setupLinks();
     }, 200);
   }).observe(document.body, { childList: true, subtree: true });
 
@@ -2956,7 +2983,104 @@
       }));
   }
 
+  // ---- Setup & troubleshooting page (/ai-setup) ----------------------------
+  const SETUP_PAGE = "/ai-setup";
+  const COMMON = [
+    ["\"Can't reach Ollama\"", "Ollama isn't running, or Stash can't see it. On a Mac: brew services start ollama (or open the Ollama app). Stash in Docker Desktop reaches it at http://host.docker.internal:11434; Stash installed directly at http://localhost:11434; Stash in Docker on Linux needs network_mode: host and http://127.0.0.1:11434. Set it under AI: Ollama address."],
+    ["\"Ollama doesn't have the model\"", "On the computer running Ollama: ollama pull gemma3:4b (about 3.3 GB). If you set AI: model to something else, pull that one, and make sure it can see pictures."],
+    ["\"Can't reach the face helper\" / faces and look-alikes do nothing", "Install it: from the add-on's folder run sh face-helper/setup.sh. On a Mac it starts at login; check it with curl http://127.0.0.1:11535/health. Keep it out of Documents, Desktop and Downloads on a Mac (programs started at login can't read those)."],
+    ["setup.sh fails installing onnxruntime", "Your newest Python is too new for ONNX Runtime. Install an older one (brew install python@3.13) and run PYTHON=python3.13 sh face-helper/setup.sh."],
+    ["\"The face helper is too old\"", "A newer add-on needs a newer helper: run sh face-helper/setup.sh again. It updates in place and keeps nothing you'd lose."],
+    ["Tasks stop working after about an hour, or say \"Done\" having skipped everything", "The task's login runs out. Generate an API key under Settings → Security; the add-on uses it from then on."],
+    ["Full-size pictures or videos won't open, but thumbnails do", "Stash lost its link to your library drive (often a network drive after it disconnected or the computer slept). Reconnect the drive, then restart Stash (e.g. docker restart stash)."],
+    ["Look-alike tags, Similar galleries or Review → Tags show nothing", "Run \"Look-alike tags: scan scenes and images\" under Settings → Tasks. New items get their fingerprint as they're scanned; cancel and rerun to carry on."],
+    ["No face matches", "Run \"Faces: learn performers' faces\" (it uses their profile pictures - give performers a clear, front-facing one), then \"Faces: scan scenes and images\"."],
+    ["The AI is slow, or other tasks wait for hours", "Stash runs one task at a time and the AI takes seconds per item. Turn on AI: wait until night for new items so the slow steps run once at night; the first request after a while is slower while the model loads."],
+    ["AI tags are wrong", "A small model guesses; the add-on only keeps its picks that your look-alikes agree with. Tag more items yourself (the add-on learns from them), use Review to accept or turn down suggestions, and use the previews before the tasks."],
+    ["New items aren't done at night", "The night timer runs inside Stash and stops when Stash restarts; the next scan starts it again. Or run \"AI: run tonight's new items now\"."],
+  ];
+  const STATUS = { ok: ["✓", "OK"], warn: ["!", "Check"], fail: ["✕", "Problem"], info: ["i", "Info"] };
+
+  function SetupPage() {
+    const [res, setRes] = React.useState({ state: "loading" });
+    const [test, setTest] = React.useState({ state: "idle" });
+    const [errs, setErrs] = React.useState(null);
+    const [plugins, setPlugins] = React.useState(null);
+    const [copied, setCopied] = React.useState(false);
+    const run = React.useCallback(() => {
+      setRes({ state: "loading" });
+      ask({ mode: "diagnose" }).then((r) => setRes({ state: "done", ...r })).catch((e) => setRes({ state: "error", message: e.message }));
+      gql("{ logs { time level message } }").then((d) => setErrs((d.logs || [])
+        .filter((l) => /error|warn/i.test(l.level) && /Better (Organizing|Tagging)|BetterTaggingAI|face helper|Ollama|Plugin returned error/i.test(l.message))
+        .slice(-12).reverse())).catch(() => setErrs([]));
+      gql("{ plugins { id name version enabled } }").then((d) => setPlugins(d.plugins || [])).catch(() => setPlugins([]));
+    }, []);
+    React.useEffect(run, []);
+    const checks = res.state === "done" ? res.checks : [];
+    const bad = checks.filter((c) => c.status === "fail").length;
+    const warn = checks.filter((c) => c.status === "warn").length;
+    const groups = [...new Set(checks.map((c) => c.group))];
+    function report() {
+      const lines = [`Better Organizing AI setup check - model ${res.model}, Ollama ${res.ollama}, helper ${res.helper}${res.docker ? " (Stash in Docker)" : ""}`];
+      checks.forEach((c) => lines.push(`[${STATUS[c.status][1]}] ${c.group} - ${c.title}: ${c.detail}`));
+      if (test.state === "done") lines.push(`AI test: ${test.seconds}s - "${test.answer}"`);
+      (errs || []).forEach((l) => lines.push(`log ${l.time}: ${l.message}`));
+      navigator.clipboard?.writeText(lines.join("\n")).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
+    }
+    const other = (id) => (plugins || []).find((p) => p.id === id);
+    return h("div", { className: "bta-setup" },
+      h("h2", null, "AI setup & troubleshooting"),
+      h("p", { className: "bta-setup-sub" }, "Checks everything the Better Organizing AI Add-on needs. Nothing is changed."),
+      res.state === "loading" && h("div", { className: "bta-setup-banner" }, "Checking…"),
+      res.state === "error" && h("div", { className: "bta-setup-banner fail" }, "The checks couldn't run: " + res.message),
+      res.state === "done" && h("div", { className: "bta-setup-banner " + (bad ? "fail" : warn ? "warn" : "ok") },
+        bad ? `${bad} problem${bad > 1 ? "s" : ""} to fix` + (warn ? `, ${warn} to check` : "") : warn ? `All working - ${warn} thing${warn > 1 ? "s" : ""} worth a look` : "Everything's working",
+        h("small", null, `Model ${res.model} · Ollama ${res.ollama} · face helper ${res.helper}`)),
+      h("div", { className: "bta-setup-tools" },
+        h("button", { type: "button", className: "btn btn-secondary", onClick: run, disabled: res.state === "loading" }, "↻ Check again"),
+        h("button", { type: "button", className: "btn btn-secondary", disabled: test.state === "loading",
+          onClick: () => { setTest({ state: "loading" }); ask({ mode: "diagnose_ai" }).then((r) => setTest({ state: "done", ...r })).catch((e) => setTest({ state: "error", message: e.message })); } },
+          test.state === "loading" ? "Asking the AI…" : "Test the AI on a picture"),
+        res.state === "done" && h("button", { type: "button", className: "btn btn-secondary", onClick: report }, copied ? "✓ Copied" : "Copy report")),
+      test.state !== "idle" && test.state !== "loading" && h("div", { className: "bta-setup-check " + (test.state === "done" ? (test.seconds > 60 ? "warn" : "ok") : "fail") },
+        h("span", { className: "bta-setup-icon" }, test.state === "done" ? (test.seconds > 60 ? "!" : "✓") : "✕"),
+        h("div", null,
+          h("div", { className: "bta-setup-title" }, test.state === "done" ? `The AI answered in ${test.seconds} s` : "The AI test failed"),
+          h("div", { className: "bta-setup-detail" }, test.state === "done" ? `About a random photo: "${test.answer}"` : test.message),
+          test.state === "done" && test.seconds > 60 && h("div", { className: "bta-setup-fix" }, "That's slow: the first request loads the model (try again), or another AI task is running. A smaller model or turning on AI: wait until night helps."))),
+      groups.map((g) => h("section", { key: g, className: "bta-setup-group" },
+        h("h3", null, g),
+        checks.filter((c) => c.group === g).map((c) => h("div", { key: c.id, className: "bta-setup-check " + c.status },
+          h("span", { className: "bta-setup-icon", title: STATUS[c.status][1] }, STATUS[c.status][0]),
+          h("div", null,
+            h("div", { className: "bta-setup-title" }, c.title),
+            c.detail && h("div", { className: "bta-setup-detail" }, c.detail),
+            c.fix && h("div", { className: "bta-setup-fix" }, c.fix)))))),
+      plugins && h("section", { className: "bta-setup-group" },
+        h("h3", null, "Other plugins"),
+        [["BetterTaggingTools", "Better Organizing Tools", "Recommended: the add-on then uses its Tags to ignore, special spellings and gallery-name tags."],
+         ["StashSuggestions", "Stash Suggestions", "Optional: its rows use the add-on's faces and look-alikes."],
+         ["ModernUI", "Modern UI", "Optional: puts Review in the phone's More menu."]].map(([id, name, why]) => {
+          const p0 = other(id);
+          const st = p0 && p0.enabled ? "ok" : "info";
+          return h("div", { key: id, className: "bta-setup-check " + st },
+            h("span", { className: "bta-setup-icon" }, STATUS[st][0]),
+            h("div", null, h("div", { className: "bta-setup-title" }, name + (p0 ? ` ${p0.version || ""}` : "")),
+              h("div", { className: "bta-setup-detail" }, p0 ? (p0.enabled ? "Installed and on." : "Installed but turned off.") + " " + why : "Not installed. " + why)));
+        })),
+      h("section", { className: "bta-setup-group" },
+        h("h3", null, "Recent errors in Stash's log"),
+        errs === null ? h("div", { className: "bta-setup-detail" }, "Loading…")
+          : errs.length === 0 ? h("div", { className: "bta-setup-detail" }, "None from the add-on in Stash's recent log.")
+          : errs.map((l, i) => h("div", { key: i, className: "bta-setup-log" }, h("small", null, new Date(l.time).toLocaleString()), " ", l.message))),
+      h("section", { className: "bta-setup-group" },
+        h("h3", null, "Common problems"),
+        COMMON.map(([q, a], i) => h("details", { key: i, className: "bta-setup-faq" }, h("summary", null, q), h("p", null, a)))),
+      h("p", { className: "bta-setup-sub" }, "More in the add-on's README (setup is at the end). A copy of these checks can also be written to the log with the task \"Setup check: write a report to the log\"."));
+  }
+
   if (api.register && api.register.route) {
+    api.register.route(SETUP_PAGE, SetupPage);
     api.register.route(REVIEW_PATH, FaceReview);
     api.register.route(REVIEW_PAGE, FaceReview);
     // a "Review" item in Stash's menu (Modern UI's More panel picks it up)

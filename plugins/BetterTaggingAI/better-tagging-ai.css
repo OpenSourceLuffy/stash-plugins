@@ -1765,3 +1765,37 @@ body.mui-light .bta-batch-foot { background: linear-gradient(to bottom, transpar
   #bta-review-return { top: calc(12px + env(safe-area-inset-top)); right: 12px; }
 }
 .bta-tt-child { margin-left: 28px; }
+
+/* Setup & troubleshooting page */
+.bta-setup { max-width: 760px; margin: 0 auto; padding: 20px 16px 60px; }
+.bta-setup h2 { margin: 0 0 4px; font-size: 1.5rem; font-weight: 700; }
+.bta-setup h3 { margin: 22px 0 8px; font-size: 0.8rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; opacity: 0.65; }
+.bta-setup-sub { opacity: 0.7; font-size: 0.9rem; }
+.bta-setup-banner { display: flex; flex-direction: column; gap: 2px; margin: 14px 0 10px; padding: 14px 16px; border-radius: 14px; font-weight: 700; font-size: 1.05rem;
+  background: rgba(128, 128, 128, 0.12); }
+.bta-setup-banner small { font-weight: 400; font-size: 0.8rem; opacity: 0.75; overflow-wrap: anywhere; }
+.bta-setup-banner.ok { background: rgba(47, 179, 107, 0.16); }
+.bta-setup-banner.warn { background: rgba(240, 173, 78, 0.2); }
+.bta-setup-banner.fail { background: rgba(224, 86, 79, 0.18); }
+.bta-setup-tools { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 6px; }
+.bta-setup-check { display: flex; gap: 12px; align-items: flex-start; padding: 10px 12px; margin-bottom: 6px; border-radius: 12px;
+  border: 1px solid rgba(128, 128, 128, 0.2); }
+.bta-setup-icon { flex: none; display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 50%;
+  font-size: 0.8rem; font-weight: 800; color: #fff; background: #8a94a3; }
+.bta-setup-check.ok .bta-setup-icon { background: #2fb36b; }
+.bta-setup-check.warn .bta-setup-icon { background: #e0a02f; }
+.bta-setup-check.fail .bta-setup-icon { background: #e0564f; }
+.bta-setup-check.fail { border-color: rgba(224, 86, 79, 0.5); }
+.bta-setup-title { font-weight: 600; }
+.bta-setup-detail { font-size: 0.85rem; opacity: 0.75; overflow-wrap: anywhere; }
+.bta-setup-fix { margin-top: 4px; font-size: 0.85rem; overflow-wrap: anywhere; }
+.bta-setup-fix::before { content: "How to fix: "; font-weight: 700; }
+.bta-setup-log { font-size: 0.8rem; padding: 6px 0; border-bottom: 1px solid rgba(128, 128, 128, 0.15); overflow-wrap: anywhere; }
+.bta-setup-log small { opacity: 0.6; }
+.bta-setup-faq { border-bottom: 1px solid rgba(128, 128, 128, 0.15); }
+.bta-setup-faq summary { padding: 10px 2px; font-weight: 600; cursor: pointer; }
+.bta-setup-faq p { margin: 0 0 12px; font-size: 0.88rem; opacity: 0.85; }
+.bta-setup-link { display: block; margin: 8px 0 12px; padding: 10px 14px; border-radius: 12px; background: rgba(61, 139, 253, 0.12); color: inherit !important;
+  text-decoration: none !important; font-size: 0.9rem; }
+.bta-setup-link span:last-child { opacity: 0.75; }
+.bta-setup-link:hover { background: rgba(61, 139, 253, 0.2); }

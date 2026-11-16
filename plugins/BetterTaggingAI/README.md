@@ -199,6 +199,15 @@ once at **AI: night time** (default 03:00), so a big scan doesn't hold Stash up 
 
 ## Setup
 
+> **Something not working?** Open **AI setup & troubleshooting** (a link above this add-on's tasks
+> under Settings → Tasks, and under it in Settings → Plugins; or go to `/ai-setup`). It checks Ollama
+> and the model (installed, can see pictures, loaded), the face helper and each of its models,
+> whether Stash can fetch pictures and reach your library files, ffmpeg, disk space, how much has been
+> scanned, the settings and tonight's run. Each problem comes with how to fix it. It also has **Test
+> the AI on a picture** (a real request, timed), recent errors from Stash's log, a list of common
+> problems with fixes, and **Copy report** to paste when asking for help. The task **Setup check:
+> write a report to the log** writes the same checks to the log.
+
 You need two things on the computer Stash runs on (or one it can reach). Each is optional; anything
 that needs a missing part says so in the log and does nothing.
 

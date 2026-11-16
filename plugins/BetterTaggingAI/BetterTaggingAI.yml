@@ -21,6 +21,10 @@ hooks:
       - Image.Create.Post
 
 tasks:
+  - name: "Setup check: write a report to the log"
+    description: Checks everything the add-on needs (Ollama and the model, the face helper and its models, scans, settings, library access) and writes what's working and how to fix what isn't to the log. The page "AI setup & troubleshooting" (address /ai-setup, also linked above these tasks) shows the same with more help.
+    defaultArgs:
+      mode: diagnose_log
   - name: "AI: run tonight's new items now"
     description: With "AI - wait until night for new items" on, new scenes and images get the quick steps right after a scan and wait for the AI model's steps (AI tags, studios from watermarks, AI titles) until the night time. This runs those now (it also runs by itself at night).
     defaultArgs:

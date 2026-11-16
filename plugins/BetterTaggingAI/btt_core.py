@@ -8077,3 +8077,216 @@ def run_tag_tidy_undo(stash, plugin_dir, undo):
             # the kept tag comes off what only had the merged one
             _tag_on(stash, {k: [i for i in ids if i not in had.get(k, set())] for k, ids in snap["items"].items()}, keep, "REMOVE")
     return True
+
+
+# ---------------------------------------------------------------------------
+# "Setup & troubleshooting" page: every part the add-on needs, checked, with
+# what to do when something's wrong. Nothing is changed.
+
+def _check(group, title, status, detail="", fix="", cid=None):
+    return {"id": cid or re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-"), "group": group,
+            "title": title, "status": status, "detail": detail, "fix": fix}
+
+
+def _get_json(url, timeout=6, body=None):
+    req = urllib.request.Request(url, data=json.dumps(body).encode() if body is not None else None,
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read())
+
+
+def run_diagnose(stash, plugin_dir):
+    out = []
+    cfg = settings(stash, plugin_dir)
+    ai = cfg["ai"]
+    docker = os.path.exists("/.dockerenv")
+    local_host = "host.docker.internal" if docker else "localhost"
+
+    # --- Stash and this plugin
+    out.append(_check("Stash", "Python", "ok", f"Python {sys.version.split()[0]} runs the add-on's tasks."))
+    try:
+        test = os.path.join(plugin_dir, ".write_test")
+        with open(test, "w") as f:
+            f.write("ok")
+        os.remove(test)
+        out.append(_check("Stash", "Plugin folder can be written", "ok", plugin_dir))
+    except OSError as e:
+        out.append(_check("Stash", "Plugin folder can be written", "fail", f"{plugin_dir}: {e}",
+                          "The add-on keeps what it's done in small files in its own folder. Give Stash write access to its plugins folder."))
+    try:
+        usage = shutil.disk_usage(plugin_dir)
+        free_gb = usage.free / 1e9
+        size = sum(os.path.getsize(os.path.join(plugin_dir, f)) for f in os.listdir(plugin_dir) if f.endswith(".json"))
+        out.append(_check("Stash", "Disk space", "ok" if free_gb > 2 else "warn",
+                          f"{free_gb:.1f} GB free; the add-on's saved data uses {size / 1e6:.1f} MB.",
+                          "" if free_gb > 2 else "Free up some space: scans and the saved fingerprints need room to grow."))
+    except OSError:
+        pass
+    try:
+        out.append(_check("Stash", "ffmpeg (video frames)", "ok", ffmpeg_path(stash)))
+    except Exception as e:
+        out.append(_check("Stash", "ffmpeg (video frames)", "fail", str(e),
+                          "Scenes need ffmpeg for their frames. Stash's Docker image has it; otherwise set its path under Settings → System → Application paths."))
+    # pictures: can the add-on fetch one (a login page instead means the API key is missing)
+    try:
+        img = stash.call("{ findImages(filter: {per_page: 1, sort: \"random\"}) { images { id paths { thumbnail } visual_files { ... on BaseFile { path } } } } }")["findImages"]["images"]
+        if img:
+            data, ctype = stash.fetch(img[0]["paths"]["thumbnail"])
+            if ctype.startswith("image/"):
+                key = "with Stash's API key" if "ApiKey" in stash.headers else "with the task's login"
+                out.append(_check("Stash", "Pictures can be fetched", "ok", f"A thumbnail came back ({len(data) // 1024} KB, {key})."))
+            else:
+                out.append(_check("Stash", "Pictures can be fetched", "fail", f"Stash sent {ctype} instead of a picture.",
+                                  "Long tasks lose their login after about an hour. Generate an API key under Settings → Security; the add-on uses it from then on."))
+            path = ((img[0].get("visual_files") or [{}])[0] or {}).get("path") or ""
+            if path:
+                # a picture inside a zip / cbz is no file of its own: check the archive
+                arch = re.match(r"(.+?\.(?:zip|cbz|cbr|rar|7z))(?:[\\/]|$)", path, re.I)
+                path = arch.group(1) if arch else path
+                ok = os.path.exists(path)
+                out.append(_check("Stash", "Library files reachable", "ok" if ok else "fail",
+                                  f"{path} {'is there' if ok else 'can not be opened'}.",
+                                  "" if ok else "Stash can't see your library files (a network drive that disconnected, or a Docker volume that went stale). "
+                                                 "Reconnect the drive, then restart Stash (e.g. docker restart stash)."))
+    except Exception as e:
+        out.append(_check("Stash", "Pictures can be fetched", "fail", str(e),
+                          "Check that Stash is running and that the add-on can log in (Settings → Security → API key)."))
+
+    # --- Ollama
+    try:
+        tags = _get_json(ai["url"] + "/api/tags")
+        names = [m.get("name") for m in tags.get("models", [])]
+        out.append(_check("AI model (Ollama)", "Ollama is reachable", "ok", f"{ai['url']} answers; {len(names)} model(s) installed."))
+        want = ai["model"] if ":" in ai["model"] else ai["model"] + ":latest"
+        if want in names:
+            size = next((m.get("size") for m in tags["models"] if m.get("name") == want), 0) or 0
+            out.append(_check("AI model (Ollama)", f"Model {ai['model']} is installed", "ok", f"{size / 1e9:.1f} GB."))
+            try:
+                info = _get_json(ai["url"] + "/api/show", body={"model": ai["model"]})
+                caps = info.get("capabilities") or []
+                vision = "vision" in caps or "clip" in json.dumps(info.get("model_info") or {}).lower() or "projector_info" in info
+                out.append(_check("AI model (Ollama)", "Model can see pictures", "ok" if vision else "fail",
+                                  ("It can." if vision else f"{ai['model']} only reads text, so it can't tag pictures."),
+                                  "" if vision else "Use a vision model: set AI: model to gemma3:4b and run: ollama pull gemma3:4b"))
+            except Exception:
+                pass
+        else:
+            out.append(_check("AI model (Ollama)", f"Model {ai['model']} is installed", "fail",
+                              "Installed: " + (", ".join(n for n in names if n) or "none"),
+                              f"On the computer running Ollama: ollama pull {ai['model']}  (or set AI: model to one of the installed vision models)"))
+        try:
+            ps = _get_json(ai["url"] + "/api/ps")
+            loaded = [m.get("name") for m in ps.get("models", [])]
+            out.append(_check("AI model (Ollama)", "Model in memory", "ok" if want in loaded else "info",
+                              "Loaded, so the next request is quick." if want in loaded else
+                              "Not loaded right now: the first request takes a little longer (it loads by itself)."))
+        except Exception:
+            pass
+    except Exception as e:
+        out.append(_check("AI model (Ollama)", "Ollama is reachable", "fail", f"{ai['url']}: {e}",
+                          f"Start Ollama (Mac: brew services start ollama). From Stash in Docker the address is http://{local_host}:11434; "
+                          "on Linux Docker, run Stash with network_mode: host and use http://127.0.0.1:11434. Set it under AI: Ollama address."))
+
+    # --- face helper
+    try:
+        health = _get_json(ai["face_url"] + "/health")
+        out.append(_check("Face helper", "Face helper is reachable", "ok", f"{ai['face_url']} answers."))
+        parts = [("embed", "Picture fingerprints (CLIP)", "look-alike tags, galleries and suggestions"),
+                 ("body", "Body-part detector (NudeNet)", "body tags"),
+                 ("match", "Face matching", "the Review page's faces"),
+                 ("knn", "Look-alike search", "Review → Tags and Check"),
+                 ("cluster", "Grouping", "Review → New performers and Tags → New")]
+        old = []
+        for key, title, use in parts:
+            if health.get(key):
+                out.append(_check("Face helper", title, "ok", f"Ready ({use})."))
+            else:
+                old.append(title)
+                out.append(_check("Face helper", title, "fail" if key in ("embed", "match") else "warn", f"Missing: {use} won't work.",
+                                  "Run face-helper/setup.sh again from the add-on's folder: it updates the helper and its models."))
+        # picture grouping needs the newer helper (pictures, not just faces)
+        if health.get("cluster"):
+            try:
+                one = base64.b64encode(bytes(512)).decode()
+                res = _get_json(ai["face_url"] + "/cluster", body={"faces": [one, one], "threshold": 0.5, "dim": 512, "center": True})["results"]
+                ok = len(res) == 2
+            except Exception:
+                ok = False
+            out.append(_check("Face helper", "Groups pictures (not just faces)", "ok" if ok else "warn",
+                              "Ready." if ok else "This helper only groups faces, so Review → Tags → New can't work.",
+                              "" if ok else "Run face-helper/setup.sh again to update the helper."))
+    except Exception as e:
+        out.append(_check("Face helper", "Face helper is reachable", "fail", f"{ai['face_url']}: {e}",
+                          "Install it: from the add-on's folder run  sh face-helper/setup.sh  (Mac / Linux). On a Mac it starts at login; "
+                          f"check it with curl http://127.0.0.1:11535/health. From Stash in Docker the address is http://{local_host}:11535."))
+
+    # --- what's been scanned
+    try:
+        n_items = stash.call("{ findScenes(filter: {per_page: 0}) { count } findImages(filter: {per_page: 0}) { count } }")
+        total = n_items["findScenes"]["count"] + n_items["findImages"]["count"]
+        looks = sum(1 for v in LookCache(plugin_dir).data.values() if v.get("e"))
+        share = looks / total if total else 0
+        out.append(_check("Scans", "Look-alike scan", "ok" if share > 0.8 else "warn" if looks else "fail",
+                          f"{looks:,} of {total:,} scenes and images have a picture fingerprint ({share:.0%}).",
+                          "" if share > 0.8 else 'Run "Look-alike tags: scan scenes and images" (Settings → Tasks). It carries on where it stopped.'))
+        faces = len(FaceCache(plugin_dir).data)
+        fshare = faces / total if total else 0
+        out.append(_check("Scans", "Face scan", "ok" if fshare > 0.8 else "warn" if faces else "fail",
+                          f"{faces:,} of {total:,} scenes and images scanned for faces ({fshare:.0%}).",
+                          "" if fshare > 0.8 else 'Run "Faces: scan scenes and images" (Settings → Tasks).'))
+        index = load_face_index(plugin_dir)
+        known = sum(1 for e in index.values() if known_embs(e))
+        n_perf = stash.call("{ findPerformers(filter: {per_page: 0}) { count } }")["findPerformers"]["count"]
+        out.append(_check("Scans", "Performers' faces learned", "ok" if known else "warn",
+                          f"{known:,} of {n_perf:,} performers have a face the add-on knows.",
+                          "" if known else 'Run "Faces: learn performers\' faces" - it uses their profile pictures.'))
+    except Exception as e:
+        out.append(_check("Scans", "Scans", "warn", str(e)))
+
+    # --- settings
+    try:
+        from zoneinfo import ZoneInfo
+        ZoneInfo(ai["time_zone"])
+        tz_ok = True
+    except Exception:
+        tz_ok = False
+    out.append(_check("Settings", "Time zone", "ok" if tz_ok else "warn", ai["time_zone"],
+                      "" if tz_ok else "AI: time zone isn't a known zone; use one like America/New_York or Europe/London."))
+    on = [n for n, v in (("AI tags for new items", ai["auto"] or ai["new_all"]), ("watermarks on new photos", ai["photo_studios"]),
+                         ("faces added automatically", ai["face_auto"]), ("wait until night", ai["nightly"])) if v]
+    out.append(_check("Settings", "After a scan", "info", ("On: " + ", ".join(on)) if on else "Nothing runs by itself after a scan.",
+                      "" if on else "Turn on the ones you want under Settings → Plugins → Better Organizing AI Add-on."))
+    if ai["nightly"]:
+        try:
+            with open(os.path.join(plugin_dir, "ai_night.json")) as f:
+                waiting = sum(len(v) for v in (json.load(f) or {}).values() if isinstance(v, list))
+        except (OSError, ValueError):
+            waiting = 0
+        try:
+            with open(os.path.join(plugin_dir, "night_runner.pid")) as f:
+                os.kill(int(f.read().strip()), 0)
+            alive = True
+        except (OSError, ValueError):
+            alive = False
+        out.append(_check("Settings", "Tonight's run", "info" if alive or not waiting else "warn",
+                          f"{waiting} item(s) waiting for {ai['night_time']} ({ai['time_zone']}); the night timer is {'running' if alive else 'not running'}.",
+                          "" if alive or not waiting else "Stash was probably restarted. It starts again with the next scan, or run "
+                          "\"AI: run tonight's new items now\" to do them straight away."))
+    return {"checks": out, "model": ai["model"], "ollama": ai["url"], "helper": ai["face_url"], "docker": docker}
+
+
+def run_diagnose_ai(stash, plugin_dir):
+    """One real request: a random photo shown to the model, timed."""
+    cfg = settings(stash, plugin_dir)
+    ai_check(cfg)
+    img = stash.call("{ findImages(filter: {per_page: 1, sort: \"random\"}) { images { id paths { thumbnail } } } }")["findImages"]["images"]
+    if not img:
+        raise RuntimeError("no images in the library to try it on")
+    pic, _ = stash.fetch(img[0]["paths"]["thumbnail"])
+    t0 = time.time()
+    body = {"model": cfg["ai"]["model"], "stream": False, "keep_alive": "15m", "options": {"temperature": 0},
+            "messages": [{"role": "user", "content": "Describe this picture in at most 8 words.",
+                          "images": [base64.b64encode(pic).decode()]}]}
+    reply = _get_json(cfg["ai"]["url"] + "/api/chat", timeout=300, body=body)
+    secs = time.time() - t0
+    return {"id": img[0]["id"], "seconds": round(secs, 1), "answer": ((reply.get("message") or {}).get("content") or "").strip()[:200]}
