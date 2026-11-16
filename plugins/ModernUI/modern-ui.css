@@ -3621,7 +3621,29 @@ body.mui.mui-light .mui-gqf-chip:not(.on) { border-color: var(--mui-l-border); b
   body.mui.mui-gallery-stack .gallery-tabs .gallery-header-container .studio-logo { text-align: left; margin: 0 0 4px; }
   body.mui.mui-gallery-stack .gallery-tabs .gallery-header-container > .mui-exit { position: absolute; top: 20px; right: 24px; }
   body.mui.mui-gallery-stack .gallery-tabs .gallery-toolbar { justify-content: flex-start; }
-  body.mui.mui-gallery-stack .gallery-tabs .tab-content { max-height: 46vh; overflow-y: auto; padding-right: 6px; }
+  /* the details at full height (no inner scroll box), never wider than the column */
+  body.mui.mui-gallery-stack .gallery-tabs .tab-content { max-height: none; overflow: visible; min-width: 0; }
+  body.mui.mui-gallery-stack .gallery-tabs .tab-content .row { margin-left: 0; margin-right: 0; }
+  body.mui.mui-gallery-stack .gallery-tabs .tab-content .row > [class*="col"] { padding-left: 0; padding-right: 0; }
+  body.mui.mui-gallery-stack .gallery-tabs .tab-content p.pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+  /* performers as a row of small cards (picture + name), wrapping */
+  body.mui.mui-gallery-stack .gallery-tabs .gallery-performers {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-start !important;
+    gap: 10px;
+    margin: 6px 0 0;
+  }
+  body.mui.mui-gallery-stack .gallery-tabs .gallery-performers .performer-card {
+    width: 120px !important;
+    max-width: 120px;
+    margin: 0 !important;
+    flex: none;
+  }
+  body.mui.mui-gallery-stack .gallery-tabs .gallery-performers .performer-card .card-popovers,
+  body.mui.mui-gallery-stack .gallery-tabs .gallery-performers .performer-card .card-section > :not(.card-section-title):not(a),
+  body.mui.mui-gallery-stack .gallery-tabs .gallery-performers .performer-card hr { display: none; }
+  body.mui.mui-gallery-stack .gallery-tabs .gallery-performers .performer-card .card-section-title { font-size: 0.85rem; }
   /* the name is up there now: no second copy above the pictures */
   body.mui.mui-gallery-stack .gallery-container > .mui-gallery-title { display: none !important; }
   body.mui.mui-gallery-stack .row > .gallery-container,
@@ -3680,3 +3702,19 @@ body.mui .mui-exit, body.mui .mui-image-crumb { display: none !important; }
   cursor: pointer;
 }
 .mui-timeline-btn:hover { opacity: 1; }
+@media (min-width: 1200px) {
+  body.mui.mui-gallery-stack .gallery-tabs .gallery-performers .performer-card .thumbnail-section,
+  body.mui.mui-gallery-stack .gallery-tabs .gallery-performers .performer-card .thumbnail-section a { height: 150px !important; min-height: 0 !important; }
+  body.mui.mui-gallery-stack .gallery-tabs .gallery-performers .performer-card img.performer-card-image {
+    width: 100% !important;
+    height: 150px !important;
+    object-fit: cover;
+    object-position: top;
+    background: rgba(128, 128, 128, 0.15);
+  }
+  body.mui.mui-gallery-stack .gallery-tabs .gallery-performers .performer-card .favorite-button { display: none; }
+  body.mui.mui-gallery-stack .gallery-tabs .gallery-performers .performer-card .card-section { padding: 6px 8px; }
+}
+@media (min-width: 1200px) {
+  body.mui.mui-gallery-stack .gallery-tabs .gallery-performers .performer-card { height: auto !important; min-height: 0 !important; }
+}
