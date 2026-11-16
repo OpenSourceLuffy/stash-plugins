@@ -83,7 +83,7 @@ A cleaner, app-like look for Stash, built to feel good on a phone as well as a c
   the phone's own video player, which would keep the swipe from reaching Stash.) To use the
   iPhone's own player instead, double-tap the video, or tap **Native Player** (top right) while
   in full screen; tap Done there to come back. **✕ Exit** (top left) leaves full screen.
-- A round **✕** in the top right of gallery, performer, image, tag and studio pages (the same spot on each) does the same as swiping down: back to wherever you opened the page from, e.g. the Images list rather than the image's gallery.
+- A round **✕** in the top right of gallery, performer, image, tag and studio pages (the same spot on each) does the same as swiping down: back to wherever you opened the page from, e.g. the Images list rather than the image's gallery. It's hidden on phones, where you swipe down instead (unless swiping is turned off).
 - In the edit dialog for several selected items, **Remove** lists every tag, performer, gallery or
   group the selected items have now (most common first, with how many have it): tap the ones to
   remove, or **All**.

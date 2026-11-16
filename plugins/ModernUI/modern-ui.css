@@ -3758,3 +3758,7 @@ body.mui .mui-exit, body.mui .mui-image-crumb { display: none !important; }
 @media (hover: hover) and (pointer: fine) {
   .mui-image-nav { display: flex; }
 }
+/* phones: swiping down does what the ✕ does, so no ✕ (it stays if swiping is turned off) */
+@media (max-width: 576px) {
+  body.mui.mui-mobile.mui-swipe-back .mui-item-x { display: none; }
+}
