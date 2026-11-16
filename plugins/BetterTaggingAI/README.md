@@ -209,7 +209,10 @@ once at **AI: night time** (default 03:00), so a big scan doesn't hold Stash up 
 > a button to run it (e.g. the look-alike scan); **Run a task** starts any of the add-on's tasks, and
 > **Running now** shows their progress with **Stop**. **Report a problem** opens a filled-in GitHub
 > issue (what happened, versions and the checks, without file paths, addresses or names) for you to
-> read and submit. The task **Setup check:
+> read and submit. Most of the **Common problems** have **Narrow it down** buttons that run what helps
+> with that problem and show the result right there: the connection to Ollama, the installed models
+> (and which can see pictures), the face helper, which library folders can be opened, the scans,
+> tonight's run, a timed AI test, or a safe preview task. The task **Setup check:
 > write a report to the log** writes the same checks to the log.
 
 You need two things on the computer Stash runs on (or one it can reach). Each is optional; anything

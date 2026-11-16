@@ -8290,3 +8290,48 @@ def run_diagnose_ai(stash, plugin_dir):
     reply = _get_json(cfg["ai"]["url"] + "/api/chat", timeout=300, body=body)
     secs = time.time() - t0
     return {"id": img[0]["id"], "seconds": round(secs, 1), "answer": ((reply.get("message") or {}).get("content") or "").strip()[:200]}
+
+
+def run_diagnose_models(stash, plugin_dir):
+    """Every model Ollama has, and whether each can see pictures."""
+    cfg = settings(stash, plugin_dir)
+    ai = cfg["ai"]
+    tags = _get_json(ai["url"] + "/api/tags")
+    out = []
+    for m in tags.get("models", []):
+        name = m.get("name")
+        vision = None
+        with contextlib.suppress(Exception):
+            info = _get_json(ai["url"] + "/api/show", body={"model": name})
+            caps = info.get("capabilities") or []
+            vision = "vision" in caps or "projector_info" in info
+        out.append({"name": name, "size_gb": round((m.get("size") or 0) / 1e9, 1), "vision": vision,
+                    "chosen": name == (ai["model"] if ":" in ai["model"] else ai["model"] + ":latest")})
+    return {"models": out, "setting": ai["model"], "url": ai["url"]}
+
+
+def run_diagnose_files(stash, plugin_dir, n=24):
+    """Random scenes and images: can their files be opened? Grouped by the
+    folder they're under, so a drive that's gone shows up as one line."""
+    items = []
+    for q, f, fields in (("findScenes", "scenes", "files { path }"), ("findImages", "images", "visual_files { ... on BaseFile { path } }")):
+        got = stash.call(f'{{ {q}(filter: {{per_page: {n // 2}, sort: "random"}}) {{ {f} {{ {fields} }} }} }}')[q][f]
+        for x in got:
+            p = (((x.get("files") or x.get("visual_files") or [{}])[0]) or {}).get("path")
+            if p:
+                items.append(p)
+    roots = defaultdict(lambda: [0, 0])
+    for p in items:
+        arch = re.match(r"(.+?\.(?:zip|cbz|cbr|rar|7z))(?:[\\/]|$)", p, re.I)
+        real = arch.group(1) if arch else p
+        parts = [x for x in re.split(r"[\\/]", real) if x]
+        root = "/" + "/".join(parts[:2]) if len(parts) > 2 else os.path.dirname(real)
+        roots[root][0] += 1
+        if os.path.exists(real):
+            roots[root][1] += 1
+    try:
+        libs = [x["path"] for x in stash.call("{ configuration { general { stashes { path } } } }")["configuration"]["general"]["stashes"]]
+    except Exception:
+        libs = []
+    lib_ok = [{"path": l, "ok": os.path.isdir(l) and bool(os.listdir(l) if os.path.isdir(l) else [])} for l in libs]
+    return {"roots": [{"root": r, "checked": c, "ok": ok} for r, (c, ok) in sorted(roots.items())], "libraries": lib_ok}

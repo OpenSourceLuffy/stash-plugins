@@ -1810,3 +1810,6 @@ body.mui-light .bta-batch-foot { background: linear-gradient(to bottom, transpar
 .bta-setup-cb { display: flex; gap: 8px; align-items: flex-start; }
 .bta-setup-cb input { margin-top: 3px; }
 .bta-setup-report .btn { align-self: flex-start; }
+.bta-setup-faq-do { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: -4px 0 12px; }
+.bta-setup-faq-out { margin: 0 0 14px; padding: 10px 12px 4px; border-radius: 12px; background: rgba(128, 128, 128, 0.08); }
+.bta-setup-faq-label { margin-bottom: 8px; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; opacity: 0.6; }
