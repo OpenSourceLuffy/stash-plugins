@@ -6,6 +6,7 @@ that plugin's changes.
 
 ## 1.5 (2026-11-11)
 
+- No suggestion rows in Stash's scrape dialog: on a computer the face row covered the scraped performers' box.
 - Renamed **Better Organizing AI Add-on (local AI)** (it was Better Tagging AI Add-on): it does a lot more than tagging now. Its ID and folder are unchanged, so settings and saved data carry over.
 - Now called **Better Tagging AI Add-on (local AI)**, with a shorter README: features first, setup at the end, and how it differs from other Stash AI plugins.
 - The face helper's small models (YuNet, SFace, NudeNet) now come with the plugin, with their

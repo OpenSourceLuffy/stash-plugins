@@ -423,6 +423,7 @@
       '<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/>' +
       '<circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg>';
 
+    let closedFor = null; // the sub-list page whose filters were closed already
     function sync() {
       document.querySelectorAll(".sidebar-pane-content").forEach((content) => {
         const original = content.querySelector(":scope > .sidebar-toggle-button-container .sidebar-toggle-button");
@@ -443,6 +444,16 @@
           toolbar.insertBefore(btn, toolbar.firstChild);
         }
         const pane = content.closest(".sidebar-pane");
+        // A list inside a tag's / performer's / studio's / group's page starts
+        // with the filters closed (Stash opens them on some of those tabs,
+        // e.g. a tag's Studios). Once per tab you open; after that it's yours.
+        const sub = location.pathname.match(/^\/(tags|performers|studios|groups)\/\d+(\/\w+)?/);
+        if (pane && sub && !pane.classList.contains("hide-sidebar") && closedFor !== sub[0]) {
+          closedFor = sub[0];
+          original.click();
+          return;
+        }
+        if (pane && sub) closedFor = sub[0];
         const open = !!pane && !pane.classList.contains("hide-sidebar");
         if (btn.classList.contains("active") !== open) btn.classList.toggle("active", open);
         btn.setAttribute("aria-pressed", String(open));

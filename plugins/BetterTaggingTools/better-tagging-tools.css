@@ -228,3 +228,11 @@ body > .react-select__menu-portal {
   font-size: 0.85em;
   opacity: 0.75;
 }
+
+/* No suggestions in Stash's scrape dialog (it's for comparing what was
+   scraped, and the rows covered its boxes) */
+.scrape-dialog .pts-suggest,
+.scrape-dialog .pts-suggest-rows,
+.scrape-dialog .pts-ai-note {
+  display: none !important;
+}

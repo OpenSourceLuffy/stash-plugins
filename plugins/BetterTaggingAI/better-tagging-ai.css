@@ -1753,3 +1753,11 @@ body.mui-light .bta-batch-foot { background: linear-gradient(to bottom, transpar
 .bta-edit-actions { display: grid; grid-template-columns: 1fr 1.6fr; gap: 8px; margin-top: 16px; }
 .bta-edit-actions .bta-fr-btn-skip { color: #fff; background: rgba(255, 255, 255, 0.12); box-shadow: none; }
 .bta-pick-row img.bta-pick-logo, .bta-pick-chosen img.bta-pick-logo { object-fit: contain; background: rgba(127, 127, 127, 0.15); border-radius: 10px; }
+
+/* No suggestions in Stash's scrape dialog (it's for comparing what was
+   scraped, and the rows covered its boxes) */
+.scrape-dialog .pts-suggest,
+.scrape-dialog .pts-suggest-rows,
+.scrape-dialog .pts-ai-note {
+  display: none !important;
+}
