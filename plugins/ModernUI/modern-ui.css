@@ -577,7 +577,10 @@ body.mui .slick-slide :is(.image-card, .gallery-card) .gallery-card-cover {
 
 body.mui .slick-slide :is(.image-card, .gallery-card) .thumbnail-section img,
 body.mui .slick-slide :is(.image-card, .gallery-card) .thumbnail-section video {
-  height: 100% !important;
+  /* a fixed height, not 100%: Safari can't size the width from a
+     percentage height inside a box that's as wide as its picture (0 wide) */
+  height: var(--mui-wall-h) !important;
+  min-width: 60px;
   width: auto !important;
   max-width: 640px !important; /* very wide panoramas get trimmed */
   object-fit: cover !important;
@@ -3761,4 +3764,29 @@ body.mui .mui-exit, body.mui .mui-image-crumb { display: none !important; }
 /* phones: swiping down does what the ✕ does, so no ✕ (it stays if swiping is turned off) */
 @media (max-width: 576px) {
   body.mui.mui-mobile.mui-swipe-back .mui-item-x { display: none; }
+}
+
+/* Home rows on a computer: picture and gallery cards take the card shape
+   (like phones), at the row height. Sizing them to each picture's own width
+   left them 0 wide (the shape setting's rules and the row's fought). */
+@media (min-width: 577px) {
+  body.mui .slick-slide :is(.image-card, .gallery-card) .thumbnail-section {
+    height: var(--mui-wall-h) !important;
+    width: auto !important;
+    aspect-ratio: var(--mui-picture-ratio, 3 / 4) !important;
+  }
+  body.mui .slick-slide :is(.image-card, .gallery-card) .thumbnail-section > a,
+  body.mui .slick-slide :is(.image-card, .gallery-card) .image-card-preview,
+  body.mui .slick-slide :is(.image-card, .gallery-card) .gallery-card-cover {
+    width: 100% !important;
+    height: 100% !important;
+  }
+  body.mui .slick-slide :is(.image-card, .gallery-card) .thumbnail-section img,
+  body.mui .slick-slide :is(.image-card, .gallery-card) .thumbnail-section video {
+    width: 100% !important;
+    height: 100% !important;
+    max-width: none !important;
+    min-width: 0;
+    object-fit: cover !important;
+  }
 }

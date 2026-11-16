@@ -5,6 +5,7 @@ Newest first. Versions are what Stash shows under Settings → Plugins.
 ## 0.57 (2026-11-16)
 
 - A list on a tag's, performer's, studio's or group's page (e.g. a tag's Studios) starts with the filter sidebar closed; the Filters button opens it.
+- Fixed: on a computer, home page rows of galleries and images (and studios' pictures) were squeezed into thin strips. They now take the card shape, like on a phone.
 - Gallery pages on a computer scroll as one page (the pictures no longer scroll in a box of their own).
 - Gallery details on a computer show at full height (no scroll box inside the page), never scroll sideways, and list performers as small cards.
 - Gallery pages on a computer look like a performer's page: the cover on the left and the details
