@@ -3738,6 +3738,37 @@ def run_look_suggest(stash, plugin_dir, kind, item_id):
     return [{"id": t, "name": names[t], "score": round(s, 2), "sure": s >= LOOK_SURE} for s, t in best[:12]]
 
 
+
+def run_look_suggest_many(stash, plugin_dir, kind, ids):
+    """Asked by the bulk edit window: look-alike tags for several selected
+    scenes / images. [{id, name, count, of, score}]: how many of them it
+    suits (scored like the edit page), most first. Nothing saved."""
+    cfg = settings(stash, plugin_dir)
+    _, excluded = tag_lookup(stash, cfg, plugin_dir)
+    looks = load_look_index(stash, cfg, plugin_dir, excluded, quiet=True)
+    if not looks:
+        raise RuntimeError("run the task \"Look-alike tags: scan scenes and images\" first (it needs the face helper)")
+    q, f = ("findScenes", "scenes") if kind == "scene" else ("findImages", "images")
+    ids = [str(i) for i in (ids or [])][:200]
+    items = find_by_ids(stash, q, f, ids, LOOK_ITEM_FIELDS[kind])
+    cut = cfg["ai"].get("look_suggest", LOOK_SUGGEST)
+    names = looks.names
+    hits, total = defaultdict(list), 0
+    for item in items:
+        scores = looks.for_item(stash, kind, item, compute=len(items) <= 30) or {}
+        if not scores:
+            continue
+        total += 1
+        have = {t["id"] for t in item.get("tags") or []}
+        for t, sc in scores.items():
+            if sc >= cut and t in names and t not in have and names[t].strip().lower() not in BODY_TAG_NAMES:
+                hits[t].append(sc)
+    looks.cache.save()
+    out = [{"id": t, "name": names[t], "count": len(v), "of": total, "score": round(sum(v) / len(v), 2)}
+           for t, v in hits.items() if len(v) >= max(1, total // 4)]
+    out.sort(key=lambda x: (-x["count"], -x["score"]))
+    return {"tags": out[:16], "looked": total, "of": len(items)}
+
 # --- body tags: what's shown, and how big -----------------------------------
 # What's shown comes from a body-part detector in the face helper (NudeNet,
 # optional: setup.sh --body). How big comes from the performer: the size you
@@ -5700,8 +5731,8 @@ NEW_PERF_GENERIC_FOLDER = re.compile(r"(?i)(^[\d_\W]|locked|folder|download|dcim
                                      r"videos?$|^misc|^new\b|^stuff|^tmp|^temp)")
 
 
-def face_cluster(cfg, faces, threshold=NEW_PERF_SAME):
-    body = json.dumps({"faces": faces, "threshold": threshold}).encode()
+def face_cluster(cfg, faces, threshold=NEW_PERF_SAME, dim=128, center=False):
+    body = json.dumps({"faces": faces, "threshold": threshold, "dim": dim, "center": center}).encode()
     req = urllib.request.Request(cfg["ai"]["face_url"] + "/cluster", data=body, headers={"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=600) as resp:
@@ -7714,3 +7745,548 @@ def run_gallery_undo(stash, plugin_dir, undo):
         stash.call("mutation($i: GalleryDestroyInput!) { galleryDestroy(input: $i) }",
                    {"i": {"ids": [undo["gallery"]], "delete_file": False, "delete_generated": False}})
     return True
+
+
+# ---------------------------------------------------------------------------
+# Review page, Tags → New: groups of pictures that look alike and that no
+# tag covers yet - to make into a tag, or add to one you have. Tags →
+# Similar: pairs of tags that are on the same items (or are named alike), to
+# merge or to make one a sub-tag of the other.
+
+TAG_GROUP_SAME = 0.6      # pictures this alike (fingerprints less the library's average) are grouped
+TAG_GROUP_MIN = 6         # items a group needs
+TAG_GROUP_COVERED = 0.6   # a tag on this share of a group already covers it
+TAG_GROUP_ONE_PLACE = 0.7 # a group mostly from one gallery / folder is that gallery, not a tag
+TAG_PAIR_SUB_SHARE = 0.3  # a tag named under another ("Solo Female" / "Solo") and with it this often: a sub-tag
+TAG_PAIR_SAME = 0.8       # items in common / items with either: the same tag twice
+TAG_PAIR_MIN = 4          # items the smaller tag needs
+
+
+def locked_tag_tidy(plugin_dir):
+    return locked_json(os.path.join(plugin_dir, "tag_tidy.json"))
+
+
+def _tidy_items(stash):
+    """{key: item} for every scene and image, with what a group card shows."""
+    items = {}
+    for kind, q, f, fields in (("scene", "findScenes", "scenes", "id title tags { id name } galleries { id } files { path } paths { screenshot }"),
+                               ("image", "findImages", "images", "id title tags { id name } galleries { id } visual_files { ... on BaseFile { path } } paths { thumbnail }")):
+        for x in stash.call(f"{{ {q}(filter: {{per_page: -1}}) {{ {f} {{ {fields} }} }} }}")[q][f]:
+            items[f"{kind}:{x['id']}"] = x
+    return items
+
+
+def _tidy_pic(key, x):
+    kind, iid = key.split(":")
+    path = (((x.get("files") or x.get("visual_files") or [{}])[0]) or {}).get("path") or ""
+    link = (x.get("paths") or {}).get("screenshot" if kind == "scene" else "thumbnail") or ""
+    return {"key": key, "kind": kind, "id": iid, "title": x.get("title") or os.path.basename(path),
+            "picture": re.sub(r"^https?://[^/]+", "", link)}
+
+
+def run_tag_groups(stash, plugin_dir, limit=30, skip=(), fresh=False):
+    cfg = settings(stash, plugin_dir)
+    _, excluded = tag_lookup(stash, cfg, plugin_dir)
+    excluded = set(excluded) | gallery_name_tag_ids(plugin_dir)
+    path = os.path.join(plugin_dir, "tag_groups_cache.json")
+    found = None
+    if not fresh:
+        with contextlib.suppress(OSError, ValueError, KeyError):
+            with open(path) as f:
+                saved = json.load(f)
+            if time.time() - saved.get("at", 0) < TAG_REVIEW_CACHE_SECONDS:
+                found = saved["found"]
+    if found is None:
+        cache = LookCache(plugin_dir)
+        keys = [k for k, v in cache.data.items() if v.get("e")]
+        if not keys:
+            raise RuntimeError('nothing is scanned yet - run "Look-alike tags: scan scenes and images" first')
+        try:
+            res = face_cluster(cfg, [cache.data[k]["e"] for k in keys], threshold=TAG_GROUP_SAME, dim=512, center=True)
+        except RuntimeError:
+            raise
+        if len(res) != len(keys):
+            raise RuntimeError("the face helper is too old to group pictures - run face-helper/setup.sh again (see the README)")
+        groups = defaultdict(list)
+        for k, (g, sim) in zip(keys, res):
+            if g >= 0:
+                groups[g].append((sim, k))
+        found = [[k for _, k in sorted(m, reverse=True)] for m in groups.values() if len(m) >= TAG_GROUP_MIN]
+        tmp = f"{path}.{os.getpid()}.tmp"
+        with open(tmp, "w") as f:
+            json.dump({"at": time.time(), "found": found}, f)
+        os.replace(tmp, path)
+    items = _tidy_items(stash)
+    tag_names = {t["id"]: t["name"] for x in items.values() for t in x.get("tags") or []}
+    with locked_tag_tidy(plugin_dir) as d:
+        skip = set(skip or ()) | set(d.get("no", []))
+    out = []
+    for keys in found:
+        keys = [k for k in keys if k in items]
+        if len(keys) < TAG_GROUP_MIN:
+            continue
+        sig = "tg:" + hashlib.sha1("|".join(sorted(keys)[:20]).encode()).hexdigest()[:12]
+        if sig in skip:
+            continue
+        n = len(keys)
+        places = Counter()
+        for k in keys:
+            x = items[k]
+            gs = [g["id"] for g in x.get("galleries") or []]
+            p = (((x.get("files") or x.get("visual_files") or [{}])[0]) or {}).get("path") or ""
+            places["g" + gs[0] if gs else "f" + os.path.dirname(p)] += 1
+        if places.most_common(1)[0][1] >= TAG_GROUP_ONE_PLACE * n:
+            continue  # one gallery / folder: it's that gallery, not a new tag
+        tc = Counter(t["id"] for k in keys for t in items[k].get("tags") or []
+                     if t["id"] not in excluded and t["name"].strip().lower() not in BODY_TAG_NAMES)
+        if tc and tc.most_common(1)[0][1] >= TAG_GROUP_COVERED * n:
+            continue  # a tag you have already says what these are
+        near = [{"id": t, "name": tag_names[t], "count": c} for t, c in tc.most_common(8) if c >= 2]
+        untagged = sum(1 for k in keys if not items[k].get("tags"))
+        reasons = [f"{n} scenes and photos that look alike", f"{untagged} have no tags" if untagged else "no tag is on most of them"]
+        out.append({"sig": sig, "tg": True, "type": "tagnew", "keys": keys, "count": n, "near": near,
+                    "samples": [_tidy_pic(k, items[k]) for k in keys[:6]], "all": [_tidy_pic(k, items[k]) for k in keys],
+                    "reasons": reasons})
+    out.sort(key=lambda x: -x["count"])
+    return {"items": out[:limit], "total": len(out)}
+
+
+def run_tag_pairs(stash, plugin_dir, limit=30, skip=()):
+    cfg = settings(stash, plugin_dir)
+    _, excluded = tag_lookup(stash, cfg, plugin_dir)
+    excluded = set(excluded) | gallery_name_tag_ids(plugin_dir)
+    tags = {t["id"]: t for t in stash.call("{ findTags(filter: {per_page: -1}) { tags { id name aliases image_path "
+                                           "scene_count image_count parents { id } children { id } } } }")["findTags"]["tags"]}
+    # where each tag is, counting a gallery as one place (a 1,000-page comic
+    # whose pages all carry the same tags is one place, not 1,000 items)
+    gal_of = {f"image:{x['id']}": "g" + x["galleries"][0]["id"] for x in stash.call(
+        "{ findImages(image_filter: {galleries: {modifier: NOT_NULL}}, filter: {per_page: -1}) { images { id galleries { id } } } }"
+    )["findImages"]["images"] if x.get("galleries")}
+    have = defaultdict(set)
+    for k, ts in all_item_tags(stash).items():
+        for t in ts:
+            have[t].add(gal_of.get(k, k))
+    with locked_tag_tidy(plugin_dir) as d:
+        skip = set(skip or ()) | set(d.get("no", []))
+    norm = lambda n: re.sub(r"s$", "", re.sub(r"[^a-z0-9]", "", (n or "").lower()))
+    ids = [t for t in tags if t not in excluded and len(have.get(t, ())) >= 1
+           and tags[t]["name"].strip().lower() not in BODY_TAG_NAMES]
+    by_item = defaultdict(set)
+    for t in ids:
+        for k in have[t]:
+            by_item[k].add(t)
+    both = Counter()
+    for k, ts in by_item.items():
+        if len(ts) > 60:
+            continue
+        ts = sorted(ts)
+        for i, a in enumerate(ts):
+            for b in ts[i + 1:]:
+                both[(a, b)] += 1
+    out, seen = [], set()
+
+    def card(t):
+        t = tags[t]
+        n = (t.get("scene_count") or 0) + (t.get("image_count") or 0)
+        return {"id": t["id"], "name": t["name"], "count": n, "aliases": t.get("aliases") or [],
+                "picture": f"/tag/{t['id']}/image"}
+
+    words = lambda t: set(re.findall(r"[a-z0-9]+", tags[t]["name"].lower()))
+
+    def named_under(child, parent):
+        """"Solo Female" under "Solo": the parent's words are all in the child's name."""
+        pw, cw = words(parent), words(child)
+        return bool(pw) and pw < cw
+
+    def related(a, b):
+        return b in {p["id"] for p in tags[a].get("parents") or []} or a in {p["id"] for p in tags[b].get("parents") or []}
+
+    # named alike: the same tag written two ways (Outdoor / Outdoors)
+    groups = defaultdict(list)
+    for t in ids:
+        groups[norm(tags[t]["name"])].append(t)
+    for key, ts in groups.items():
+        if len(ts) < 2 or not key:
+            continue
+        ts.sort(key=lambda t: -len(have[t]))
+        for b in ts[1:]:
+            a = ts[0]
+            pair = tuple(sorted((a, b)))
+            sig = "tm:" + ":".join(pair)
+            if sig in skip or pair in seen:
+                continue
+            seen.add(pair)
+            out.append({"sig": sig, "tp": True, "type": "tagmerge", "tags": [card(a), card(b)], "keep": a,
+                        "count": len(have[a] | have[b]), "reasons": ["The same name written differently"]})
+    # on the same items
+    for (a, b), c in both.items():
+        pair = (a, b)
+        if pair in seen or related(a, b):
+            continue
+        na, nb = len(have[a]), len(have[b])
+        small, big = (a, b) if na <= nb else (b, a)
+        ns = min(na, nb)
+        if ns < TAG_PAIR_MIN:
+            continue
+        union = na + nb - c
+        if c / union >= TAG_PAIR_SAME and ns >= 6:
+            sig = "tm:" + ":".join(pair)
+            if sig in skip:
+                continue
+            seen.add(pair)
+            out.append({"sig": sig, "tp": True, "type": "tagmerge", "tags": [card(big), card(small)], "keep": big,
+                        "count": union, "reasons": [f"Almost always together: {c} of the {union} places (galleries, scenes, loose photos) with either have both"]})
+        elif named_under(small, big) and c / ns >= TAG_PAIR_SUB_SHARE:
+            sig = f"ts:{small}:{big}"
+            if sig in skip:
+                continue
+            seen.add(pair)
+            out.append({"sig": sig, "tp": True, "type": "tagsub", "child": card(small), "parent": card(big),
+                        "count": ns, "reasons": [f"{c} of the {ns} places (galleries, scenes, loose photos) with {tags[small]['name']} also have {tags[big]['name']}"]})
+    order = {"tagmerge": 0, "tagsub": 1}
+    out.sort(key=lambda x: (order[x["type"]], -x["count"]))
+    return {"items": out[:limit], "total": len(out)}
+
+
+TAG_SNAP_FIELDS = "id name sort_name description aliases favorite ignore_auto_tag image_path parents { id } children { id }"
+
+
+def _tag_items(stash, tid):
+    """Everything with the tag: {"scene": ids, "image": ids, "gallery": ids, "performer": ids, "studio": ids}."""
+    out = {}
+    flt = {"tags": {"value": [str(tid)], "modifier": "INCLUDES", "depth": 0}}
+    for kind, q, f, typ, arg in (("scene", "findScenes", "scenes", "SceneFilterType", "scene_filter"),
+                                 ("image", "findImages", "images", "ImageFilterType", "image_filter"),
+                                 ("gallery", "findGalleries", "galleries", "GalleryFilterType", "gallery_filter"),
+                                 ("performer", "findPerformers", "performers", "PerformerFilterType", "performer_filter"),
+                                 ("studio", "findStudios", "studios", "StudioFilterType", "studio_filter")):
+        out[kind] = [x["id"] for x in stash.call(
+            f"query($f: {typ}) {{ {q}({arg}: $f, filter: {{per_page: -1}}) {{ {f} {{ id }} }} }}", {"f": flt})[q][f]]
+    return out
+
+
+BULK_TAG = {"scene": ("bulkSceneUpdate", "BulkSceneUpdateInput"), "image": ("bulkImageUpdate", "BulkImageUpdateInput"),
+            "gallery": ("bulkGalleryUpdate", "BulkGalleryUpdateInput"), "performer": ("bulkPerformerUpdate", "BulkPerformerUpdateInput"),
+            "studio": ("bulkStudioUpdate", "BulkStudioUpdateInput")}
+
+
+def _tag_on(stash, kind_ids, tid, mode):
+    for kind, ids in kind_ids.items():
+        if not ids:
+            continue
+        mut, typ = BULK_TAG[kind]
+        for at in range(0, len(ids), 500):
+            stash.call(f"mutation($i: {typ}!) {{ {mut}(input: $i) {{ id }} }}",
+                       {"i": {"ids": [str(i) for i in ids[at:at + 500]], "tag_ids": {"ids": [str(tid)], "mode": mode}}})
+
+
+def run_tag_tidy_apply(stash, plugin_dir, action, data):
+    data = data or {}
+    if action == "no":
+        with locked_tag_tidy(plugin_dir) as d:
+            d["no"] = sorted(set(d.get("no", [])) | {data["sig"]})
+        return {"action": "no", "sig": data["sig"]}
+    if action in ("tagnew", "tagjoin"):
+        kinds = _keys_by_kind(data.get("keys"))
+        made = None
+        if action == "tagnew":
+            name = (data.get("name") or "").strip()
+            if not name:
+                raise RuntimeError("give the tag a name first")
+            got = stash.call("query($n: String!) { findTags(tag_filter: {name: {value: $n, modifier: EQUALS}}) { tags { id } } }",
+                             {"n": name})["findTags"]["tags"]
+            if got:
+                tid = got[0]["id"]
+            else:
+                tid = made = stash.call("mutation($i: TagCreateInput!) { tagCreate(input: $i) { id } }", {"i": {"name": name}})["tagCreate"]["id"]
+        else:
+            tid = str(data["tag"])
+        # only the ones without it yet (so Undo takes off only what this added)
+        added = {}
+        for kind, q, f in (("scene", "findScenes", "scenes"), ("image", "findImages", "images")):
+            got = find_by_ids(stash, q, f, kinds[kind], "id tags { id }") if kinds[kind] else []
+            added[kind] = [x["id"] for x in got if tid not in {t["id"] for t in x.get("tags") or []}]
+        _tag_on(stash, added, tid, "ADD")
+        return {"action": action, "tag": tid, "added": added, "made": made}
+    if action == "tagsub":
+        child = stash.call(f"query($id: ID!) {{ findTag(id: $id) {{ {TAG_SNAP_FIELDS} }} }}", {"id": str(data["child"])})["findTag"]
+        before = [p["id"] for p in child.get("parents") or []]
+        stash.call("mutation($i: TagUpdateInput!) { tagUpdate(input: $i) { id } }",
+                   {"i": {"id": child["id"], "parent_ids": sorted(set(before) | {str(data["parent"])})}})
+        return {"action": "tagsub", "child": child["id"], "before": before}
+    if action == "tagmerge":
+        keep = str(data["keep"])
+        snaps = []
+        for sid in data.get("others") or []:
+            sid = str(sid)
+            if sid == keep:
+                continue
+            t = stash.call(f"query($id: ID!) {{ findTag(id: $id) {{ {TAG_SNAP_FIELDS} }} }}", {"id": sid})["findTag"]
+            if not t:
+                continue
+            snap = {"tag": t, "items": _tag_items(stash, sid)}
+            if "default=true" not in (t.get("image_path") or "default=true"):
+                with contextlib.suppress(Exception):
+                    pic, ctype = stash.fetch(t["image_path"])
+                    if ctype.startswith("image/") and len(pic) < 8 * 1024 * 1024:
+                        snap["image"] = f"data:{ctype};base64," + base64.b64encode(pic).decode()
+            snaps.append(snap)
+        kept = stash.call(f"query($id: ID!) {{ findTag(id: $id) {{ {TAG_SNAP_FIELDS} }} }}", {"id": keep})["findTag"]
+        keep_items = _tag_items(stash, keep)
+        if snaps:
+            stash.call("mutation($s: [ID!]!, $d: ID!) { tagsMerge(input: {source: $s, destination: $d}) { id } }",
+                       {"s": [s["tag"]["id"] for s in snaps], "d": keep})
+        name = (data.get("name") or "").strip()
+        if name and name != kept["name"]:
+            stash.call("mutation($i: TagUpdateInput!) { tagUpdate(input: $i) { id } }", {"i": {"id": keep, "name": name}})
+        return {"action": "tagmerge", "keep": keep, "kept": {"name": kept["name"], "aliases": kept.get("aliases") or []},
+                "keep_items": keep_items, "removed": snaps}
+    raise RuntimeError(f"unknown tag action {action!r}")
+
+
+def run_tag_tidy_undo(stash, plugin_dir, undo):
+    action = undo.get("action")
+    if action == "no":
+        with locked_tag_tidy(plugin_dir) as d:
+            d["no"] = [s for s in d.get("no", []) if s != undo["sig"]]
+    elif action in ("tagnew", "tagjoin"):
+        _tag_on(stash, undo.get("added") or {}, undo["tag"], "REMOVE")
+        if undo.get("made") and not any(_tag_items(stash, undo["made"]).values()):
+            with contextlib.suppress(Exception):
+                stash.call("mutation($i: TagDestroyInput!) { tagDestroy(input: $i) }", {"i": {"id": str(undo["made"])}})
+    elif action == "tagsub":
+        stash.call("mutation($i: TagUpdateInput!) { tagUpdate(input: $i) { id } }",
+                   {"i": {"id": undo["child"], "parent_ids": undo["before"]}})
+    elif action == "tagmerge":
+        keep = undo["keep"]
+        # the kept tag as it was (its name; the merged names leave its aliases)
+        stash.call("mutation($i: TagUpdateInput!) { tagUpdate(input: $i) { id } }",
+                   {"i": {"id": keep, "name": undo["kept"]["name"], "aliases": undo["kept"]["aliases"]}})
+        had = {k: set(v) for k, v in (undo.get("keep_items") or {}).items()}
+        for snap in undo.get("removed") or []:
+            t = snap["tag"]
+            inp = {"name": t["name"], "aliases": t.get("aliases") or [], "description": t.get("description") or "",
+                   "favorite": bool(t.get("favorite")), "ignore_auto_tag": bool(t.get("ignore_auto_tag")),
+                   "parent_ids": [p["id"] for p in t.get("parents") or []], "child_ids": [c["id"] for c in t.get("children") or []]}
+            if t.get("sort_name"):
+                inp["sort_name"] = t["sort_name"]
+            if snap.get("image"):
+                inp["image"] = snap["image"]
+            new = stash.call("mutation($i: TagCreateInput!) { tagCreate(input: $i) { id } }", {"i": inp})["tagCreate"]["id"]
+            _tag_on(stash, snap["items"], new, "ADD")
+            # the kept tag comes off what only had the merged one
+            _tag_on(stash, {k: [i for i in ids if i not in had.get(k, set())] for k, ids in snap["items"].items()}, keep, "REMOVE")
+    return True
+
+
+# ---------------------------------------------------------------------------
+# "Setup & troubleshooting" page: every part the add-on needs, checked, with
+# what to do when something's wrong. Nothing is changed.
+
+def _check(group, title, status, detail="", fix="", cid=None):
+    return {"id": cid or re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-"), "group": group,
+            "title": title, "status": status, "detail": detail, "fix": fix}
+
+
+def _get_json(url, timeout=6, body=None):
+    req = urllib.request.Request(url, data=json.dumps(body).encode() if body is not None else None,
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read())
+
+
+def run_diagnose(stash, plugin_dir):
+    out = []
+    cfg = settings(stash, plugin_dir)
+    ai = cfg["ai"]
+    docker = os.path.exists("/.dockerenv")
+    local_host = "host.docker.internal" if docker else "localhost"
+
+    # --- Stash and this plugin
+    out.append(_check("Stash", "Python", "ok", f"Python {sys.version.split()[0]} runs the add-on's tasks."))
+    try:
+        test = os.path.join(plugin_dir, ".write_test")
+        with open(test, "w") as f:
+            f.write("ok")
+        os.remove(test)
+        out.append(_check("Stash", "Plugin folder can be written", "ok", plugin_dir))
+    except OSError as e:
+        out.append(_check("Stash", "Plugin folder can be written", "fail", f"{plugin_dir}: {e}",
+                          "The add-on keeps what it's done in small files in its own folder. Give Stash write access to its plugins folder."))
+    try:
+        usage = shutil.disk_usage(plugin_dir)
+        free_gb = usage.free / 1e9
+        size = sum(os.path.getsize(os.path.join(plugin_dir, f)) for f in os.listdir(plugin_dir) if f.endswith(".json"))
+        out.append(_check("Stash", "Disk space", "ok" if free_gb > 2 else "warn",
+                          f"{free_gb:.1f} GB free; the add-on's saved data uses {size / 1e6:.1f} MB.",
+                          "" if free_gb > 2 else "Free up some space: scans and the saved fingerprints need room to grow."))
+    except OSError:
+        pass
+    try:
+        out.append(_check("Stash", "ffmpeg (video frames)", "ok", ffmpeg_path(stash)))
+    except Exception as e:
+        out.append(_check("Stash", "ffmpeg (video frames)", "fail", str(e),
+                          "Scenes need ffmpeg for their frames. Stash's Docker image has it; otherwise set its path under Settings → System → Application paths."))
+    # pictures: can the add-on fetch one (a login page instead means the API key is missing)
+    try:
+        img = stash.call("{ findImages(filter: {per_page: 1, sort: \"random\"}) { images { id paths { thumbnail } visual_files { ... on BaseFile { path } } } } }")["findImages"]["images"]
+        if img:
+            data, ctype = stash.fetch(img[0]["paths"]["thumbnail"])
+            if ctype.startswith("image/"):
+                key = "with Stash's API key" if "ApiKey" in stash.headers else "with the task's login"
+                out.append(_check("Stash", "Pictures can be fetched", "ok", f"A thumbnail came back ({len(data) // 1024} KB, {key})."))
+            else:
+                out.append(_check("Stash", "Pictures can be fetched", "fail", f"Stash sent {ctype} instead of a picture.",
+                                  "Long tasks lose their login after about an hour. Generate an API key under Settings → Security; the add-on uses it from then on."))
+            path = ((img[0].get("visual_files") or [{}])[0] or {}).get("path") or ""
+            if path:
+                # a picture inside a zip / cbz is no file of its own: check the archive
+                arch = re.match(r"(.+?\.(?:zip|cbz|cbr|rar|7z))(?:[\\/]|$)", path, re.I)
+                path = arch.group(1) if arch else path
+                ok = os.path.exists(path)
+                out.append(_check("Stash", "Library files reachable", "ok" if ok else "fail",
+                                  f"{path} {'is there' if ok else 'can not be opened'}.",
+                                  "" if ok else "Stash can't see your library files (a network drive that disconnected, or a Docker volume that went stale). "
+                                                 "Reconnect the drive, then restart Stash (e.g. docker restart stash)."))
+    except Exception as e:
+        out.append(_check("Stash", "Pictures can be fetched", "fail", str(e),
+                          "Check that Stash is running and that the add-on can log in (Settings → Security → API key)."))
+
+    # --- Ollama
+    try:
+        tags = _get_json(ai["url"] + "/api/tags")
+        names = [m.get("name") for m in tags.get("models", [])]
+        out.append(_check("AI model (Ollama)", "Ollama is reachable", "ok", f"{ai['url']} answers; {len(names)} model(s) installed."))
+        want = ai["model"] if ":" in ai["model"] else ai["model"] + ":latest"
+        if want in names:
+            size = next((m.get("size") for m in tags["models"] if m.get("name") == want), 0) or 0
+            out.append(_check("AI model (Ollama)", f"Model {ai['model']} is installed", "ok", f"{size / 1e9:.1f} GB."))
+            try:
+                info = _get_json(ai["url"] + "/api/show", body={"model": ai["model"]})
+                caps = info.get("capabilities") or []
+                vision = "vision" in caps or "clip" in json.dumps(info.get("model_info") or {}).lower() or "projector_info" in info
+                out.append(_check("AI model (Ollama)", "Model can see pictures", "ok" if vision else "fail",
+                                  ("It can." if vision else f"{ai['model']} only reads text, so it can't tag pictures."),
+                                  "" if vision else "Use a vision model: set AI: model to gemma3:4b and run: ollama pull gemma3:4b"))
+            except Exception:
+                pass
+        else:
+            out.append(_check("AI model (Ollama)", f"Model {ai['model']} is installed", "fail",
+                              "Installed: " + (", ".join(n for n in names if n) or "none"),
+                              f"On the computer running Ollama: ollama pull {ai['model']}  (or set AI: model to one of the installed vision models)"))
+        try:
+            ps = _get_json(ai["url"] + "/api/ps")
+            loaded = [m.get("name") for m in ps.get("models", [])]
+            out.append(_check("AI model (Ollama)", "Model in memory", "ok" if want in loaded else "info",
+                              "Loaded, so the next request is quick." if want in loaded else
+                              "Not loaded right now: the first request takes a little longer (it loads by itself)."))
+        except Exception:
+            pass
+    except Exception as e:
+        out.append(_check("AI model (Ollama)", "Ollama is reachable", "fail", f"{ai['url']}: {e}",
+                          f"Start Ollama (Mac: brew services start ollama). From Stash in Docker the address is http://{local_host}:11434; "
+                          "on Linux Docker, run Stash with network_mode: host and use http://127.0.0.1:11434. Set it under AI: Ollama address."))
+
+    # --- face helper
+    try:
+        health = _get_json(ai["face_url"] + "/health")
+        out.append(_check("Face helper", "Face helper is reachable", "ok", f"{ai['face_url']} answers."))
+        parts = [("embed", "Picture fingerprints (CLIP)", "look-alike tags, galleries and suggestions"),
+                 ("body", "Body-part detector (NudeNet)", "body tags"),
+                 ("match", "Face matching", "the Review page's faces"),
+                 ("knn", "Look-alike search", "Review → Tags and Check"),
+                 ("cluster", "Grouping", "Review → New performers and Tags → New")]
+        old = []
+        for key, title, use in parts:
+            if health.get(key):
+                out.append(_check("Face helper", title, "ok", f"Ready ({use})."))
+            else:
+                old.append(title)
+                out.append(_check("Face helper", title, "fail" if key in ("embed", "match") else "warn", f"Missing: {use} won't work.",
+                                  "Run face-helper/setup.sh again from the add-on's folder: it updates the helper and its models."))
+        # picture grouping needs the newer helper (pictures, not just faces)
+        if health.get("cluster"):
+            try:
+                one = base64.b64encode(bytes(512)).decode()
+                res = _get_json(ai["face_url"] + "/cluster", body={"faces": [one, one], "threshold": 0.5, "dim": 512, "center": True})["results"]
+                ok = len(res) == 2
+            except Exception:
+                ok = False
+            out.append(_check("Face helper", "Groups pictures (not just faces)", "ok" if ok else "warn",
+                              "Ready." if ok else "This helper only groups faces, so Review → Tags → New can't work.",
+                              "" if ok else "Run face-helper/setup.sh again to update the helper."))
+    except Exception as e:
+        out.append(_check("Face helper", "Face helper is reachable", "fail", f"{ai['face_url']}: {e}",
+                          "Install it: from the add-on's folder run  sh face-helper/setup.sh  (Mac / Linux). On a Mac it starts at login; "
+                          f"check it with curl http://127.0.0.1:11535/health. From Stash in Docker the address is http://{local_host}:11535."))
+
+    # --- what's been scanned
+    try:
+        n_items = stash.call("{ findScenes(filter: {per_page: 0}) { count } findImages(filter: {per_page: 0}) { count } }")
+        total = n_items["findScenes"]["count"] + n_items["findImages"]["count"]
+        looks = sum(1 for v in LookCache(plugin_dir).data.values() if v.get("e"))
+        share = looks / total if total else 0
+        out.append(_check("Scans", "Look-alike scan", "ok" if share > 0.8 else "warn" if looks else "fail",
+                          f"{looks:,} of {total:,} scenes and images have a picture fingerprint ({share:.0%}).",
+                          "" if share > 0.8 else 'Run "Look-alike tags: scan scenes and images" (Settings → Tasks). It carries on where it stopped.'))
+        faces = len(FaceCache(plugin_dir).data)
+        fshare = faces / total if total else 0
+        out.append(_check("Scans", "Face scan", "ok" if fshare > 0.8 else "warn" if faces else "fail",
+                          f"{faces:,} of {total:,} scenes and images scanned for faces ({fshare:.0%}).",
+                          "" if fshare > 0.8 else 'Run "Faces: scan scenes and images" (Settings → Tasks).'))
+        index = load_face_index(plugin_dir)
+        known = sum(1 for e in index.values() if known_embs(e))
+        n_perf = stash.call("{ findPerformers(filter: {per_page: 0}) { count } }")["findPerformers"]["count"]
+        out.append(_check("Scans", "Performers' faces learned", "ok" if known else "warn",
+                          f"{known:,} of {n_perf:,} performers have a face the add-on knows.",
+                          "" if known else 'Run "Faces: learn performers\' faces" - it uses their profile pictures.'))
+    except Exception as e:
+        out.append(_check("Scans", "Scans", "warn", str(e)))
+
+    # --- settings
+    try:
+        from zoneinfo import ZoneInfo
+        ZoneInfo(ai["time_zone"])
+        tz_ok = True
+    except Exception:
+        tz_ok = False
+    out.append(_check("Settings", "Time zone", "ok" if tz_ok else "warn", ai["time_zone"],
+                      "" if tz_ok else "AI: time zone isn't a known zone; use one like America/New_York or Europe/London."))
+    on = [n for n, v in (("AI tags for new items", ai["auto"] or ai["new_all"]), ("watermarks on new photos", ai["photo_studios"]),
+                         ("faces added automatically", ai["face_auto"]), ("wait until night", ai["nightly"])) if v]
+    out.append(_check("Settings", "After a scan", "info", ("On: " + ", ".join(on)) if on else "Nothing runs by itself after a scan.",
+                      "" if on else "Turn on the ones you want under Settings → Plugins → Better Organizing AI Add-on."))
+    if ai["nightly"]:
+        try:
+            with open(os.path.join(plugin_dir, "ai_night.json")) as f:
+                waiting = sum(len(v) for v in (json.load(f) or {}).values() if isinstance(v, list))
+        except (OSError, ValueError):
+            waiting = 0
+        try:
+            with open(os.path.join(plugin_dir, "night_runner.pid")) as f:
+                os.kill(int(f.read().strip()), 0)
+            alive = True
+        except (OSError, ValueError):
+            alive = False
+        out.append(_check("Settings", "Tonight's run", "info" if alive or not waiting else "warn",
+                          f"{waiting} item(s) waiting for {ai['night_time']} ({ai['time_zone']}); the night timer is {'running' if alive else 'not running'}.",
+                          "" if alive or not waiting else "Stash was probably restarted. It starts again with the next scan, or run "
+                          "\"AI: run tonight's new items now\" to do them straight away."))
+    return {"checks": out, "model": ai["model"], "ollama": ai["url"], "helper": ai["face_url"], "docker": docker}
+
+
+def run_diagnose_ai(stash, plugin_dir):
+    """One real request: a random photo shown to the model, timed."""
+    cfg = settings(stash, plugin_dir)
+    ai_check(cfg)
+    img = stash.call("{ findImages(filter: {per_page: 1, sort: \"random\"}) { images { id paths { thumbnail } } } }")["findImages"]["images"]
+    if not img:
+        raise RuntimeError("no images in the library to try it on")
+    pic, _ = stash.fetch(img[0]["paths"]["thumbnail"])
+    t0 = time.time()
+    body = {"model": cfg["ai"]["model"], "stream": False, "keep_alive": "15m", "options": {"temperature": 0},
+            "messages": [{"role": "user", "content": "Describe this picture in at most 8 words.",
+                          "images": [base64.b64encode(pic).decode()]}]}
+    reply = _get_json(cfg["ai"]["url"] + "/api/chat", timeout=300, body=body)
+    secs = time.time() - t0
+    return {"id": img[0]["id"], "seconds": round(secs, 1), "answer": ((reply.get("message") or {}).get("content") or "").strip()[:200]}

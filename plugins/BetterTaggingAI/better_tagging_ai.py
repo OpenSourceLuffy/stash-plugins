@@ -92,6 +92,8 @@ def main():
             c.run_looks(stash, plugin_dir)
         elif mode == "look_suggest":
             print(json.dumps({"output": c.run_look_suggest(stash, plugin_dir, args["kind"], args["id"])}))
+        elif mode == "look_suggest_many":
+            print(json.dumps({"output": c.run_look_suggest_many(stash, plugin_dir, args["kind"], args.get("ids") or [])}))
         elif mode == "body_preview":
             c.run_body(stash, plugin_dir, preview=True, limit=10)
         elif mode == "body_all":
@@ -162,6 +164,27 @@ def main():
             print(json.dumps({"output": c.run_gallery_apply(stash, plugin_dir, args.get("action"), args.get("data"))}))
         elif mode == "gallery_undo":
             print(json.dumps({"output": c.run_gallery_undo(stash, plugin_dir, args.get("undo") or {})}))
+        elif mode == "tag_groups":
+            print(json.dumps({"output": c.run_tag_groups(stash, plugin_dir, int(args.get("limit") or 30), args.get("skip") or [],
+                                                         fresh=bool(args.get("fresh")))}))
+        elif mode == "tag_pairs":
+            print(json.dumps({"output": c.run_tag_pairs(stash, plugin_dir, int(args.get("limit") or 30), args.get("skip") or [])}))
+        elif mode == "tag_tidy_apply":
+            print(json.dumps({"output": c.run_tag_tidy_apply(stash, plugin_dir, args.get("action"), args.get("data"))}))
+        elif mode == "tag_tidy_undo":
+            print(json.dumps({"output": c.run_tag_tidy_undo(stash, plugin_dir, args.get("undo") or {})}))
+        elif mode == "diagnose":
+            print(json.dumps({"output": c.run_diagnose(stash, plugin_dir)}))
+        elif mode == "diagnose_ai":
+            print(json.dumps({"output": c.run_diagnose_ai(stash, plugin_dir)}))
+        elif mode == "diagnose_log":
+            res = c.run_diagnose(stash, plugin_dir)
+            mark = {"ok": "OK  ", "warn": "WARN", "fail": "FAIL", "info": "INFO"}
+            for ch in res["checks"]:
+                c.log("warning" if ch["status"] in ("warn", "fail") else "info",
+                      f"[{mark[ch['status']]}] {ch['group']} - {ch['title']}: {ch['detail']}" + (f" -> {ch['fix']}" if ch["fix"] else ""))
+            bad = sum(1 for ch in res["checks"] if ch["status"] == "fail")
+            c.log("info", f"Setup check done: {bad} problem(s). The Setup & troubleshooting page (/ai-setup) shows the same, with fixes.")
         elif mode == "face_unreject":
             print(json.dumps({"output": c.run_face_unreject(plugin_dir, args["performer"], args.get("key"))}))
         elif mode == "face_confirm":

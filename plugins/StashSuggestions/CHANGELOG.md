@@ -2,6 +2,10 @@
 
 Newest first.
 
+## 1.3 (2026-11-16)
+
+- **Similar galleries** under a gallery's pictures.
+
 ## 1.2 (2026-11-12)
 
 - **Performer pages:** two more rows above Similar Performers: **Galleries** they're in (tagged on the

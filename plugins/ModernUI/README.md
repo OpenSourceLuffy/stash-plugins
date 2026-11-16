@@ -56,7 +56,9 @@ A cleaner, app-like look for Stash, built to feel good on a phone as well as a c
 - On an image's page, click the picture to see it full screen. Zoom in with the mouse wheel, a
   trackpad or two-finger pinch, or a double-click / double-tap, and drag to move around. Click
   outside the picture, swipe down, press Esc or tap **Close** to go back. While zoomed out, swipe (or drag, or
-  use the arrow keys) to the next or previous image without leaving full screen.
+  use the arrow keys) to the next or previous image without leaving full screen. On a computer, small
+  **‹ ›** buttons at the sides do the same (they're hidden on phones, where you swipe). The image's page
+  itself has them too, at the sides of the picture.
 - Vertical videos whose cover is several frames side by side (e.g. from
   [Vertical Stitcher](../VerticalStitcher)) show just the middle frame in the tall phone player
   before you press play, instead of a thin strip.
@@ -81,19 +83,19 @@ A cleaner, app-like look for Stash, built to feel good on a phone as well as a c
   the phone's own video player, which would keep the swipe from reaching Stash.) To use the
   iPhone's own player instead, double-tap the video, or tap **Native Player** (top right) while
   in full screen; tap Done there to come back. **✕ Exit** (top left) leaves full screen.
-  The **← gallery** and **← Galleries** buttons are hidden on phones, since swiping down does the same.
+- A round **✕** in the top right of gallery, performer, image, tag and studio pages (the same spot on each) does the same as swiping down: back to wherever you opened the page from, e.g. the Images list rather than the image's gallery. It's hidden on phones, where you swipe down instead (unless swiping is turned off).
 - In the edit dialog for several selected items, **Remove** lists every tag, performer, gallery or
   group the selected items have now (most common first, with how many have it): tap the ones to
   remove, or **All**.
 
 **Scenes**
-- **Show timeline / Hide timeline** in a scene's ⋮ menu: the strip of thumbnails and markers under the video. Remembered separately for phones (off at first, as in Stash, which never shows it there) and bigger screens (on at first). On a phone, drag the strip with a finger and tap a thumbnail to jump there. Needs the scene's sprites (Tasks → Generate → Sprites).
+- **Show timeline / Hide timeline** in a scene's ⋮ menu: the strip of thumbnails and markers under the video. Remembered separately for phones and bigger screens, and off at first on both; on a computer there's also a small **Show timeline / Hide timeline** button above the video. On a phone, drag the strip with a finger and tap a thumbnail to jump there. Needs the scene's sprites (Tasks → Generate → Sprites).
 - On wide screens, details sit under the video instead of in a side panel, with the studio logo beside the title.
 
 **Images and galleries**
 - Image details (title, rating, tabs) sit under the picture on wide screens, like scenes. You can change this in the settings.
-- Gallery pages show the gallery's name at the top, with its cover next to it and a **← Galleries** button that takes you back to the list of galleries (as you left it). The details panel starts closed; you can change this in the settings.
-- An image that's in a gallery has a **← gallery name** button (with the gallery's cover) above it, back to the gallery you came from (or its gallery, if you opened the image some other way). On phones, swipe down on the picture instead.
+- Gallery pages look like a performer's page on a computer: the cover on the left, and the name, rating, details, tags and performers beside it, above the pictures (instead of Stash's side panel). **Gallery details beside the pictures** brings back the side panel.
+- **Show only** on a gallery's pictures: a row of the performers (with their picture) and tags on the gallery's pictures, most used first, each with how many pictures have it. Tap one to see only those pictures, tap more to narrow it down (the counts follow what's left), tap again or **✕ Show all** to undo. It's Stash's own filter, so Back, paging and sorting work as usual. Scrolls sideways on a phone. Turn it off with **Hide the gallery "Show only" row**.
 - Scene, image and gallery pages show the studio as a **Studio:** line just above the performers, keeping the title area to the title, date and buttons, on the page's own background.
 - In the edit dialog for several items, the chosen **Overwrite / Add / Remove** button is highlighted. Switching away from Remove empties the box, so what you picked to remove isn't added instead.
 
@@ -135,7 +137,9 @@ Under **Settings → Plugins → Modern UI**:
 | Cards per row on phones | `1` or `2` (default). Image grids show one extra. |
 | Scene details beside the video | Keep Stash's side panel on scene pages on wide screens. |
 | Image details beside the picture | Keep Stash's side panel on image pages on wide screens. |
-| Open gallery details panel by default | Start gallery pages with the details panel open. |
+| Gallery details beside the pictures | Keep Stash's side panel on gallery pages (wide screens) instead of the cover and details above the pictures. |
+| Open gallery details panel by default | With the side panel kept, start with it open. |
+| Hide the gallery "Show only" row | Turn off the performer / tag row above a gallery's pictures. |
 | Hide quick filters | Turn off the Quick filters row under the search box. |
 | Disable mobile tweaks | Turn off the phone layout. |
 | Hide details on selected cards | Don't show the organized / tags / performers strip on cards while selecting. |

@@ -6,6 +6,9 @@ that plugin's changes.
 
 ## 1.5 (2026-11-11)
 
+- **AI setup & troubleshooting** page (`/ai-setup`, linked from Settings → Tasks and Settings → Plugins): checks Ollama, the model, the face helper and its models, picture and library access, scans and settings, with fixes; a timed AI test, recent errors, common problems and a copyable report. Also the task **Setup check: write a report to the log**.
+- Review → Tags has **Similar** (tags to merge, or to nest as sub-tags) and **New** (groups of look-alike pictures no tag covers, to make into a tag or add to one). The bulk Edit window has look-alike tag suggestions for the selected items. The face helper can group picture fingerprints (run `setup.sh` again to update it).
+- No suggestion rows in Stash's scrape dialog: on a computer the face row covered the scraped performers' box.
 - Renamed **Better Organizing AI Add-on (local AI)** (it was Better Tagging AI Add-on): it does a lot more than tagging now. Its ID and folder are unchanged, so settings and saved data carry over.
 - Now called **Better Tagging AI Add-on (local AI)**, with a shorter README: features first, setup at the end, and how it differs from other Stash AI plugins.
 - The face helper's small models (YuNet, SFace, NudeNet) now come with the plugin, with their

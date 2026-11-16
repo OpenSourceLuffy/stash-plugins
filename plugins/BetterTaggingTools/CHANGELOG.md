@@ -6,6 +6,7 @@ only bring the other plugin's changes.
 
 ## 2.3 (2026-11-11)
 
+- No suggestion rows in Stash's scrape dialog.
 - Renamed **Better Organizing Tools** (it was Better Tagging Tools), to match the AI add-on. Its ID and folder are unchanged, so settings and saved data carry over.
 - **Patreon** accounts count for studios from accounts: `patreon.com/name`, `patreon.com/c/name` or
   `Patreon: name` in a file name, title, details, URL or watermark, and `patreon/name` in a

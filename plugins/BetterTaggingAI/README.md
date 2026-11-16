@@ -100,6 +100,16 @@ Tapping a tab goes back to the action you used last there.
 - *Suggested*: tags that 50% or more of the 20 closest look-alikes you've tagged have.
 - *Check*: "Does [tag] fit?" when under 5% of its look-alikes have it, only for tags look-alikes
   judge well. **✓ It fits** never asks again.
+- *Similar*: **Merge these two tags?** for the same name written differently (*Toy* / *Toys*) or two
+  tags that are nearly always together (pick which to keep and its name; the other becomes an alias),
+  and **Make [tag] a sub-tag of [tag]?** when one name sits inside the other (*Solo Female* under
+  *Solo*) and they often go together. A gallery counts as one place, so a long comic whose pages all
+  share tags doesn't make them look alike. Undo puts a merged tag back with its items.
+- *New*: **New tag for these?** for a group of pictures that look alike (each fingerprint compared
+  after taking away the library's average look) and that no tag covers yet: type a name, or **…or add
+  them to a tag you already have** (the tags already on some of them are listed). They may already
+  have other tags or performers. A group that's mostly one gallery or folder isn't suggested (that's
+  the gallery).
 
 **Studios** (mostly the ones made from watermarks)
 - *Suggested*: **Add these to [studio]?** for items without a studio in galleries or folders where
@@ -138,6 +148,9 @@ small files in the plugin's folder.
   performers, studio, tags and file name.
 - **Galleries** box (images): the galleries its 20 closest look-alikes are in, e.g. `+ Holiday 64%`.
 - Performer **Edit**: **Ask AI for details** suggests hair and eye colour, tattoos and piercings.
+- The bulk **Edit** window (several scenes or images selected): an **AI** row under **Tags** with
+  the look-alike tags that suit at least a quarter of them, e.g. `+ Beach 4/6`; **Add common** adds
+  the ones that suit half or more.
 
 Nothing is saved until you click a suggestion and save.
 
@@ -185,6 +198,15 @@ once at **AI: night time** (default 03:00), so a big scan doesn't hold Stash up 
   and Suggested rows also count how alike faces and pictures look.
 
 ## Setup
+
+> **Something not working?** Open **AI setup & troubleshooting** (a link above this add-on's tasks
+> under Settings → Tasks, and under it in Settings → Plugins; or go to `/ai-setup`). It checks Ollama
+> and the model (installed, can see pictures, loaded), the face helper and each of its models,
+> whether Stash can fetch pictures and reach your library files, ffmpeg, disk space, how much has been
+> scanned, the settings and tonight's run. Each problem comes with how to fix it. It also has **Test
+> the AI on a picture** (a real request, timed), recent errors from Stash's log, a list of common
+> problems with fixes, and **Copy report** to paste when asking for help. The task **Setup check:
+> write a report to the log** writes the same checks to the log.
 
 You need two things on the computer Stash runs on (or one it can reach). Each is optional; anything
 that needs a missing part says so in the log and does nothing.

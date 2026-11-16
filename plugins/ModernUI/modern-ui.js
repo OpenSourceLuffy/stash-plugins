@@ -77,6 +77,7 @@
   body.toggle("mui-fit-contain", !!cfg.showWholePictures);
   body.toggle("mui-scene-stack", !cfg.sceneDetailsBeside);
   body.toggle("mui-image-stack", !cfg.imageDetailsBeside);
+  body.toggle("mui-gallery-stack", !cfg.galleryDetailsBeside);
 
   const RATIOS = { portrait: "3 / 4", square: "1 / 1", landscape: "4 / 3", wide: "16 / 9" };
   const shape = String(cfg.pictureShape || "").trim().toLowerCase();
@@ -101,17 +102,20 @@
   setupStudioLine();
   setupHomeCustomiseDrag();
   setupItemReturn();
+  setupExitX();
   setupTagIndex();
   if (!cfg.stayOnEditAfterSave) setupBackToDetailsOnSave();
   setupVerticalPoster();
   if (!cfg.hideSelectedInfo) setupSelectedInfo();
-  if (!cfg.showGalleryDetails) setupGalleryPanelClosed();
+  if (cfg.galleryDetailsBeside && !cfg.showGalleryDetails) setupGalleryPanelClosed();
+  if (!cfg.disableGalleryFilter) setupGalleryQuickFilter();
   if (!cfg.disableQuickFilters) setupQuickFilters();
 
   // the full-screen viewer swipes between images too, unless that's off
   const imageNav = cfg.disableImageSwipe ? null : setupImageSwipe();
   if (!cfg.disableImageSwipe) setupSceneSwipeUp();
   setupImageViewer(imageNav);
+  if (imageNav) setupImagePageNav(imageNav);
 
   // ------------------------------------------------------------------
   // Quick filters: a scrolling row of buttons between a list's toolbar
@@ -421,6 +425,7 @@
       '<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/>' +
       '<circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg>';
 
+    let closedFor = null; // the sub-list page whose filters were closed already
     function sync() {
       document.querySelectorAll(".sidebar-pane-content").forEach((content) => {
         const original = content.querySelector(":scope > .sidebar-toggle-button-container .sidebar-toggle-button");
@@ -441,6 +446,16 @@
           toolbar.insertBefore(btn, toolbar.firstChild);
         }
         const pane = content.closest(".sidebar-pane");
+        // A list inside a tag's / performer's / studio's / group's page starts
+        // with the filters closed (Stash opens them on some of those tabs,
+        // e.g. a tag's Studios). Once per tab you open; after that it's yours.
+        const sub = location.pathname.match(/^\/(tags|performers|studios|groups)\/\d+(\/\w+)?/);
+        if (pane && sub && !pane.classList.contains("hide-sidebar") && closedFor !== sub[0]) {
+          closedFor = sub[0];
+          original.click();
+          return;
+        }
+        if (pane && sub) closedFor = sub[0];
         const open = !!pane && !pane.classList.contains("hide-sidebar");
         if (btn.classList.contains("active") !== open) btn.classList.toggle("active", open);
         btn.setAttribute("aria-pressed", String(open));
@@ -748,7 +763,6 @@
         box.dataset.muiGallery = id;
         box.classList.add("mui-gallery-head");
         box.insertBefore(cover(id, "mui-gallery-cover"), source);
-        box.appendChild(exitButton("← Galleries", "Back to all galleries", toGalleries));
       }
 
       // above the images (wide screens)
@@ -761,7 +775,7 @@
         heading.className = "mui-gallery-title mui-gallery-head";
         heading.dataset.id = id;
         const text = document.createElement("h2");
-        heading.append(cover(id, "mui-gallery-cover"), text, exitButton("← Galleries", "Back to all galleries", toGalleries));
+        heading.append(cover(id, "mui-gallery-cover"), text);
         container.insertBefore(heading, container.firstChild);
       }
       const text = heading.querySelector("h2");
@@ -777,12 +791,13 @@
     function syncImage(imageId) {
       const row = document.querySelector(".image-container")?.parentElement;
       if (!row) return;
-      let bar = row.querySelector(":scope > .mui-image-crumb");
-      if (bar && bar.dataset.image === imageId) return;
-      bar?.remove();
+      if (row.dataset.muiImage === imageId) return;
+      row.dataset.muiImage = imageId;
       galleryBack = null;
       const list = galleriesOf.get(imageId);
       if (!list) {
+        if (galleriesOf.has(imageId)) return; // loading
+        delete row.dataset.muiImage; // look again once it's loaded
         galleriesOf.set(imageId, null);
         fetch("/graphql", {
           method: "POST",
@@ -805,14 +820,9 @@
       const last = store.get(LAST_KEY);
       const g = list.find((x) => last && x.id === last.id) || list[0];
       const url = last && last.id === g.id ? last.url : "/galleries/" + g.id;
-      bar = document.createElement("div");
-      bar.className = "mui-image-crumb";
-      bar.dataset.image = imageId;
+      // (only used when there's nowhere to go back to: the ✕ goes back to
+      // wherever you opened the image from)
       galleryBack = () => goBack(url, (path) => path === "/galleries/" + g.id);
-      const btn = exitButton("", "Back to the gallery " + g.title, () => galleryBack());
-      btn.append(cover(g.id, "mui-crumb-cover"), document.createTextNode("← " + g.title));
-      bar.appendChild(btn);
-      row.insertBefore(bar, row.firstChild);
     }
 
     function sync() {
@@ -1018,13 +1028,14 @@
     const PHONE_CHECK = "only screen and (max-width: 576px)"; // Stash's isMobile()
     const PHONE = window.matchMedia("(max-width: 576px)");
     const SCENE = /^\/scenes\/\d+/;
-    const key = () => (PHONE.matches ? "mui-timeline-phone" : "mui-timeline-wide");
+    // (wide: a new key, as it now starts hidden there)
+    const key = () => (PHONE.matches ? "mui-timeline-phone" : "mui-timeline-wide2");
     const wantShow = () => {
       let v = null;
       try {
         v = localStorage.getItem(key());
       } catch (e) {}
-      return v ? v === "show" : !PHONE.matches; // Stash's default
+      return v ? v === "show" : false; // hidden until you show it
     };
     const onScene = () => SCENE.test(location.pathname);
 
@@ -1040,9 +1051,22 @@
       return realMatchMedia(q);
     };
 
+    // computers: a small "Timeline" button under the video to show / hide it
+    const tbtn = document.createElement("button");
+    tbtn.type = "button";
+    tbtn.className = "mui-timeline-btn";
+    tbtn.addEventListener("click", () => set(!wantShow()));
     function sync() {
       document.body.classList.toggle("mui-timeline-hidden", onScene() && !wantShow());
+      const player = onScene() && !PHONE.matches && document.querySelector(".scene-player-container");
+      if (!player) { tbtn.remove(); return; }
+      if (tbtn.previousElementSibling !== player) player.after(tbtn);
+      const label = wantShow() ? "Hide timeline" : "Show timeline";
+      if (tbtn.textContent !== label) tbtn.textContent = label;
+      tbtn.setAttribute("aria-pressed", String(wantShow()));
     }
+    new MutationObserver(() => { if (onScene() && !tbtn.isConnected) sync(); })
+      .observe(document.documentElement, { childList: true, subtree: true });
     function set(show) {
       try {
         localStorage.setItem(key(), show ? "show" : "hide");
@@ -1426,6 +1450,39 @@
   // list, a gallery, the home page...) at the same scroll position, however
   // many of the same kind you swiped through since.
   // ------------------------------------------------------------------
+  // The ✕ on an item's page (gallery, performer, image, tag, studio): the
+  // same spot on every page, and it does what swiping down does - back to
+  // wherever you opened it from
+  function setupExitX() {
+    const KINDS = /^\/(galleries|performers|images|tags|studios)\/\d+/;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "mui-item-x";
+    btn.title = "Back";
+    btn.setAttribute("aria-label", "Back");
+    btn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      if (itemBack) itemBack();
+      else history.back();
+    });
+    const sync = () => {
+      const on = KINDS.test(location.pathname);
+      if (on && !btn.isConnected) document.body.appendChild(btn);
+      else if (!on && btn.isConnected) btn.remove();
+    };
+    window.addEventListener("popstate", () => setTimeout(sync, 0));
+    for (const fn of ["pushState", "replaceState"]) {
+      const orig = history[fn];
+      history[fn] = function () {
+        const r = orig.apply(this, arguments);
+        setTimeout(sync, 0);
+        return r;
+      };
+    }
+    sync();
+  }
+
   function setupItemReturn() {
     const KEY = "mui-item-origins"; // url -> {depth, scroll}
     let map = {};
@@ -1539,6 +1596,156 @@
       });
     }).observe(document.body, { childList: true, subtree: true });
     check();
+  }
+
+  // ------------------------------------------------------------------
+  // Gallery page: filter its pictures by a performer or tag in them
+  // ------------------------------------------------------------------
+  // A row of chips above the pictures: the performers and tags on the
+  // gallery's pictures, most used first (ones on every picture are left out,
+  // they'd change nothing). Tap one to show only the pictures with it, tap
+  // more to narrow it down, tap again (or "Show all") to undo. It's Stash's
+  // own filter in the address, so Back, paging and sorting keep working.
+  function setupGalleryQuickFilter() {
+    const PAGE = /^\/galleries\/(\d+)(?:\/images)?\/?$/;
+    const data = new Map(); // gallery id -> promise of {total, performers, tags}
+    let bar = null;
+    let shownFor = "";
+
+    const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+    const clean = (t) => String(t).replace(/[()"\\]/g, "").trim();
+
+    function load(id) {
+      if (!data.has(id)) {
+        data.set(id, fetch("/graphql", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            query: `query ($id: ID!) { findImages(image_filter: { galleries: { value: [$id], modifier: INCLUDES } }, filter: { per_page: -1 }) {
+              count images { performers { id name } tags { id name } } } }`,
+            variables: { id },
+          }),
+        }).then((r) => r.json()).then((j) => {
+          const res = j.data.findImages;
+          const names = { performers: new Map(), tags: new Map() };
+          const images = res.images.map((im) => {
+            const one = {};
+            for (const key of ["performers", "tags"]) {
+              one[key] = new Set(im[key].map((x) => { names[key].set(x.id, x.name); return x.id; }));
+            }
+            return one;
+          });
+          return { images, names };
+        }).catch(() => null));
+      }
+      return data.get(id);
+    }
+
+    // which performers / tags the address filters on now
+    function picked() {
+      const out = { performers: new Map(), tags: new Map() };
+      new URLSearchParams(location.search).getAll("c").forEach((c) => {
+        const type = (c.match(/"type":"(\w+)"/) || [])[1];
+        if (!out[type]) return;
+        for (const m of c.matchAll(/"id":"(\d+)","label":"([^"]*)"/g)) out[type].set(m[1], m[2]);
+      });
+      return out;
+    }
+
+    function go(sel) {
+      const params = new URLSearchParams(location.search);
+      const keep = params.getAll("c").filter((c) => !/"type":"(performers|tags)"/.test(c));
+      params.delete("c");
+      params.delete("p"); // back to the first page
+      keep.forEach((c) => params.append("c", c));
+      for (const type of ["performers", "tags"]) {
+        if (!sel[type].size) continue;
+        const items = [...sel[type]].map(([id, label]) => `("id":"${id}","label":"${clean(label)}")`).join(",");
+        params.append("c", `("type":"${type}","value":("items":[${items}],"excluded":[]${type === "tags" ? ',"depth":0' : ""}),"modifier":"INCLUDES_ALL")`);
+      }
+      const q = params.toString();
+      routerNavigate(location.pathname + (q ? "?" + q : ""));
+    }
+
+    // the chips for what's picked now: counts within the pictures that match,
+    // and only ones that would narrow it down further
+    function chipsFor(info, sel) {
+      const match = info.images.filter((im) => ["performers", "tags"].every((k) => [...sel[k].keys()].every((id) => im[k].has(id))));
+      const out = { total: match.length };
+      for (const key of ["performers", "tags"]) {
+        const n = new Map();
+        match.forEach((im) => im[key].forEach((id) => n.set(id, (n.get(id) || 0) + 1)));
+        out[key] = [...n].filter(([id, c]) => c < match.length && !sel[key].has(id))
+          .map(([id, c]) => ({ id, name: info.names[key].get(id), n: c }))
+          .sort((a, b) => b.n - a.n || a.name.localeCompare(b.name))
+          .slice(0, key === "performers" ? 12 : 24);
+      }
+      return out;
+    }
+
+    function render(all) {
+      const sel = picked();
+      const any = sel.performers.size + sel.tags.size > 0;
+      const info = chipsFor(all, sel);
+      const chip = (type, x) => {
+        const on = sel[type].has(x.id);
+        const pic = type === "performers" ? `<img src="/performer/${esc(x.id)}/image" alt="" loading="lazy">` : "";
+        return `<button type="button" class="mui-gqf-chip${on ? " on" : ""}${pic ? " has-pic" : ""}" data-type="${type}" data-id="${esc(x.id)}" data-name="${esc(x.name)}" aria-pressed="${on}" title="${on ? "Show all again" : "Only pictures with " + esc(x.name)}">${pic}<span>${esc(x.name)}</span><small>${x.n}</small></button>`;
+      };
+      // what's picked comes first, to undo
+      const extra = (type) => [...sel[type]].map(([id, name]) => ({ id, name: all.names[type].get(id) || name, n: "" }));
+      const perf = [...extra("performers"), ...info.performers];
+      const tags = [...extra("tags"), ...info.tags];
+      bar.innerHTML =
+        `<span class="mui-gqf-label">Show only</span>` +
+        `<button type="button" class="mui-gqf-chip mui-gqf-all${any ? "" : " on"}" data-all="1" aria-pressed="${!any}">${any ? "✕ Show all" : "All " + info.total}</button>` +
+        perf.map((x) => chip("performers", x)).join("") +
+        (perf.length && tags.length ? '<span class="mui-gqf-sep" aria-hidden="true"></span>' : "") +
+        tags.map((x) => chip("tags", x)).join("");
+    }
+
+    function tick() {
+      const id = (location.pathname.match(PAGE) || [])[1];
+      const toolbar = id && document.querySelector(".gallery-container .filtered-list-toolbar");
+      if (!toolbar) {
+        if (bar) bar.remove();
+        shownFor = "";
+        return;
+      }
+      if (!bar) {
+        bar = document.createElement("div");
+        bar.className = "mui-gqf";
+        bar.setAttribute("role", "group");
+        bar.setAttribute("aria-label", "Show only pictures with");
+        bar.addEventListener("click", (e) => {
+          const b = e.target.closest(".mui-gqf-chip");
+          if (!b) return;
+          const sel = picked();
+          if (b.dataset.all) { sel.performers.clear(); sel.tags.clear(); }
+          else {
+            const m = sel[b.dataset.type];
+            if (m.has(b.dataset.id)) m.delete(b.dataset.id);
+            else m.set(b.dataset.id, b.dataset.name);
+          }
+          go(sel);
+        });
+      }
+      // keep it right under the toolbar (after Modern UI's quick filters, if any)
+      const after = toolbar.nextElementSibling && toolbar.nextElementSibling.classList.contains("mui-qf") ? toolbar.nextElementSibling : toolbar;
+      if (bar.previousElementSibling !== after) after.after(bar);
+      const key = id + "|" + location.search;
+      if (key === shownFor) return;
+      shownFor = key;
+      load(id).then((info) => {
+        if (shownFor !== key || !info) return;
+        const first = chipsFor(info, { performers: new Map(), tags: new Map() });
+        bar.hidden = !first.performers.length && !first.tags.length;
+        render(info);
+      });
+    }
+    setInterval(tick, 400);
+    window.addEventListener("popstate", () => setTimeout(tick, 0));
+    tick();
   }
 
   // ------------------------------------------------------------------
@@ -2208,6 +2415,35 @@
   }
 
   // ------------------------------------------------------------------
+  // Image page on a computer: small ‹ › buttons at the sides of the picture,
+  // the same as the arrow keys / a swipe on a phone (hidden on touch screens)
+  function setupImagePageNav(nav) {
+    const PAGE = /^\/images\/\d+\/?$/;
+    const svg = (d) => `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${d}"/></svg>`;
+    const make = (dir) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "mui-image-nav " + (dir < 0 ? "prev" : "next");
+      b.title = dir < 0 ? "Previous (←)" : "Next (→)";
+      b.setAttribute("aria-label", dir < 0 ? "Previous picture" : "Next picture");
+      b.innerHTML = svg(dir < 0 ? "M15 5l-7 7 7 7" : "M9 5l7 7-7 7");
+      b.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); nav.go(dir); });
+      return b;
+    };
+    const btns = [make(-1), make(1)];
+    function sync() {
+      const box = PAGE.test(location.pathname) && document.querySelector(".image-container");
+      if (!box) { btns.forEach((b) => b.remove()); return; }
+      btns.forEach((b, i) => {
+        if (b.parentElement !== box) box.appendChild(b);
+        const has = !!nav.neighbour(i ? 1 : -1);
+        if (b.hidden === has) b.hidden = !has;
+      });
+    }
+    setInterval(sync, 400);
+    window.addEventListener("popstate", () => setTimeout(sync, 0));
+  }
+
   // Image page: click the picture to see it full screen and zoom in
   // ------------------------------------------------------------------
   // Zoom with the mouse wheel / trackpad pinch, pinch on a phone, or
@@ -2275,6 +2511,24 @@
       close.className = "mui-viewer-close";
       close.textContent = "✕ Close";
       box.append(pic, close);
+      // Computer: small ‹ › buttons at the sides, doing what a swipe does
+      // on a phone (hidden on touch screens by the CSS)
+      const navBtns = nav ? [-1, 1].map((dir) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "mui-viewer-nav " + (dir < 0 ? "prev" : "next");
+        b.setAttribute("aria-label", dir < 0 ? "Previous picture" : "Next picture");
+        b.title = dir < 0 ? "Previous (←)" : "Next (→)";
+        b.innerHTML = dir < 0
+          ? '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>'
+          : '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg>';
+        b.addEventListener("pointerdown", (e) => e.stopPropagation());
+        b.addEventListener("click", (e) => { e.stopPropagation(); step(dir); });
+        box.appendChild(b);
+        return b;
+      }) : [];
+      const syncNav = () => navBtns.forEach((b, i) => { b.hidden = !nav.neighbour(i ? 1 : -1); });
+      syncNav();
       document.body.appendChild(box);
       document.body.classList.add("mui-viewer-open");
 
@@ -2323,6 +2577,7 @@
         apply(true);
         busy = false;
         prefetch();
+        syncNav();
       }
 
       const apply = (animate) => {

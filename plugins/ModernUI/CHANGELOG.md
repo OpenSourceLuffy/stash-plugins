@@ -2,6 +2,24 @@
 
 Newest first. Versions are what Stash shows under Settings → Plugins.
 
+## 0.57 (2026-11-16)
+
+- A list on a tag's, performer's, studio's or group's page (e.g. a tag's Studios) starts with the filter sidebar closed; the Filters button opens it.
+- Gallery pages on a computer scroll as one page (the pictures no longer scroll in a box of their own).
+- Gallery details on a computer show at full height (no scroll box inside the page), never scroll sideways, and list performers as small cards.
+- Gallery pages on a computer look like a performer's page: the cover on the left and the details
+  beside it, above the pictures, instead of the side panel. **Gallery details beside the pictures**
+  brings the side panel back.
+- **Show only** above a gallery's pictures: tap a performer or tag on them to see just those pictures
+  (tap more to narrow it down, **✕ Show all** to undo).
+- One round **✕** in the same spot on gallery, performer, image, tag and studio pages, doing what
+  swiping down does (back to where you opened the page from). It replaces the **← Galleries** and
+  **← gallery** buttons; an image opened from the Images list now goes back to that list, not its gallery.
+- Scene timeline: off at first on computers too, with a small **Show timeline** button above the video.
+- An image's page on a computer has the same small **‹ ›** buttons at the sides of the picture.
+- Full-screen pictures on a computer have small **‹ ›** buttons to go to the previous / next one, like
+  swiping on a phone.
+
 ## 0.56 (2026-11-13)
 
 - The dashed **Filters (n)** button under the quick filters no longer disappears when no filter is
