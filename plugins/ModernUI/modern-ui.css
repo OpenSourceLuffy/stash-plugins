@@ -3630,3 +3630,53 @@ body.mui.mui-light .mui-gqf-chip:not(.on) { border-color: var(--mui-l-border); b
 @media (min-width: 992px) and (hover: hover) {
   .mui-gqf { flex-wrap: wrap; overflow: visible; }
 }
+
+/* The ✕ on gallery, performer, image, tag and studio pages: one round
+   button in the same spot everywhere (below the top bar on a computer) */
+.mui-item-x {
+  position: fixed;
+  top: calc(60px + env(safe-area-inset-top));
+  right: 16px;
+  z-index: 1035;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(20, 22, 26, 0.72);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  color: #fff;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+}
+@media (hover: hover) and (pointer: fine) {
+  .mui-item-x:hover { background: rgba(20, 22, 26, 0.9); }
+}
+@media (max-width: 576px) {
+  .mui-item-x { top: calc(12px + env(safe-area-inset-top)); right: 12px; }
+}
+/* opened from Better Organizing AI's Review page: its own ✕ goes back there */
+body:has(#bta-review-return) .mui-item-x { display: none; }
+/* full-screen viewers have their own Close */
+body.mui-viewer-open .mui-item-x { display: none; }
+/* the old labelled back buttons are gone */
+body.mui .mui-exit, body.mui .mui-image-crumb { display: none !important; }
+
+/* Scene page on a computer: show / hide the timeline under the video */
+.mui-timeline-btn {
+  display: block;
+  margin: 6px 0 2px auto;
+  padding: 2px 12px;
+  border: 1px solid rgba(128, 128, 128, 0.35);
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font-size: 0.78rem;
+  opacity: 0.7;
+  cursor: pointer;
+}
+.mui-timeline-btn:hover { opacity: 1; }

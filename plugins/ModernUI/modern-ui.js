@@ -102,6 +102,7 @@
   setupStudioLine();
   setupHomeCustomiseDrag();
   setupItemReturn();
+  setupExitX();
   setupTagIndex();
   if (!cfg.stayOnEditAfterSave) setupBackToDetailsOnSave();
   setupVerticalPoster();
@@ -761,7 +762,6 @@
         box.dataset.muiGallery = id;
         box.classList.add("mui-gallery-head");
         box.insertBefore(cover(id, "mui-gallery-cover"), source);
-        box.appendChild(exitButton("← Galleries", "Back to all galleries", toGalleries));
       }
 
       // above the images (wide screens)
@@ -774,7 +774,7 @@
         heading.className = "mui-gallery-title mui-gallery-head";
         heading.dataset.id = id;
         const text = document.createElement("h2");
-        heading.append(cover(id, "mui-gallery-cover"), text, exitButton("← Galleries", "Back to all galleries", toGalleries));
+        heading.append(cover(id, "mui-gallery-cover"), text);
         container.insertBefore(heading, container.firstChild);
       }
       const text = heading.querySelector("h2");
@@ -790,12 +790,13 @@
     function syncImage(imageId) {
       const row = document.querySelector(".image-container")?.parentElement;
       if (!row) return;
-      let bar = row.querySelector(":scope > .mui-image-crumb");
-      if (bar && bar.dataset.image === imageId) return;
-      bar?.remove();
+      if (row.dataset.muiImage === imageId) return;
+      row.dataset.muiImage = imageId;
       galleryBack = null;
       const list = galleriesOf.get(imageId);
       if (!list) {
+        if (galleriesOf.has(imageId)) return; // loading
+        delete row.dataset.muiImage; // look again once it's loaded
         galleriesOf.set(imageId, null);
         fetch("/graphql", {
           method: "POST",
@@ -818,14 +819,9 @@
       const last = store.get(LAST_KEY);
       const g = list.find((x) => last && x.id === last.id) || list[0];
       const url = last && last.id === g.id ? last.url : "/galleries/" + g.id;
-      bar = document.createElement("div");
-      bar.className = "mui-image-crumb";
-      bar.dataset.image = imageId;
+      // (only used when there's nowhere to go back to: the ✕ goes back to
+      // wherever you opened the image from)
       galleryBack = () => goBack(url, (path) => path === "/galleries/" + g.id);
-      const btn = exitButton("", "Back to the gallery " + g.title, () => galleryBack());
-      btn.append(cover(g.id, "mui-crumb-cover"), document.createTextNode("← " + g.title));
-      bar.appendChild(btn);
-      row.insertBefore(bar, row.firstChild);
     }
 
     function sync() {
@@ -1031,13 +1027,14 @@
     const PHONE_CHECK = "only screen and (max-width: 576px)"; // Stash's isMobile()
     const PHONE = window.matchMedia("(max-width: 576px)");
     const SCENE = /^\/scenes\/\d+/;
-    const key = () => (PHONE.matches ? "mui-timeline-phone" : "mui-timeline-wide");
+    // (wide: a new key, as it now starts hidden there)
+    const key = () => (PHONE.matches ? "mui-timeline-phone" : "mui-timeline-wide2");
     const wantShow = () => {
       let v = null;
       try {
         v = localStorage.getItem(key());
       } catch (e) {}
-      return v ? v === "show" : !PHONE.matches; // Stash's default
+      return v ? v === "show" : false; // hidden until you show it
     };
     const onScene = () => SCENE.test(location.pathname);
 
@@ -1053,9 +1050,22 @@
       return realMatchMedia(q);
     };
 
+    // computers: a small "Timeline" button under the video to show / hide it
+    const tbtn = document.createElement("button");
+    tbtn.type = "button";
+    tbtn.className = "mui-timeline-btn";
+    tbtn.addEventListener("click", () => set(!wantShow()));
     function sync() {
       document.body.classList.toggle("mui-timeline-hidden", onScene() && !wantShow());
+      const player = onScene() && !PHONE.matches && document.querySelector(".scene-player-container");
+      if (!player) { tbtn.remove(); return; }
+      if (tbtn.previousElementSibling !== player) player.after(tbtn);
+      const label = wantShow() ? "Hide timeline" : "Show timeline";
+      if (tbtn.textContent !== label) tbtn.textContent = label;
+      tbtn.setAttribute("aria-pressed", String(wantShow()));
     }
+    new MutationObserver(() => { if (onScene() && !tbtn.isConnected) sync(); })
+      .observe(document.documentElement, { childList: true, subtree: true });
     function set(show) {
       try {
         localStorage.setItem(key(), show ? "show" : "hide");
@@ -1439,6 +1449,39 @@
   // list, a gallery, the home page...) at the same scroll position, however
   // many of the same kind you swiped through since.
   // ------------------------------------------------------------------
+  // The ✕ on an item's page (gallery, performer, image, tag, studio): the
+  // same spot on every page, and it does what swiping down does - back to
+  // wherever you opened it from
+  function setupExitX() {
+    const KINDS = /^\/(galleries|performers|images|tags|studios)\/\d+/;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "mui-item-x";
+    btn.title = "Back";
+    btn.setAttribute("aria-label", "Back");
+    btn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      if (itemBack) itemBack();
+      else history.back();
+    });
+    const sync = () => {
+      const on = KINDS.test(location.pathname);
+      if (on && !btn.isConnected) document.body.appendChild(btn);
+      else if (!on && btn.isConnected) btn.remove();
+    };
+    window.addEventListener("popstate", () => setTimeout(sync, 0));
+    for (const fn of ["pushState", "replaceState"]) {
+      const orig = history[fn];
+      history[fn] = function () {
+        const r = orig.apply(this, arguments);
+        setTimeout(sync, 0);
+        return r;
+      };
+    }
+    sync();
+  }
+
   function setupItemReturn() {
     const KEY = "mui-item-origins"; // url -> {depth, scroll}
     let map = {};

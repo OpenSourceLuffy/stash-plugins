@@ -1309,8 +1309,8 @@ body.mui-light .bta-batch-foot { background: linear-gradient(to bottom, transpar
 /* ✕ on a performer's / tag's page opened from Review */
 #bta-review-return {
   position: fixed;
-  top: calc(12px + env(safe-area-inset-top));
-  right: 12px;
+  top: calc(60px + env(safe-area-inset-top)); /* the same spot as Modern UI's ✕ */
+  right: 16px;
   z-index: 1070;
   width: 40px;
   height: 40px;
@@ -1760,4 +1760,7 @@ body.mui-light .bta-batch-foot { background: linear-gradient(to bottom, transpar
 .scrape-dialog .pts-suggest-rows,
 .scrape-dialog .pts-ai-note {
   display: none !important;
+}
+@media (max-width: 576px) {
+  #bta-review-return { top: calc(12px + env(safe-area-inset-top)); right: 12px; }
 }
