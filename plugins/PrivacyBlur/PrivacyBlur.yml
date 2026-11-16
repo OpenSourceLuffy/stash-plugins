@@ -1,10 +1,11 @@
 name: Privacy Blur
-description: A settings switch that blurs every cover, thumbnail, photo and video in Stash, with optional blurring of names and titles. Handy for taking screenshots or browsing around other people.
-version: "1.3"
+description: A settings switch that blurs every cover, thumbnail, photo and video in Stash - or replaces them with safe stand-in pictures and made-up names, titles and tags. Handy for taking screenshots or browsing around other people.
+version: "1.4"
 url: https://github.com/OpenSourceLuffy/stash-plugins/tree/main/plugins/PrivacyBlur
 ui:
   javascript:
     - privacy-blur.js
+    - privacy-blur-replace.js
   css:
     - privacy-blur.css
 
@@ -17,13 +18,21 @@ settings:
     displayName: Blur strength
     description: How strong the blur is, from 4 (light) to 40 (very strong). Default 18.
     type: NUMBER
+  replaceMode:
+    displayName: Replace instead of blurring
+    description: Instead of a blur, every picture and video shows a safe stand-in (simple drawn landscapes, the same one each time for the same item), and - with the switches below - names, studios, titles and tags show made-up ones. Only the screen changes.
+    type: BOOLEAN
   blurNames:
-    displayName: Also blur performer and studio names
+    displayName: Also hide performer and studio names
     description: Blur performer names (cards, performer pages, suggestion rows) and the studio name in the corner of each card while the blur is on.
     type: BOOLEAN
   blurTitles:
-    displayName: Also blur titles
+    displayName: Also hide titles
     description: Blur scene, image, gallery and group titles and file names while the blur is on.
+    type: BOOLEAN
+  blurTags:
+    displayName: Also hide tags
+    description: Blur tag names (or, with "Replace instead of blurring", show made-up ones) while it's on.
     type: BOOLEAN
   peekOnHover:
     displayName: Peek on hover
