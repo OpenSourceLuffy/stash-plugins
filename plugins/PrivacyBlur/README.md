@@ -26,6 +26,14 @@ It only changes what's shown on your screen. Nothing in your library is changed.
 
 ## Replace instead of blurring
 
+![Scene cards with stand-in pictures, made-up titles and studio names](../../docs/screenshots/PB_Replace_Scenes.png)
+
+| A gallery page | On a phone |
+| --- | --- |
+| ![A gallery with a stand-in cover, made-up title, tags, studio, details and performers](../../docs/screenshots/PB_Replace_Gallery.png) | <img src="../../docs/screenshots/PB_Replace_Phone.png" width="260" alt="The home page on a phone with stand-in pictures"> |
+
+*Replace mode on a real library: every picture, name, title, tag and detail on screen is a stand-in.*
+
 Turn on **Replace instead of blurring** and nothing is blurred: every picture and video shows a
 simple drawn stand-in instead (landscapes, sunsets, a skyline, a beach, a forest... 24 in all, in
 different colours), and, with the **Also hide** switches on, performer and studio names, titles,

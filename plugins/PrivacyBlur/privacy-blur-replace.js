@@ -97,7 +97,7 @@
     const used = new Set(map.values());
     let i = hash(kind + ":" + real) % list.length;
     for (let n = 0; n < list.length && used.has(list[i]); n++) i = (i + 1) % list.length;
-    const name = used.size >= list.length ? `${list[i]} ${Math.floor(map.size / list.length) + 1}` : list[i];
+    const name = list[i]; // (once they've all been used, they repeat)
     map.set(real, name);
     return name;
   }
@@ -206,6 +206,27 @@
       TEXT.filter(([k]) => k === "performer" || k === "studio").forEach(([k, sel]) => document.querySelectorAll(sel).forEach((el) => swapText(el, k)));
     }
     if (root.classList.contains("pb-titles")) {
+      // "Studio Code: <code>": a made-up code (the label and the value can
+      // be separate bits of text)
+      document.querySelectorAll("h6, dd, .detail-item").forEach((el) => {
+        if (!/^\s*Studio Code/.test(el.textContent) || el.querySelector("h6, dd, .detail-item")) return;
+        const nodes = textNodes(el);
+        const at = nodes.findIndex((n) => /Studio Code/.test(origText.has(n) ? origText.get(n).real : n.nodeValue));
+        if (at < 0) return;
+        const parts = nodes.slice(at).map((n) => {
+          if (origText.has(n) && n.nodeValue !== origText.get(n).shown) origText.delete(n);
+          return origText.has(n) ? origText.get(n).real : n.nodeValue;
+        });
+        const real = parts.join("");
+        const code = real.replace(/^\s*Studio Code\s*:?\s*/, "").trim();
+        if (!code) return;
+        const shown = "Studio Code: SC-" + String(hash(code) % 90000 + 10000);
+        nodes.slice(at).forEach((n, k) => {
+          const want = k === 0 ? shown : "";
+          if (n.nodeValue !== want) n.nodeValue = want;
+          origText.set(n, { real: parts[k], shown: want });
+        });
+      });
       TEXT.filter(([k]) => k === "title" || k === "gallery" || k === "detail").forEach(([k, sel]) => document.querySelectorAll(sel).forEach((el) => swapText(el, k)));
     }
     if (root.classList.contains("pb-tags")) {
