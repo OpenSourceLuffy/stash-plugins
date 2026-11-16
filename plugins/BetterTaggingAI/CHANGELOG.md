@@ -6,6 +6,7 @@ that plugin's changes.
 
 ## 1.5 (2026-11-11)
 
+- Setup & troubleshooting: buttons that run the task fixing a check, **Run a task** with progress and Stop, and **Report a problem** (a filled-in GitHub issue to review and submit).
 - **AI setup & troubleshooting** page (`/ai-setup`, linked from Settings → Tasks and Settings → Plugins): checks Ollama, the model, the face helper and its models, picture and library access, scans and settings, with fixes; a timed AI test, recent errors, common problems and a copyable report. Also the task **Setup check: write a report to the log**.
 - Review → Tags has **Similar** (tags to merge, or to nest as sub-tags) and **New** (groups of look-alike pictures no tag covers, to make into a tag or add to one). The bulk Edit window has look-alike tag suggestions for the selected items. The face helper can group picture fingerprints (run `setup.sh` again to update it).
 - No suggestion rows in Stash's scrape dialog: on a computer the face row covered the scraped performers' box.

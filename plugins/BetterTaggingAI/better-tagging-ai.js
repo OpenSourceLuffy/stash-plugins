@@ -3000,6 +3000,69 @@
     ["New items aren't done at night", "The night timer runs inside Stash and stops when Stash restarts; the next scan starts it again. Or run \"AI: run tonight's new items now\"."],
   ];
   const STATUS = { ok: ["✓", "OK"], warn: ["!", "Check"], fail: ["✕", "Problem"], info: ["i", "Info"] };
+  // a check that a task fixes: its button (only shown when it isn't OK)
+  const FIX_TASKS = {
+    "look-alike-scan": "Look-alike tags: scan scenes and images",
+    "face-scan": "Faces: scan scenes and images",
+    "performers-faces-learned": "Faces: learn performers' faces",
+    "tonight-s-run": "AI: run tonight's new items now",
+  };
+  const ISSUES_URL = "https://github.com/OpenSourceLuffy/stash-plugins/issues/new";
+
+  // run one of the add-on's tasks; the page shows Stash's job list
+  const runTask = (name) => gql(`mutation ($p: ID!, $t: String!) { runPluginTask(plugin_id: $p, task_name: $t) }`, { p: PLUGIN_ID, t: name });
+
+  function Jobs({ tick }) {
+    const [jobs, setJobs] = React.useState([]);
+    React.useEffect(() => {
+      let live = true;
+      const load = () => gql("{ jobQueue { id description status progress } }").then((d) => live && setJobs(d.jobQueue || [])).catch(() => {});
+      load();
+      const t = setInterval(load, 2000);
+      return () => { live = false; clearInterval(t); };
+    }, [tick]);
+    if (!jobs.length) return h("div", { className: "bta-setup-detail" }, "Nothing running right now.");
+    return h("div", null, jobs.map((j) => h("div", { key: j.id, className: "bta-setup-job" },
+      h("div", { className: "bta-setup-title" }, j.description),
+      h("div", { className: "bta-setup-bar" }, h("span", { style: { width: `${Math.round((j.progress || 0) * 100)}%` } })),
+      h("div", { className: "bta-setup-detail" }, `${j.status === "RUNNING" ? "Running" : j.status === "READY" ? "Waiting its turn" : j.status.toLowerCase()}` +
+        (j.progress != null && j.progress >= 0 ? ` · ${Math.round(j.progress * 100)}%` : ""),
+        h("button", { type: "button", className: "btn btn-link btn-sm", onClick: () => gql("mutation ($id: ID!) { stopJob(job_id: $id) }", { id: j.id }) }, "Stop")))));
+  }
+
+  // "Report a problem": a GitHub issue, filled in, for you to read and send
+  function Report({ checks, res, test }) {
+    const [what, setWhat] = React.useState("");
+    const [withChecks, setWithChecks] = React.useState(true);
+    const [plugins, setPlugins] = React.useState([]);
+    React.useEffect(() => { gql("{ systemStatus { appSchema } version { version } plugins { id name version enabled } }").then((d) => setPlugins(d)).catch(() => {}); }, []);
+    function open() {
+      const vers = (plugins.plugins || []).filter((p) => /^(BetterTagging|ModernUI|StashSuggestions|PrivacyBlur|LibraryCleanup|vertical)/i.test(p.id))
+        .map((p) => `${p.name} ${p.version || ""}${p.enabled ? "" : " (off)"}`).join(", ");
+      const lines = ["**What happened**", what.trim() || "(describe what you did, what you expected and what happened)", "",
+        "**Setup**", `- Stash ${(plugins.version || {}).version || "?"}${res && res.docker ? " (Docker)" : ""}`, `- Plugins: ${vers || "?"}`,
+        `- AI model: ${(res && res.model) || "?"}`];
+      if (withChecks && checks.length) {
+        lines.push("", "**Setup check**");
+        // no file paths or addresses: only what each check found
+        checks.forEach((c) => lines.push(`- [${STATUS[c.status][1]}] ${c.group} - ${c.title}` +
+          (c.id === "library-files-reachable" || /address|reachable/i.test(c.title) ? "" : `: ${c.detail.replace(/(\/[^\s,;:]+)+/g, "…")}`)));
+        if (test && test.state === "done") lines.push(`- AI test: answered in ${test.seconds} s`);
+        if (test && test.state === "error") lines.push(`- AI test failed: ${test.message}`);
+      }
+      const title = "[Better Organizing AI] " + (what.trim().split("\n")[0].slice(0, 80) || "Problem");
+      const url = ISSUES_URL + "?" + new URLSearchParams({ title, body: lines.join("\n").slice(0, 6000), labels: "bug" }).toString();
+      window.open(url, "_blank", "noopener");
+    }
+    return h("div", { className: "bta-setup-report" },
+      h("textarea", { className: "form-control", rows: 4, value: what, placeholder: "What went wrong? What did you do, and what did you expect?",
+        onChange: (e) => setWhat(e.target.value) }),
+      h("label", { className: "bta-setup-detail bta-setup-cb" },
+        h("input", { type: "checkbox", checked: withChecks, onChange: (e) => setWithChecks(e.target.checked) }),
+        " Include the setup check (versions and what each check found - no file paths, addresses, names or pictures)"),
+      h("button", { type: "button", className: "btn btn-primary", disabled: !what.trim(), onClick: open }, "Open a GitHub issue →"),
+      h("div", { className: "bta-setup-detail" }, "Opens GitHub's new-issue page, filled in: read it over, then press Submit there (it needs a free GitHub account). Nothing is sent until you do."));
+  }
 
   function SetupPage() {
     const [res, setRes] = React.useState({ state: "loading" });
@@ -3007,11 +3070,23 @@
     const [errs, setErrs] = React.useState(null);
     const [plugins, setPlugins] = React.useState(null);
     const [copied, setCopied] = React.useState(false);
+    const [tasks, setTasks] = React.useState([]);
+    const [pickTask, setPickTask] = React.useState("");
+    const [started, setStarted] = React.useState({}); // task name -> "started" / error
+    const [jobTick, setJobTick] = React.useState(0);
+    React.useEffect(() => {
+      gql("{ plugins { id tasks { name description } } }").then((d) =>
+        setTasks(((d.plugins || []).find((p) => p.id === PLUGIN_ID) || {}).tasks || [])).catch(() => {});
+    }, []);
+    const start = (name) => runTask(name)
+      .then(() => { setStarted((s0) => ({ ...s0, [name]: "Started" })); setJobTick((n) => n + 1); })
+      .catch((e) => setStarted((s0) => ({ ...s0, [name]: "Couldn't start: " + e.message })));
     const run = React.useCallback(() => {
       setRes({ state: "loading" });
       ask({ mode: "diagnose" }).then((r) => setRes({ state: "done", ...r })).catch((e) => setRes({ state: "error", message: e.message }));
       gql("{ logs { time level message } }").then((d) => setErrs((d.logs || [])
-        .filter((l) => /error|warn/i.test(l.level) && /Better (Organizing|Tagging)|BetterTaggingAI|face helper|Ollama|Plugin returned error/i.test(l.message))
+        .filter((l) => /error|warn/i.test(l.level) && /Better (Organizing|Tagging)|BetterTaggingAI|face helper|Ollama|Plugin returned error/i.test(l.message)
+          && !/\] \[(OK  |WARN|FAIL|INFO)\] /.test(l.message)) // (the setup check's own report)
         .slice(-12).reverse())).catch(() => setErrs([]));
       gql("{ plugins { id name version enabled } }").then((d) => setPlugins(d.plugins || [])).catch(() => setPlugins([]));
     }, []);
@@ -3055,7 +3130,27 @@
           h("div", null,
             h("div", { className: "bta-setup-title" }, c.title),
             c.detail && h("div", { className: "bta-setup-detail" }, c.detail),
-            c.fix && h("div", { className: "bta-setup-fix" }, c.fix)))))),
+            c.fix && h("div", { className: "bta-setup-fix" }, c.fix),
+            c.status !== "ok" && FIX_TASKS[c.id] && (c.status !== "info" || c.id === "tonight-s-run") && h("div", { className: "bta-setup-do" },
+              h("button", { type: "button", className: "btn btn-sm btn-primary", disabled: !!started[FIX_TASKS[c.id]],
+                onClick: () => start(FIX_TASKS[c.id]) }, "▶ " + FIX_TASKS[c.id]),
+              started[FIX_TASKS[c.id]] && h("span", { className: "bta-setup-detail" }, " " + started[FIX_TASKS[c.id]] + " - progress below")),
+            c.id === "model-in-memory" && c.status !== "ok" && h("div", { className: "bta-setup-do" },
+              h("button", { type: "button", className: "btn btn-sm btn-secondary", disabled: test.state === "loading",
+                onClick: () => { setTest({ state: "loading" }); ask({ mode: "diagnose_ai" }).then((r) => { setTest({ state: "done", ...r }); run(); }).catch((e) => setTest({ state: "error", message: e.message })); } },
+                "Load it now (tests it on a picture)"))))))),
+      h("section", { className: "bta-setup-group" },
+        h("h3", null, "Run a task"),
+        h("div", { className: "bta-setup-run" },
+          h("select", { className: "form-control", value: pickTask, onChange: (e) => setPickTask(e.target.value), "aria-label": "Task" },
+            h("option", { value: "" }, "Pick one of the add-on's tasks…"),
+            tasks.map((t) => h("option", { key: t.name, value: t.name }, t.name))),
+          h("button", { type: "button", className: "btn btn-primary", disabled: !pickTask, onClick: () => start(pickTask) }, "▶ Run")),
+        pickTask && h("div", { className: "bta-setup-detail" }, ((tasks.find((t) => t.name === pickTask) || {}).description || "") +
+          (started[pickTask] ? " - " + started[pickTask] : "")),
+        h("div", { className: "bta-setup-detail" }, "Previews (\"no changes\") are safe to try. Stash runs one task at a time; the rest wait their turn."),
+        h("h3", null, "Running now"),
+        h(Jobs, { tick: jobTick })),
       plugins && h("section", { className: "bta-setup-group" },
         h("h3", null, "Other plugins"),
         [["BetterTaggingTools", "Better Organizing Tools", "Recommended: the add-on then uses its Tags to ignore, special spellings and gallery-name tags."],
@@ -3073,6 +3168,9 @@
         errs === null ? h("div", { className: "bta-setup-detail" }, "Loading…")
           : errs.length === 0 ? h("div", { className: "bta-setup-detail" }, "None from the add-on in Stash's recent log.")
           : errs.map((l, i) => h("div", { key: i, className: "bta-setup-log" }, h("small", null, new Date(l.time).toLocaleString()), " ", l.message))),
+      h("section", { className: "bta-setup-group" },
+        h("h3", null, "Report a problem"),
+        h(Report, { checks, res, test })),
       h("section", { className: "bta-setup-group" },
         h("h3", null, "Common problems"),
         COMMON.map(([q, a], i) => h("details", { key: i, className: "bta-setup-faq" }, h("summary", null, q), h("p", null, a)))),
