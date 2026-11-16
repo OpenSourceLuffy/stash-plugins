@@ -3004,7 +3004,7 @@
   // first words). "group:" re-checks one section, "ids:" a few checks,
   // "task:" runs a task (only previews and harmless ones), "log" opens the log.
   const FAQ_ACTIONS = [
-    [/^"Can't reach Ollama/, [["Test the connection", "group:AI model (Ollama)"], ["Test the AI on a picture", "ai"]]],
+    [/^"Can't reach Ollama/, [["Find Ollama", "findollama"], ["Test the connection", "group:AI model (Ollama)"], ["Test the AI on a picture", "ai"]]],
     [/^"Ollama doesn't have/, [["List the installed models", "models"], ["Test the connection", "group:AI model (Ollama)"]]],
     [/^"Can't reach the face helper/, [["Check the face helper", "group:Face helper"]]],
     [/^"The face helper is too old/, [["Check what the helper can do", "group:Face helper"]]],
@@ -3019,6 +3019,32 @@
     [/^New items aren't done/, [["Check tonight's run", "ids:tonight-s-run,after-a-scan,time-zone"], ["Run tonight's items now", "task:AI: run tonight's new items now"]]],
   ];
 
+  // "Find Ollama": where Stash runs, and every usual address tried from there
+  function FindOllama({ r, row, redo }) {
+    const [saved, setSaved] = React.useState("");
+    async function use(url) {
+      const d = await gql("{ configuration { plugins } }");
+      const cur = (d.configuration.plugins || {})[PLUGIN_ID] || {};
+      await gql("mutation ($id: ID!, $i: Map!) { configurePlugin(plugin_id: $id, input: $i) }", { id: PLUGIN_ID, i: { ...cur, aiOllamaUrl: url } });
+      setSaved(url);
+      setTimeout(redo, 300);
+    }
+    const ok = r.tried.filter((t) => t.ok);
+    return h(React.Fragment, null,
+      row("info", "Stash runs " + r.env.where, (r.env.docker ? `Inside the container: ${r.env.os}` : r.env.os) +
+        (r.env.docker ? (r.env.hdi ? " · host.docker.internal works" : " · host.docker.internal doesn't exist here") : "")),
+      r.tried.map((t) => h("div", { key: t.url, className: "bta-setup-check " + (t.ok ? "ok" : "fail") },
+        h("span", { className: "bta-setup-icon" }, t.ok ? "✓" : "✕"),
+        h("div", null,
+          h("div", { className: "bta-setup-title" }, t.url, t.current ? "  (your setting)" : ""),
+          h("div", { className: "bta-setup-detail" }, t.ok ? `Ollama ${t.version || ""} answers here · ${t.models.length} model(s): ${t.models.join(", ") || "none"}` : t.error),
+          t.ok && !t.current && h("div", { className: "bta-setup-do" },
+            h("button", { type: "button", className: "btn btn-sm btn-primary", disabled: saved === t.url, onClick: () => use(t.url) },
+              saved === t.url ? "✓ Saved" : "Use this address"))))),
+      !ok.length && row("fail", "Ollama didn't answer at any of these", "", r.advice),
+      ok.length > 0 && !ok.some((t) => t.current) && row("warn", "Your setting is the one that doesn't work", `AI: Ollama address is ${r.setting}.`, "Press \"Use this address\" on one that answers."));
+  }
+
   function FaqItem({ q, a }) {
     const acts = (FAQ_ACTIONS.find(([re]) => re.test(q)) || [null, []])[1];
     const [out, setOut] = React.useState(null); // {label, state, ...}
@@ -3029,6 +3055,7 @@
         if (what === "jobs") { setOut({ label, state: "jobs" }); return; }
         if (what === "ai") { setOut({ label, state: "ai", ...(await ask({ mode: "diagnose_ai" })) }); return; }
         if (what === "models") { setOut({ label, state: "models", ...(await ask({ mode: "diagnose_models" })) }); return; }
+        if (what === "findollama") { setOut({ label, state: "findollama", ...(await ask({ mode: "find_ollama" })) }); return; }
         if (what === "files") { setOut({ label, state: "files", ...(await ask({ mode: "diagnose_files" })) }); return; }
         if (what.startsWith("task:")) { await runTask(what.slice(5)); setOut({ label, state: "task", task: what.slice(5) }); return; }
         const r = await ask({ mode: "diagnose" });
@@ -3066,6 +3093,7 @@
         out.libraries.map((l) => h(React.Fragment, { key: l.path },
           row(l.ok ? "ok" : "fail", "Library folder " + l.path, l.ok ? "Stash can see it." : "Stash can't see anything in it.",
             l.ok ? "" : "Check the drive is connected (and, in Docker, mounted into the container), then restart Stash."))));
+      else if (out.state === "findollama") res = h(FindOllama, { r: out, row, redo: () => go(out.label, "findollama") });
       else if (out.state === "task") res = h(React.Fragment, null,
         h("div", { className: "bta-setup-detail" }, `Started "${out.task}". ` + (/preview/i.test(out.task) ? "Its results go to Stash's log (Settings → Logs)." : "")),
         h(Jobs, { tick: 1 }));
@@ -3217,6 +3245,8 @@
               h("button", { type: "button", className: "btn btn-sm btn-primary", disabled: !!started[FIX_TASKS[c.id]],
                 onClick: () => start(FIX_TASKS[c.id]) }, "▶ " + FIX_TASKS[c.id]),
               started[FIX_TASKS[c.id]] && h("span", { className: "bta-setup-detail" }, " " + started[FIX_TASKS[c.id]] + " - progress below")),
+            c.id === "ollama-is-reachable" && c.status === "fail" && h("div", { className: "bta-setup-do" },
+              h("span", { className: "bta-setup-detail" }, "Open \"Can't reach Ollama\" under Common problems and press Find Ollama: it tries every usual address from where Stash runs.")),
             c.id === "model-in-memory" && c.status !== "ok" && h("div", { className: "bta-setup-do" },
               h("button", { type: "button", className: "btn btn-sm btn-secondary", disabled: test.state === "loading",
                 onClick: () => { setTest({ state: "loading" }); ask({ mode: "diagnose_ai" }).then((r) => { setTest({ state: "done", ...r }); run(); }).catch((e) => setTest({ state: "error", message: e.message })); } },

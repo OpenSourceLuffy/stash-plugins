@@ -179,6 +179,8 @@ def main():
             print(json.dumps({"output": c.run_diagnose_models(stash, plugin_dir)}))
         elif mode == "diagnose_files":
             print(json.dumps({"output": c.run_diagnose_files(stash, plugin_dir)}))
+        elif mode == "find_ollama":
+            print(json.dumps({"output": c.run_find_ollama(stash, plugin_dir)}))
         elif mode == "diagnose_ai":
             print(json.dumps({"output": c.run_diagnose_ai(stash, plugin_dir)}))
         elif mode == "diagnose_log":

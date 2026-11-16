@@ -8272,7 +8272,10 @@ def run_diagnose(stash, plugin_dir):
                           f"{waiting} item(s) waiting for {ai['night_time']} ({ai['time_zone']}); the night timer is {'running' if alive else 'not running'}.",
                           "" if alive or not waiting else "Stash was probably restarted. It starts again with the next scan, or run "
                           "\"AI: run tonight's new items now\" to do them straight away."))
-    return {"checks": out, "model": ai["model"], "ollama": ai["url"], "helper": ai["face_url"], "docker": docker}
+    env = _stash_environment()
+    out.insert(0, _check("Stash", "Where Stash runs", "info",
+                         env["where"][0].upper() + env["where"][1:] + (f" (inside the container: {env['os']})." if env["docker"] else ".")))
+    return {"checks": out, "model": ai["model"], "ollama": ai["url"], "helper": ai["face_url"], "docker": docker, "where": env["where"]}
 
 
 def run_diagnose_ai(stash, plugin_dir):
@@ -8335,3 +8338,80 @@ def run_diagnose_files(stash, plugin_dir, n=24):
         libs = []
     lib_ok = [{"path": l, "ok": os.path.isdir(l) and bool(os.listdir(l) if os.path.isdir(l) else [])} for l in libs]
     return {"roots": [{"root": r, "checked": c, "ok": ok} for r, (c, ok) in sorted(roots.items())], "libraries": lib_ok}
+
+
+def _stash_environment():
+    """Where Stash (and so this script) runs: Docker or not, and on what."""
+    import platform
+    import socket
+    docker = os.path.exists("/.dockerenv")
+    if not docker:
+        with contextlib.suppress(OSError):
+            with open("/proc/1/cgroup") as f:
+                docker = any(x in f.read() for x in ("docker", "containerd", "kubepods"))
+    kernel = platform.release().lower()
+    system = platform.system()
+    desktop = docker and ("linuxkit" in kernel or "microsoft" in kernel or "wsl" in kernel)
+    try:
+        socket.gethostbyname("host.docker.internal")
+        hdi = True
+    except OSError:
+        hdi = False
+    gateway = None
+    with contextlib.suppress(OSError, ValueError, IndexError):
+        with open("/proc/net/route") as f:
+            for line in f.readlines()[1:]:
+                parts = line.split()
+                if parts[1] == "00000000":
+                    gw = int(parts[2], 16)
+                    gateway = ".".join(str((gw >> (8 * i)) & 255) for i in range(4))
+                    break
+    os_name = system
+    with contextlib.suppress(OSError):
+        with open("/etc/os-release") as f:
+            m = re.search(r'^PRETTY_NAME="?([^"\n]+)', f.read(), re.M)
+            if m:
+                os_name = m.group(1)
+    if docker:
+        where = ("in Docker Desktop, on a Mac or Windows computer" if desktop or (hdi and "linuxkit" in kernel)
+                 else "in Docker on Linux" + (" (host.docker.internal is set up)" if hdi else ""))
+    else:
+        where = {"Darwin": "installed directly on a Mac", "Windows": "installed directly on Windows"}.get(system, f"installed directly on {os_name}")
+    return {"docker": docker, "desktop": bool(desktop), "hdi": hdi, "gateway": gateway, "where": where,
+            "os": os_name, "kernel": platform.release()}
+
+
+def run_find_ollama(stash, plugin_dir):
+    """Every address Ollama is usually at, tried from where Stash runs."""
+    cfg = settings(stash, plugin_dir)
+    env = _stash_environment()
+    cands = [cfg["ai"]["url"], "http://host.docker.internal:11434", "http://localhost:11434", "http://127.0.0.1:11434"]
+    if env["gateway"]:
+        cands.append(f"http://{env['gateway']}:11434")
+    cands += ["http://172.17.0.1:11434", "http://ollama:11434"]
+    tried, seen = [], set()
+    for url in cands:
+        if url in seen:
+            continue
+        seen.add(url)
+        try:
+            ver = _get_json(url + "/api/version", timeout=3).get("version")
+            models = [m.get("name") for m in _get_json(url + "/api/tags", timeout=3).get("models", [])]
+            tried.append({"url": url, "ok": True, "version": ver, "models": models, "current": url == cfg["ai"]["url"]})
+        except Exception as e:
+            reason = str(getattr(e, "reason", e))
+            tried.append({"url": url, "ok": False, "error": reason[:120], "current": url == cfg["ai"]["url"]})
+    # what to do when none answers, for this setup
+    if env["docker"] and not env["desktop"] and not env["hdi"]:
+        advice = ("Stash is in Docker on Linux, where containers can't reach programs on the computer itself by default. "
+                  "Either run the Stash container with network_mode: host (then use http://127.0.0.1:11434), or add "
+                  "extra_hosts: [\"host.docker.internal:host-gateway\"] to it and start Ollama with OLLAMA_HOST=0.0.0.0 "
+                  "(then use http://host.docker.internal:11434). Or run Ollama in Docker on the same network "
+                  "(then use http://ollama:11434).")
+    elif env["docker"]:
+        advice = ("Stash is in Docker Desktop: Ollama on the same computer is at http://host.docker.internal:11434. "
+                  "Make sure Ollama is running there (Mac: brew services start ollama, or open the Ollama app).")
+    else:
+        advice = ("Stash runs directly on the computer: Ollama on the same computer is at http://localhost:11434. "
+                  "Make sure it's running (Mac: brew services start ollama; Linux: systemctl start ollama).")
+    return {"env": env, "tried": tried, "advice": advice, "setting": cfg["ai"]["url"]}

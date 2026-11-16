@@ -6,6 +6,7 @@ that plugin's changes.
 
 ## 1.5 (2026-11-11)
 
+- Setup & troubleshooting shows where Stash runs (Docker Desktop, Docker on Linux, or installed directly), and **Find Ollama** tries every usual address from there and can save the one that works.
 - Setup & troubleshooting: **Narrow it down** buttons under the common problems (check the connection, list the installed models, check library folders, run a preview task...), with the result shown in place.
 - Setup & troubleshooting: buttons that run the task fixing a check, **Run a task** with progress and Stop, and **Report a problem** (a filled-in GitHub issue to review and submit).
 - **AI setup & troubleshooting** page (`/ai-setup`, linked from Settings → Tasks and Settings → Plugins): checks Ollama, the model, the face helper and its models, picture and library access, scans and settings, with fixes; a timed AI test, recent errors, common problems and a copyable report. Also the task **Setup check: write a report to the log**.
