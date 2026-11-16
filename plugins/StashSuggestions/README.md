@@ -43,6 +43,11 @@ performer pages (plus a performer's galleries and studios), so there's always so
 - On a performer's page the order is Galleries, Studios, then Similar Performers. A row with nothing
   in it isn't shown.
 
+## Gallery pages
+
+- **Similar galleries** under a gallery's pictures: scored by the tags they share (rarer tags count
+  more), the same performers (on the gallery or its pictures) and the same studio.
+
 ## Notes
 
 - The rows are hidden while an **Edit** tab is open, so they don't get mixed in with the form.

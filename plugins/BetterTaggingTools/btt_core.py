@@ -3738,6 +3738,37 @@ def run_look_suggest(stash, plugin_dir, kind, item_id):
     return [{"id": t, "name": names[t], "score": round(s, 2), "sure": s >= LOOK_SURE} for s, t in best[:12]]
 
 
+
+def run_look_suggest_many(stash, plugin_dir, kind, ids):
+    """Asked by the bulk edit window: look-alike tags for several selected
+    scenes / images. [{id, name, count, of, score}]: how many of them it
+    suits (scored like the edit page), most first. Nothing saved."""
+    cfg = settings(stash, plugin_dir)
+    _, excluded = tag_lookup(stash, cfg, plugin_dir)
+    looks = load_look_index(stash, cfg, plugin_dir, excluded, quiet=True)
+    if not looks:
+        raise RuntimeError("run the task \"Look-alike tags: scan scenes and images\" first (it needs the face helper)")
+    q, f = ("findScenes", "scenes") if kind == "scene" else ("findImages", "images")
+    ids = [str(i) for i in (ids or [])][:200]
+    items = find_by_ids(stash, q, f, ids, LOOK_ITEM_FIELDS[kind])
+    cut = cfg["ai"].get("look_suggest", LOOK_SUGGEST)
+    names = looks.names
+    hits, total = defaultdict(list), 0
+    for item in items:
+        scores = looks.for_item(stash, kind, item, compute=len(items) <= 30) or {}
+        if not scores:
+            continue
+        total += 1
+        have = {t["id"] for t in item.get("tags") or []}
+        for t, sc in scores.items():
+            if sc >= cut and t in names and t not in have and names[t].strip().lower() not in BODY_TAG_NAMES:
+                hits[t].append(sc)
+    looks.cache.save()
+    out = [{"id": t, "name": names[t], "count": len(v), "of": total, "score": round(sum(v) / len(v), 2)}
+           for t, v in hits.items() if len(v) >= max(1, total // 4)]
+    out.sort(key=lambda x: (-x["count"], -x["score"]))
+    return {"tags": out[:16], "looked": total, "of": len(items)}
+
 # --- body tags: what's shown, and how big -----------------------------------
 # What's shown comes from a body-part detector in the face helper (NudeNet,
 # optional: setup.sh --body). How big comes from the performer: the size you
@@ -5700,8 +5731,8 @@ NEW_PERF_GENERIC_FOLDER = re.compile(r"(?i)(^[\d_\W]|locked|folder|download|dcim
                                      r"videos?$|^misc|^new\b|^stuff|^tmp|^temp)")
 
 
-def face_cluster(cfg, faces, threshold=NEW_PERF_SAME):
-    body = json.dumps({"faces": faces, "threshold": threshold}).encode()
+def face_cluster(cfg, faces, threshold=NEW_PERF_SAME, dim=128, center=False):
+    body = json.dumps({"faces": faces, "threshold": threshold, "dim": dim, "center": center}).encode()
     req = urllib.request.Request(cfg["ai"]["face_url"] + "/cluster", data=body, headers={"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=600) as resp:
@@ -7713,4 +7744,336 @@ def run_gallery_undo(stash, plugin_dir, undo):
     elif action == "gnew":
         stash.call("mutation($i: GalleryDestroyInput!) { galleryDestroy(input: $i) }",
                    {"i": {"ids": [undo["gallery"]], "delete_file": False, "delete_generated": False}})
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Review page, Tags → New: groups of pictures that look alike and that no
+# tag covers yet - to make into a tag, or add to one you have. Tags →
+# Similar: pairs of tags that are on the same items (or are named alike), to
+# merge or to make one a sub-tag of the other.
+
+TAG_GROUP_SAME = 0.6      # pictures this alike (fingerprints less the library's average) are grouped
+TAG_GROUP_MIN = 6         # items a group needs
+TAG_GROUP_COVERED = 0.6   # a tag on this share of a group already covers it
+TAG_GROUP_ONE_PLACE = 0.7 # a group mostly from one gallery / folder is that gallery, not a tag
+TAG_PAIR_SUB_SHARE = 0.3  # a tag named under another ("Solo Female" / "Solo") and with it this often: a sub-tag
+TAG_PAIR_SAME = 0.8       # items in common / items with either: the same tag twice
+TAG_PAIR_MIN = 4          # items the smaller tag needs
+
+
+def locked_tag_tidy(plugin_dir):
+    return locked_json(os.path.join(plugin_dir, "tag_tidy.json"))
+
+
+def _tidy_items(stash):
+    """{key: item} for every scene and image, with what a group card shows."""
+    items = {}
+    for kind, q, f, fields in (("scene", "findScenes", "scenes", "id title tags { id name } galleries { id } files { path } paths { screenshot }"),
+                               ("image", "findImages", "images", "id title tags { id name } galleries { id } visual_files { ... on BaseFile { path } } paths { thumbnail }")):
+        for x in stash.call(f"{{ {q}(filter: {{per_page: -1}}) {{ {f} {{ {fields} }} }} }}")[q][f]:
+            items[f"{kind}:{x['id']}"] = x
+    return items
+
+
+def _tidy_pic(key, x):
+    kind, iid = key.split(":")
+    path = (((x.get("files") or x.get("visual_files") or [{}])[0]) or {}).get("path") or ""
+    link = (x.get("paths") or {}).get("screenshot" if kind == "scene" else "thumbnail") or ""
+    return {"key": key, "kind": kind, "id": iid, "title": x.get("title") or os.path.basename(path),
+            "picture": re.sub(r"^https?://[^/]+", "", link)}
+
+
+def run_tag_groups(stash, plugin_dir, limit=30, skip=(), fresh=False):
+    cfg = settings(stash, plugin_dir)
+    _, excluded = tag_lookup(stash, cfg, plugin_dir)
+    excluded = set(excluded) | gallery_name_tag_ids(plugin_dir)
+    path = os.path.join(plugin_dir, "tag_groups_cache.json")
+    found = None
+    if not fresh:
+        with contextlib.suppress(OSError, ValueError, KeyError):
+            with open(path) as f:
+                saved = json.load(f)
+            if time.time() - saved.get("at", 0) < TAG_REVIEW_CACHE_SECONDS:
+                found = saved["found"]
+    if found is None:
+        cache = LookCache(plugin_dir)
+        keys = [k for k, v in cache.data.items() if v.get("e")]
+        if not keys:
+            raise RuntimeError('nothing is scanned yet - run "Look-alike tags: scan scenes and images" first')
+        try:
+            res = face_cluster(cfg, [cache.data[k]["e"] for k in keys], threshold=TAG_GROUP_SAME, dim=512, center=True)
+        except RuntimeError:
+            raise
+        if len(res) != len(keys):
+            raise RuntimeError("the face helper is too old to group pictures - run face-helper/setup.sh again (see the README)")
+        groups = defaultdict(list)
+        for k, (g, sim) in zip(keys, res):
+            if g >= 0:
+                groups[g].append((sim, k))
+        found = [[k for _, k in sorted(m, reverse=True)] for m in groups.values() if len(m) >= TAG_GROUP_MIN]
+        tmp = f"{path}.{os.getpid()}.tmp"
+        with open(tmp, "w") as f:
+            json.dump({"at": time.time(), "found": found}, f)
+        os.replace(tmp, path)
+    items = _tidy_items(stash)
+    tag_names = {t["id"]: t["name"] for x in items.values() for t in x.get("tags") or []}
+    with locked_tag_tidy(plugin_dir) as d:
+        skip = set(skip or ()) | set(d.get("no", []))
+    out = []
+    for keys in found:
+        keys = [k for k in keys if k in items]
+        if len(keys) < TAG_GROUP_MIN:
+            continue
+        sig = "tg:" + hashlib.sha1("|".join(sorted(keys)[:20]).encode()).hexdigest()[:12]
+        if sig in skip:
+            continue
+        n = len(keys)
+        places = Counter()
+        for k in keys:
+            x = items[k]
+            gs = [g["id"] for g in x.get("galleries") or []]
+            p = (((x.get("files") or x.get("visual_files") or [{}])[0]) or {}).get("path") or ""
+            places["g" + gs[0] if gs else "f" + os.path.dirname(p)] += 1
+        if places.most_common(1)[0][1] >= TAG_GROUP_ONE_PLACE * n:
+            continue  # one gallery / folder: it's that gallery, not a new tag
+        tc = Counter(t["id"] for k in keys for t in items[k].get("tags") or []
+                     if t["id"] not in excluded and t["name"].strip().lower() not in BODY_TAG_NAMES)
+        if tc and tc.most_common(1)[0][1] >= TAG_GROUP_COVERED * n:
+            continue  # a tag you have already says what these are
+        near = [{"id": t, "name": tag_names[t], "count": c} for t, c in tc.most_common(8) if c >= 2]
+        untagged = sum(1 for k in keys if not items[k].get("tags"))
+        reasons = [f"{n} scenes and photos that look alike", f"{untagged} have no tags" if untagged else "no tag is on most of them"]
+        out.append({"sig": sig, "tg": True, "type": "tagnew", "keys": keys, "count": n, "near": near,
+                    "samples": [_tidy_pic(k, items[k]) for k in keys[:6]], "all": [_tidy_pic(k, items[k]) for k in keys],
+                    "reasons": reasons})
+    out.sort(key=lambda x: -x["count"])
+    return {"items": out[:limit], "total": len(out)}
+
+
+def run_tag_pairs(stash, plugin_dir, limit=30, skip=()):
+    cfg = settings(stash, plugin_dir)
+    _, excluded = tag_lookup(stash, cfg, plugin_dir)
+    excluded = set(excluded) | gallery_name_tag_ids(plugin_dir)
+    tags = {t["id"]: t for t in stash.call("{ findTags(filter: {per_page: -1}) { tags { id name aliases image_path "
+                                           "scene_count image_count parents { id } children { id } } } }")["findTags"]["tags"]}
+    # where each tag is, counting a gallery as one place (a 1,000-page comic
+    # whose pages all carry the same tags is one place, not 1,000 items)
+    gal_of = {f"image:{x['id']}": "g" + x["galleries"][0]["id"] for x in stash.call(
+        "{ findImages(image_filter: {galleries: {modifier: NOT_NULL}}, filter: {per_page: -1}) { images { id galleries { id } } } }"
+    )["findImages"]["images"] if x.get("galleries")}
+    have = defaultdict(set)
+    for k, ts in all_item_tags(stash).items():
+        for t in ts:
+            have[t].add(gal_of.get(k, k))
+    with locked_tag_tidy(plugin_dir) as d:
+        skip = set(skip or ()) | set(d.get("no", []))
+    norm = lambda n: re.sub(r"s$", "", re.sub(r"[^a-z0-9]", "", (n or "").lower()))
+    ids = [t for t in tags if t not in excluded and len(have.get(t, ())) >= 1
+           and tags[t]["name"].strip().lower() not in BODY_TAG_NAMES]
+    by_item = defaultdict(set)
+    for t in ids:
+        for k in have[t]:
+            by_item[k].add(t)
+    both = Counter()
+    for k, ts in by_item.items():
+        if len(ts) > 60:
+            continue
+        ts = sorted(ts)
+        for i, a in enumerate(ts):
+            for b in ts[i + 1:]:
+                both[(a, b)] += 1
+    out, seen = [], set()
+
+    def card(t):
+        t = tags[t]
+        n = (t.get("scene_count") or 0) + (t.get("image_count") or 0)
+        return {"id": t["id"], "name": t["name"], "count": n, "aliases": t.get("aliases") or [],
+                "picture": f"/tag/{t['id']}/image"}
+
+    words = lambda t: set(re.findall(r"[a-z0-9]+", tags[t]["name"].lower()))
+
+    def named_under(child, parent):
+        """"Solo Female" under "Solo": the parent's words are all in the child's name."""
+        pw, cw = words(parent), words(child)
+        return bool(pw) and pw < cw
+
+    def related(a, b):
+        return b in {p["id"] for p in tags[a].get("parents") or []} or a in {p["id"] for p in tags[b].get("parents") or []}
+
+    # named alike: the same tag written two ways (Outdoor / Outdoors)
+    groups = defaultdict(list)
+    for t in ids:
+        groups[norm(tags[t]["name"])].append(t)
+    for key, ts in groups.items():
+        if len(ts) < 2 or not key:
+            continue
+        ts.sort(key=lambda t: -len(have[t]))
+        for b in ts[1:]:
+            a = ts[0]
+            pair = tuple(sorted((a, b)))
+            sig = "tm:" + ":".join(pair)
+            if sig in skip or pair in seen:
+                continue
+            seen.add(pair)
+            out.append({"sig": sig, "tp": True, "type": "tagmerge", "tags": [card(a), card(b)], "keep": a,
+                        "count": len(have[a] | have[b]), "reasons": ["The same name written differently"]})
+    # on the same items
+    for (a, b), c in both.items():
+        pair = (a, b)
+        if pair in seen or related(a, b):
+            continue
+        na, nb = len(have[a]), len(have[b])
+        small, big = (a, b) if na <= nb else (b, a)
+        ns = min(na, nb)
+        if ns < TAG_PAIR_MIN:
+            continue
+        union = na + nb - c
+        if c / union >= TAG_PAIR_SAME and ns >= 6:
+            sig = "tm:" + ":".join(pair)
+            if sig in skip:
+                continue
+            seen.add(pair)
+            out.append({"sig": sig, "tp": True, "type": "tagmerge", "tags": [card(big), card(small)], "keep": big,
+                        "count": union, "reasons": [f"Almost always together: {c} of the {union} places (galleries, scenes, loose photos) with either have both"]})
+        elif named_under(small, big) and c / ns >= TAG_PAIR_SUB_SHARE:
+            sig = f"ts:{small}:{big}"
+            if sig in skip:
+                continue
+            seen.add(pair)
+            out.append({"sig": sig, "tp": True, "type": "tagsub", "child": card(small), "parent": card(big),
+                        "count": ns, "reasons": [f"{c} of the {ns} places (galleries, scenes, loose photos) with {tags[small]['name']} also have {tags[big]['name']}"]})
+    order = {"tagmerge": 0, "tagsub": 1}
+    out.sort(key=lambda x: (order[x["type"]], -x["count"]))
+    return {"items": out[:limit], "total": len(out)}
+
+
+TAG_SNAP_FIELDS = "id name sort_name description aliases favorite ignore_auto_tag image_path parents { id } children { id }"
+
+
+def _tag_items(stash, tid):
+    """Everything with the tag: {"scene": ids, "image": ids, "gallery": ids, "performer": ids, "studio": ids}."""
+    out = {}
+    flt = {"tags": {"value": [str(tid)], "modifier": "INCLUDES", "depth": 0}}
+    for kind, q, f, typ, arg in (("scene", "findScenes", "scenes", "SceneFilterType", "scene_filter"),
+                                 ("image", "findImages", "images", "ImageFilterType", "image_filter"),
+                                 ("gallery", "findGalleries", "galleries", "GalleryFilterType", "gallery_filter"),
+                                 ("performer", "findPerformers", "performers", "PerformerFilterType", "performer_filter"),
+                                 ("studio", "findStudios", "studios", "StudioFilterType", "studio_filter")):
+        out[kind] = [x["id"] for x in stash.call(
+            f"query($f: {typ}) {{ {q}({arg}: $f, filter: {{per_page: -1}}) {{ {f} {{ id }} }} }}", {"f": flt})[q][f]]
+    return out
+
+
+BULK_TAG = {"scene": ("bulkSceneUpdate", "BulkSceneUpdateInput"), "image": ("bulkImageUpdate", "BulkImageUpdateInput"),
+            "gallery": ("bulkGalleryUpdate", "BulkGalleryUpdateInput"), "performer": ("bulkPerformerUpdate", "BulkPerformerUpdateInput"),
+            "studio": ("bulkStudioUpdate", "BulkStudioUpdateInput")}
+
+
+def _tag_on(stash, kind_ids, tid, mode):
+    for kind, ids in kind_ids.items():
+        if not ids:
+            continue
+        mut, typ = BULK_TAG[kind]
+        for at in range(0, len(ids), 500):
+            stash.call(f"mutation($i: {typ}!) {{ {mut}(input: $i) {{ id }} }}",
+                       {"i": {"ids": [str(i) for i in ids[at:at + 500]], "tag_ids": {"ids": [str(tid)], "mode": mode}}})
+
+
+def run_tag_tidy_apply(stash, plugin_dir, action, data):
+    data = data or {}
+    if action == "no":
+        with locked_tag_tidy(plugin_dir) as d:
+            d["no"] = sorted(set(d.get("no", [])) | {data["sig"]})
+        return {"action": "no", "sig": data["sig"]}
+    if action in ("tagnew", "tagjoin"):
+        kinds = _keys_by_kind(data.get("keys"))
+        made = None
+        if action == "tagnew":
+            name = (data.get("name") or "").strip()
+            if not name:
+                raise RuntimeError("give the tag a name first")
+            got = stash.call("query($n: String!) { findTags(tag_filter: {name: {value: $n, modifier: EQUALS}}) { tags { id } } }",
+                             {"n": name})["findTags"]["tags"]
+            if got:
+                tid = got[0]["id"]
+            else:
+                tid = made = stash.call("mutation($i: TagCreateInput!) { tagCreate(input: $i) { id } }", {"i": {"name": name}})["tagCreate"]["id"]
+        else:
+            tid = str(data["tag"])
+        # only the ones without it yet (so Undo takes off only what this added)
+        added = {}
+        for kind, q, f in (("scene", "findScenes", "scenes"), ("image", "findImages", "images")):
+            got = find_by_ids(stash, q, f, kinds[kind], "id tags { id }") if kinds[kind] else []
+            added[kind] = [x["id"] for x in got if tid not in {t["id"] for t in x.get("tags") or []}]
+        _tag_on(stash, added, tid, "ADD")
+        return {"action": action, "tag": tid, "added": added, "made": made}
+    if action == "tagsub":
+        child = stash.call(f"query($id: ID!) {{ findTag(id: $id) {{ {TAG_SNAP_FIELDS} }} }}", {"id": str(data["child"])})["findTag"]
+        before = [p["id"] for p in child.get("parents") or []]
+        stash.call("mutation($i: TagUpdateInput!) { tagUpdate(input: $i) { id } }",
+                   {"i": {"id": child["id"], "parent_ids": sorted(set(before) | {str(data["parent"])})}})
+        return {"action": "tagsub", "child": child["id"], "before": before}
+    if action == "tagmerge":
+        keep = str(data["keep"])
+        snaps = []
+        for sid in data.get("others") or []:
+            sid = str(sid)
+            if sid == keep:
+                continue
+            t = stash.call(f"query($id: ID!) {{ findTag(id: $id) {{ {TAG_SNAP_FIELDS} }} }}", {"id": sid})["findTag"]
+            if not t:
+                continue
+            snap = {"tag": t, "items": _tag_items(stash, sid)}
+            if "default=true" not in (t.get("image_path") or "default=true"):
+                with contextlib.suppress(Exception):
+                    pic, ctype = stash.fetch(t["image_path"])
+                    if ctype.startswith("image/") and len(pic) < 8 * 1024 * 1024:
+                        snap["image"] = f"data:{ctype};base64," + base64.b64encode(pic).decode()
+            snaps.append(snap)
+        kept = stash.call(f"query($id: ID!) {{ findTag(id: $id) {{ {TAG_SNAP_FIELDS} }} }}", {"id": keep})["findTag"]
+        keep_items = _tag_items(stash, keep)
+        if snaps:
+            stash.call("mutation($s: [ID!]!, $d: ID!) { tagsMerge(input: {source: $s, destination: $d}) { id } }",
+                       {"s": [s["tag"]["id"] for s in snaps], "d": keep})
+        name = (data.get("name") or "").strip()
+        if name and name != kept["name"]:
+            stash.call("mutation($i: TagUpdateInput!) { tagUpdate(input: $i) { id } }", {"i": {"id": keep, "name": name}})
+        return {"action": "tagmerge", "keep": keep, "kept": {"name": kept["name"], "aliases": kept.get("aliases") or []},
+                "keep_items": keep_items, "removed": snaps}
+    raise RuntimeError(f"unknown tag action {action!r}")
+
+
+def run_tag_tidy_undo(stash, plugin_dir, undo):
+    action = undo.get("action")
+    if action == "no":
+        with locked_tag_tidy(plugin_dir) as d:
+            d["no"] = [s for s in d.get("no", []) if s != undo["sig"]]
+    elif action in ("tagnew", "tagjoin"):
+        _tag_on(stash, undo.get("added") or {}, undo["tag"], "REMOVE")
+        if undo.get("made") and not any(_tag_items(stash, undo["made"]).values()):
+            with contextlib.suppress(Exception):
+                stash.call("mutation($i: TagDestroyInput!) { tagDestroy(input: $i) }", {"i": {"id": str(undo["made"])}})
+    elif action == "tagsub":
+        stash.call("mutation($i: TagUpdateInput!) { tagUpdate(input: $i) { id } }",
+                   {"i": {"id": undo["child"], "parent_ids": undo["before"]}})
+    elif action == "tagmerge":
+        keep = undo["keep"]
+        # the kept tag as it was (its name; the merged names leave its aliases)
+        stash.call("mutation($i: TagUpdateInput!) { tagUpdate(input: $i) { id } }",
+                   {"i": {"id": keep, "name": undo["kept"]["name"], "aliases": undo["kept"]["aliases"]}})
+        had = {k: set(v) for k, v in (undo.get("keep_items") or {}).items()}
+        for snap in undo.get("removed") or []:
+            t = snap["tag"]
+            inp = {"name": t["name"], "aliases": t.get("aliases") or [], "description": t.get("description") or "",
+                   "favorite": bool(t.get("favorite")), "ignore_auto_tag": bool(t.get("ignore_auto_tag")),
+                   "parent_ids": [p["id"] for p in t.get("parents") or []], "child_ids": [c["id"] for c in t.get("children") or []]}
+            if t.get("sort_name"):
+                inp["sort_name"] = t["sort_name"]
+            if snap.get("image"):
+                inp["image"] = snap["image"]
+            new = stash.call("mutation($i: TagCreateInput!) { tagCreate(input: $i) { id } }", {"i": inp})["tagCreate"]["id"]
+            _tag_on(stash, snap["items"], new, "ADD")
+            # the kept tag comes off what only had the merged one
+            _tag_on(stash, {k: [i for i in ids if i not in had.get(k, set())] for k, ids in snap["items"].items()}, keep, "REMOVE")
     return True

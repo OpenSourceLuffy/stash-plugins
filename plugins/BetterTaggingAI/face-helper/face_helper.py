@@ -27,7 +27,8 @@ zoo); CLIP ViT-B/32 (OpenAI, MIT licence) the picture fingerprints.
     POST /knn    {"vectors": ["<base64 int8 picture fingerprint>", ...], "base": [indexes], "k": 20}
       -> {"results": [[[base index, dot], ...], ...]}: for every vector, the k
          most alike of the base ones (dot product of the raw numbers, itself left out)
-    POST /cluster {"faces": ["<q8>", ...], "threshold": 0.45}
+    POST /cluster {"faces": ["<q8>", ...], "threshold": 0.45, "dim": 128, "center": false}
+                 (dim 512 + center for picture fingerprints)
       -> {"results": [[group number, likeness to the group], ...]}: the same
          person's faces get the same number (for "new performers")
     GET /health  -> {"ok": true, "embed": true/false, "body": true/false, "match": true, "knn": true, "cluster": true}
@@ -208,9 +209,9 @@ def body_parts(data):
     return found
 
 
-def _q8(list_b64):
+def _q8(list_b64, dim=128):
     raw = np.frombuffer(b"".join(base64.b64decode(x) for x in list_b64), dtype=np.int8)
-    return raw.reshape(-1, 128).astype(np.float32) / 127.0
+    return raw.reshape(-1, dim).astype(np.float32) / 127.0
 
 
 def match_faces(faces, known):
@@ -269,15 +270,20 @@ def nearest(vectors, base, k):
     return out
 
 
-def cluster_faces(faces, threshold):
+def cluster_faces(faces, threshold, dim=128, center=False):
     """Group faces of the same person: each face joins the most alike group
     (the average of its faces) if it's at least `threshold` alike, else
     starts a new one; then every face is checked again against the final
     groups. Returns [group, likeness] per face (group -1: alone)."""
     if not faces:
         return []
-    F = _q8(faces)
+    F = _q8(faces, dim)
     F /= np.linalg.norm(F, axis=1, keepdims=True) + 1e-9
+    if center:
+        # picture fingerprints: compare what's special about each picture
+        # (the library's average look taken away), or everything looks alike
+        F -= F.mean(axis=0, keepdims=True)
+        F /= np.linalg.norm(F, axis=1, keepdims=True) + 1e-9
     n = len(F)
     sums = np.zeros((n, F.shape[1]), dtype=np.float32)  # each group's summed faces
     count = np.zeros(n, dtype=np.int32)
@@ -340,7 +346,8 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/match":
                 return self._send(200, {"results": match_faces(req.get("faces") or [], req.get("known") or {})})
             if self.path == "/cluster":
-                return self._send(200, {"results": cluster_faces(req.get("faces") or [], float(req.get("threshold") or 0.45))})
+                return self._send(200, {"results": cluster_faces(req.get("faces") or [], float(req.get("threshold") or 0.45),
+                                                                 int(req.get("dim") or 128), bool(req.get("center")))})
             if self.path == "/knn":
                 return self._send(200, {"results": nearest(req.get("vectors") or [], req.get("base") or [],
                                                            int(req.get("k") or 20))})

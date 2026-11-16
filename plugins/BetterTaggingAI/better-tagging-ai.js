@@ -156,13 +156,61 @@
     );
   }
 
+  // ---- the bulk Edit window (several scenes / images selected) -------------
+  // Look-alike tags for the selected items: the ones that suit at least a
+  // quarter of them, with how many ("+ Beach 4/6"). Quick, no AI model.
+  function BulkAiTags({ values, onSelect }) {
+    const ref = React.useRef(null);
+    const [sel, setSel] = React.useState(null); // {kind, ids}
+    const [st, setSt] = React.useState({ state: "idle" });
+    React.useEffect(() => {
+      const modal = ref.current && ref.current.closest(".modal");
+      const head = modal && (modal.querySelector(".modal-header, .modal-title") || {}).textContent || "";
+      if (!modal || /filter/i.test(head)) return;
+      const cards = [...document.querySelectorAll(".card-check:checked")].map((c) => c.closest(".scene-card, .image-card")).filter(Boolean);
+      const kinds = new Set(cards.map((c) => (c.classList.contains("scene-card") ? "scene" : "image")));
+      if (!cards.length || kinds.size !== 1) return;
+      const kind = [...kinds][0];
+      const re = kind === "scene" ? /\/scenes\/(\d+)/ : /\/images\/(\d+)/;
+      const ids = [...new Set(cards.map((c) => ((c.querySelector(`a[href*="/${kind}s/"]`) || {}).getAttribute?.("href") || "").match(re)).filter(Boolean).map((m) => m[1]))];
+      if (!ids.length) return;
+      setSel({ kind, ids });
+      let live = true;
+      setSt({ state: "loading" });
+      ask({ mode: "look_suggest_many", kind, ids })
+        .then((out) => live && setSt({ state: "done", ...out }))
+        .catch((e) => live && setSt({ state: "error", message: e.message }));
+      return () => { live = false; };
+    }, []);
+    const have = new Set((values || []).map((t) => String(t.id)));
+    const tags = st.state === "done" ? (st.tags || []).filter((t) => !have.has(String(t.id))) : [];
+    const strip = (t) => ({ id: String(t.id), name: t.name, aliases: [] });
+    return h("span", { ref, style: sel ? null : { display: "none" } },
+      sel && h("div", { className: "pts-suggest pts-ai bta-tags bta-bulk-tags" },
+        h("span", { className: "pts-label" }, "AI"),
+        st.state === "loading" && h("span", { className: "pts-ai-note" }, `Looking at the ${sel.ids.length} selected…`),
+        st.state === "error" && h("span", { className: "pts-ai-note" }, st.message),
+        st.state === "done" && !tags.length && h("span", { className: "pts-ai-note" }, "No look-alike tags for these"),
+        tags.map((t) => h("button", {
+          key: t.id, type: "button", className: "pts-chip",
+          title: `${t.count} of the ${t.of} selected look like items you've tagged ${t.name}`,
+          onClick: () => onSelect([...(values || []), strip(t)]),
+        }, `+ ${t.name} `, h("small", null, `${t.count}/${t.of}`))),
+        tags.length > 1 && h("button", { type: "button", className: "pts-chip pts-all",
+          onClick: () => onSelect([...(values || []), ...tags.filter((t) => t.count * 2 >= t.of).map(strip)]),
+          title: "Add the ones that suit half or more of them" }, "Add common")));
+  }
+
   api.patch.after("TagSelect", function (...args) {
     const props = args[0] || {};
     const result = args[args.length - 1];
     // the edit form's Tags box (not filters, and not Better Organizing Tools'
     // own bulk windows)
     if (!props.isMulti || !props.onSelect || props.isDisabled || props.ptsNoSuggest) return result;
-    if (!ITEM_PAGE.test(location.pathname)) return result;
+    if (!ITEM_PAGE.test(location.pathname)) {
+      // a list page: only in the bulk Edit window (BulkAiTags checks)
+      return h(React.Fragment, null, result, h(BulkAiTags, { values: props.values, onSelect: props.onSelect }));
+    }
     return h(React.Fragment, null, result, h(AiTags, { values: props.values, onSelect: props.onSelect }));
   });
 
@@ -1014,6 +1062,27 @@
       loading: "Looking for studios to tidy up…",
       filterLabel: "",
     },
+    // tags: pictures that look alike with no tag yet (New), and tags to merge
+    // or nest (Similar)
+    tagtidy: {
+      label: "Tags",
+      param: "none",
+      load: (only, skip, fresh) => ask({ mode: REVIEW_MODES._tidyMode, limit: 30, skip, fresh: !!fresh }),
+      keyOf: (it) => it.sig,
+      yes: async (it) => {
+        const data = it.type === "tagmerge" ? { keep: it._keep, others: it._others, name: it._name }
+          : it.type === "tagsub" ? { child: it.child.id, parent: it.parent.id }
+          : it.type === "tagjoin" ? { tag: it._tag.id, keys: it.keys }
+          : { name: it._name, keys: it.keys };
+        it._undo = await ask({ mode: "tag_tidy_apply", action: it.type, data });
+      },
+      no: (it) => ask({ mode: "tag_tidy_apply", action: "no", data: { sig: it.sig } }),
+      undoYes: (it) => ask({ mode: "tag_tidy_undo", undo: it._undo }),
+      undoNo: (it) => ask({ mode: "tag_tidy_undo", undo: { action: "no", sig: it.sig } }),
+      empty: "Nothing to suggest.",
+      loading: "Looking through your tags…",
+      filterLabel: "",
+    },
     // photos to add to a gallery, details a gallery is missing, new galleries
     galleries: {
       label: "Galleries",
@@ -1046,6 +1115,10 @@
     tags: { ...REVIEW_MODES.tags, base: "tags", label: "Suggested" },
     tags_check: { ...REVIEW_MODES.check, base: "check", label: "Check", checkOnly: "t",
       empty: "No tag looks out of place. New ones show up as you tag (and after look-alike scans)." },
+    tags_similar: { ...REVIEW_MODES.tagtidy, base: "tagtidy", label: "Similar", card: true, tidyMode: "tag_pairs",
+      empty: "No tags to merge or nest. Tags named alike, or nested in name (\"Solo Female\" / \"Solo\"), show up here." },
+    tags_new: { ...REVIEW_MODES.tagtidy, base: "tagtidy", label: "New", card: true, tidyMode: "tag_groups",
+      empty: "No groups of look-alike pictures without a tag. They need \"Look-alike tags: scan scenes and images\"." },
     studios_add: { ...REVIEW_MODES.studios, base: "studios", label: "Suggested", card: true, studioKinds: ["join"],
       empty: "No scenes or photos to add to a studio you have. New ones show up as galleries and folders get studios." },
     studios_check: { ...REVIEW_MODES.studios, base: "studios", label: "Check", card: true, studioKinds: ["merge", "delete"],
@@ -1061,7 +1134,7 @@
   };
   const REVIEW_GROUPS = [
     { key: "faces", label: "Faces", actions: ["faces", "faces_check", "new"] },
-    { key: "tags", label: "Tags", actions: ["tags", "tags_check"] },
+    { key: "tags", label: "Tags", actions: ["tags", "tags_check", "tags_similar", "tags_new"] },
     { key: "studios", label: "Studios", actions: ["studios_add", "studios_check", "studios_new"] },
     { key: "galleries", label: "Galleries", actions: ["galleries_add", "galleries_check", "galleries_new"] },
   ];
@@ -1480,7 +1553,7 @@
       h("div", { className: "bta-all-head" },
         h("div", { className: "bta-all-title" },
           it.type === "assign" ? `${it.performer.name}?` : it.type === "join" ? `${it.studio.name}?`
-            : it.gallery ? `${it.gallery.name}${it.type === "gjoin" ? "?" : ""}` : (it._name || it.name || "New performer"),
+            : it.gallery ? `${it.gallery.name}${it.type === "gjoin" ? "?" : ""}` : it.tg ? "New tag?" : (it._name || it.name || "New performer"),
           h("span", null, ` · using ${using} of ${all.length}`)),
         h("button", { type: "button", className: "bta-zoom-close bta-all-close", "aria-label": "Close", onClick: onClose }, "✕")),
       h("div", { className: "bta-all-hint" }, "Tap one to leave it out (tap again to put it back)."),
@@ -1777,6 +1850,134 @@
             chosen ? `✓ Add to ${chosen.name}` : "Pick a studio"))));
   }
 
+  // Tags → Similar / New: merge two tags, nest one under another, or make a
+  // tag for a group of look-alike pictures
+  function TagTidyCard({ it, next, drag, tint, busy, out, keep, setKeep, name, setName, onAll, onExisting, onPage, answer, handlers }) {
+    const t = it.type;
+    const tagPic = (x, big) => h("button", {
+      type: "button", className: "bta-fr-avatar-btn", title: `See ${x.name}'s page`,
+      onPointerDown: (e) => e.stopPropagation(), onClick: () => onPage(`/tags/${x.id}`),
+    }, h("img", { className: "bta-fr-avatar bta-fr-avatar-tag" + (big ? " bta-tt-big" : ""), src: `/tag/${x.id}/image`, alt: "", draggable: false }),
+      h("span", { className: "bta-fr-avatar-hint" }, "View"));
+    const items = (n) => `${n} item${n === 1 ? "" : "s"}`;
+    let top, body, labels;
+    if (t === "tagmerge") {
+      const keepName = (it.tags.find((x) => x.id === keep) || {}).name || "";
+      const typed = name != null ? name : keepName;
+      labels = ["✕ Not the same", "✓ Merge", "NOT SAME", "MERGE"];
+      top = h("div", { className: "bta-st-list" }, it.tags.map((x) => h("div", { key: x.id, className: "bta-st-row" + (x.id === keep ? " keep" : "") },
+        tagPic(x),
+        h("div", { className: "bta-st-info" },
+          h("div", { className: "bta-st-name" }, x.name),
+          h("div", { className: "bta-fr-meta" }, items(x.count) + (x.aliases.length ? ` · also ${x.aliases.slice(0, 3).join(", ")}` : ""))),
+        h("div", { className: "bta-st-choose" },
+          h("button", { type: "button", className: "bta-st-opt" + (x.id === keep ? " on" : ""), disabled: x.id === keep, onClick: () => setKeep(x.id) },
+            x.id === keep ? "✓ Keeping" : "Keep this")))));
+      body = [
+        h("div", { key: "q", className: "bta-fr-q" }, "Merge these two tags?"),
+        h("input", { key: "n", className: "bta-np-name", type: "text", value: typed, placeholder: "Name to keep",
+          onChange: (e) => setName(e.target.value), onKeyDown: (e) => { if (e.key === "Enter") answer("yes"); } }),
+        h("div", { key: "m", className: "bta-fr-meta" }, it.reasons.join(" · ")),
+        h("div", { key: "m2", className: "bta-fr-meta bta-st-wide" }, "Everything with the other moves to the one you keep; its name becomes an alias."),
+      ];
+    } else if (t === "tagsub") {
+      labels = ["✕ No", "✓ Make it a sub-tag", "NO", "NEST"];
+      top = h("div", { className: "bta-st-list" },
+        h("div", { className: "bta-st-row" }, tagPic(it.parent), h("div", { className: "bta-st-info" },
+          h("div", { className: "bta-st-name" }, it.parent.name), h("div", { className: "bta-fr-meta" }, items(it.parent.count)))),
+        h("div", { className: "bta-st-row bta-tt-child" }, tagPic(it.child), h("div", { className: "bta-st-info" },
+          h("div", { className: "bta-st-name" }, "↳ ", it.child.name), h("div", { className: "bta-fr-meta" }, items(it.child.count)))));
+      body = [
+        h("div", { key: "q", className: "bta-fr-q" }, "Make ", h("b", { key: "c" }, it.child.name), " a sub-tag of ", h("b", { key: "p" }, it.parent.name), "?"),
+        h("div", { key: "m", className: "bta-fr-meta" }, it.reasons.join(" · ")),
+        h("div", { key: "m2", className: "bta-fr-meta" }, `Nothing is retagged: ${it.child.name} just sits under ${it.parent.name} (and filtering for ${it.parent.name} with sub-tags finds it).`),
+      ];
+    } else {
+      const total = (it.all || []).length || it.count;
+      const using = total - out.size;
+      labels = ["✕ No", "✓ Create", "NO", "CREATE"];
+      top = h("div", { className: "bta-fr-pic bta-np-pics n" + Math.min(it.samples.length, 6) },
+        it.samples.map((smp) => h("button", { key: smp.key, type: "button", className: "bta-np-pic", title: "See all of them", onClick: onAll },
+          h("img", { src: smp.picture, alt: "", draggable: false, loading: "lazy" }),
+          smp.kind === "scene" && h("span", { className: "bta-fr-tile-kind" }, "▶"))),
+        h("button", { type: "button", className: "bta-np-seeall", onClick: onAll }, out.size ? `Using ${using} of ${total} · change` : `See all ${total}`));
+      body = [
+        h("div", { key: "q", className: "bta-fr-q" }, "New tag for these?"),
+        h("input", { key: "n", className: "bta-np-name", type: "text", value: name || "", placeholder: "Tag name",
+          onChange: (e) => setName(e.target.value), onKeyDown: (e) => { if (e.key === "Enter") answer("yes"); } }),
+        h("button", { key: "x", type: "button", className: "bta-np-existing", onClick: onExisting }, "…or add them to a tag you already have"),
+        h("div", { key: "m", className: "bta-fr-meta" }, it.reasons.join(" · ")),
+      ];
+    }
+    const nextPic = next && (next.samples || [])[0];
+    return h(React.Fragment, null,
+      h("div", {
+        className: "bta-fr-card bta-st-card" + (drag ? " bta-fr-dragging" : ""),
+        style: drag ? { transform: `translateX(${drag.dx}px) rotate(${drag.dx / 25}deg)` } : null,
+        ...handlers,
+      },
+        h("div", { className: "bta-st-top" }, top,
+          h("span", { className: "bta-fr-stamp bta-fr-yes", style: { opacity: Math.max(0, tint) } }, labels[3]),
+          h("span", { className: "bta-fr-stamp bta-fr-no", style: { opacity: Math.max(0, -tint) } }, labels[2])),
+        h("div", { className: "bta-fr-who" },
+          t === "tagnew" && h("span", { className: "bta-np-new", "aria-hidden": true }, "+"),
+          h("div", { className: "bta-fr-text" }, ...body))),
+      nextPic && h("link", { rel: "preload", as: "image", href: nextPic.picture }),
+      h("div", { className: "bta-fr-actions" },
+        h("button", { type: "button", className: "bta-fr-btn bta-fr-btn-no", disabled: busy, onClick: () => answer("no") }, labels[0]),
+        h("button", { type: "button", className: "bta-fr-btn bta-fr-btn-skip", disabled: busy, onClick: () => answer("skip") }, "Skip"),
+        h("button", { type: "button", className: "bta-fr-btn bta-fr-btn-yes", disabled: busy, onClick: () => answer("yes") }, labels[1])),
+      h("div", { className: "bta-fr-hint" }, "Swipe right for yes, left for no."));
+  }
+
+  // "New tag for these?" → "…or add them to a tag you already have"
+  function PickTag({ it, using, onCancel, onPick }) {
+    const [q, setQ] = React.useState("");
+    const [list, setList] = React.useState([]);
+    const [chosen, setChosen] = React.useState(null);
+    const box = React.useRef(null);
+    React.useEffect(() => {
+      const t = setTimeout(() => box.current && box.current.focus(), 50);
+      const onKey = (e) => e.key === "Escape" && onCancel();
+      window.addEventListener("keydown", onKey);
+      return () => { clearTimeout(t); window.removeEventListener("keydown", onKey); };
+    }, []);
+    React.useEffect(() => {
+      const term = q.trim();
+      if (term.length < 2) { setList([]); return undefined; }
+      let live = true;
+      const t = setTimeout(() => {
+        gql(`query ($q: String) { findTags(filter: { q: $q, per_page: 12, sort: "scenes_count", direction: DESC }) { tags { id name aliases scene_count image_count } } }`, { q: term })
+          .then((d) => live && setList(d.findTags.tags.map((x) => ({ ...x, n: (x.scene_count || 0) + (x.image_count || 0) }))))
+          .catch(() => live && setList([]));
+      }, 250);
+      return () => { live = false; clearTimeout(t); };
+    }, [q]);
+    const row = (x) => h("button", { key: x.id, type: "button", className: "bta-pick-row", onClick: () => setChosen(x) },
+      h("img", { className: "bta-pick-logo", src: `/tag/${x.id}/image`, alt: "", loading: "lazy" }),
+      h("span", { className: "bta-pick-text" },
+        h("span", { className: "bta-pick-name" }, x.name),
+        h("span", { className: "bta-pick-sub" }, x.count != null ? `on ${x.count} of these` : x.n ? `${x.n} items` : "")));
+    return h("div", { className: "bta-confirm", onClick: (e) => e.target === e.currentTarget && onCancel() },
+      h("div", { className: "bta-confirm-box bta-cf bta-pick", role: "dialog", "aria-modal": true, "aria-label": "Add them to a tag you already have" },
+        h("div", { className: "bta-cf-scroll" },
+          h("div", { className: "bta-confirm-title" }, chosen ? `Tag them ${chosen.name}?` : "Add them to a tag you already have"),
+          chosen
+            ? h("div", { className: "bta-confirm-text" }, `Adds ${chosen.name} to ${using === 1 ? "this item" : `these ${using} items`} (the ones that don't have it yet).`)
+            : h(React.Fragment, null,
+                h("input", { ref: box, className: "bta-np-name", type: "search", value: q, placeholder: "Search your tags…", onChange: (e) => setQ(e.target.value) }),
+                q.trim().length >= 2 && h("div", { className: "bta-pick-list" },
+                  list.length === 0 && h("div", { className: "bta-confirm-text" }, "No tag by that name"), list.map(row)),
+                h("div", { className: "bta-cf-label" }, "Already on some of them"),
+                h("div", { className: "bta-pick-list" },
+                  (it.near || []).length === 0 && h("div", { className: "bta-confirm-text" }, "None"),
+                  (it.near || []).map(row)))),
+        h("div", { className: "bta-confirm-actions" },
+          h("button", { type: "button", className: "bta-fr-btn bta-fr-btn-skip", onClick: () => (chosen ? setChosen(null) : onCancel()) }, chosen ? "Back" : "Cancel"),
+          h("button", { type: "button", className: "bta-fr-btn bta-fr-btn-yes", disabled: !chosen, onClick: () => onPick(chosen) },
+            chosen ? `✓ Tag them ${chosen.name}` : "Pick a tag"))));
+  }
+
   // Galleries tab: add photos to a gallery, add the performers / studio most
   // of its photos have, or make a new gallery from a folder
   function GalleryCard({ it, next, drag, tint, busy, out, toggle, name, setName, onAll, onPage, answer, handlers }) {
@@ -1956,6 +2157,7 @@
     REVIEW_MODES._checkOnly = M.checkOnly || null;
     REVIEW_MODES._studioKinds = M.studioKinds || null;
     REVIEW_MODES._galleryKinds = M.galleryKinds || null;
+    REVIEW_MODES._tidyMode = M.tidyMode || null;
     const grp = groupOf(tabKey);
     React.useEffect(() => { try { localStorage.setItem("bta-review-" + grp.key, tabKey); } catch (e) { /* fine */ } }, [tabKey]);
     const only = params.get(M.param) || "";
@@ -2003,6 +2205,7 @@
     });
     const [studioPick, setStudioPick] = React.useState({}); // Studios tab: sig -> {keep, off: Set of studio ids}
     const [pickStudio, setPickStudio] = React.useState(null); // "New studio?" card: add to one you have instead
+    const [pickTag, setPickTag] = React.useState(null); // "New tag?" card: add to a tag you have instead
     const batchFresh = React.useRef(false);
     const groupsFor = React.useRef(""); // which tab (and filter) the groups belong to
     const [confirmNew, setConfirmNew] = React.useState(null); // { it, name }: "Create a new performer?"
@@ -2080,8 +2283,8 @@
     }, [queue, counts, undo, total, state.loading]);
 
     // (for a moment after switching tabs the old tab's cards are still here)
-    const shown = queue.filter((it) => (tab === "tags" ? it.tag != null : tab === "new" ? it.sig != null && !it.st && !it.gal
-      : tab === "studios" ? !!it.st : tab === "galleries" ? !!it.gal
+    const shown = queue.filter((it) => (tab === "tags" ? it.tag != null : tab === "new" ? it.sig != null && !it.st && !it.gal && !it.tp && !it.tg
+      : tab === "studios" ? !!it.st : tab === "galleries" ? !!it.gal : tab === "tagtidy" ? !!(it.tp || it.tg)
       : tab === "check" ? it.what != null : it.kind != null && it.performer != null));
     const cur = shown[0];
     const next = shown[1];
@@ -2128,6 +2331,25 @@
           const keepName = (one.studios.find((x) => x.id === keep) || {}).name || "";
           one = { ...one, _keep: keep, _others: others, _name: String(names[one.sig] != null ? names[one.sig] : keepName).trim() || keepName };
           if (kind === "yes" && !others.length) return fail("Everything else is left out - nothing to merge.");
+        }
+      }
+      if (tab === "tagtidy") {
+        const fail = (msg) => { setState((st) => ({ ...st, note: msg })); setDrag(null); };
+        if (one.type === "tagnew") {
+          const out = leftOut[one.sig] || new Set();
+          one = { ...one, keys: one.keys.filter((k) => !out.has(k)) };
+          if (kind === "yes" && !one.keys.length) return fail("Every picture is left out - nothing to tag.");
+          if (confirmed && confirmed.tag) one = { ...one, type: "tagjoin", _tag: confirmed.tag, _orig: one };
+          else {
+            one = { ...one, _name: String(names[one.sig] || "").trim() };
+            if (kind === "yes" && !one._name) return fail("Give the new tag a name first (or add them to a tag you have).");
+          }
+        }
+        if (one.type === "tagmerge") {
+          const keep = (studioPick[one.sig] || {}).keep || one.keep;
+          const keepName = (one.tags.find((t) => t.id === keep) || {}).name || "";
+          one = { ...one, _keep: keep, _others: one.tags.filter((t) => t.id !== keep).map((t) => t.id),
+                  _name: String(names[one.sig] != null ? names[one.sig] : keepName).trim() || keepName };
         }
       }
       if (tab === "galleries") {
@@ -2481,6 +2703,20 @@
           h("button", { type: "button", className: "bta-fr-btn bta-fr-btn-skip", disabled: busy, onClick: () => answer("skip") }, "Skip"),
           h("button", { type: "button", className: "bta-fr-btn bta-fr-btn-yes", disabled: busy, onClick: () => answer("yes") },
             assign ? "✓ Yes, add" : "✓ Create")));
+    } else if (tab === "tagtidy") {
+      bodyEl = h(TagTidyCard, {
+        it: cur, next, drag, tint, busy,
+        out: leftOut[cur.sig] || new Set(),
+        keep: (studioPick[cur.sig] || {}).keep || cur.keep,
+        setKeep: (id) => { setStudioPick((sp) => ({ ...sp, [cur.sig]: { keep: id } })); setNames((n) => { const c0 = { ...n }; delete c0[cur.sig]; return c0; }); },
+        name: names[cur.sig],
+        setName: (v) => setNames((n) => ({ ...n, [cur.sig]: v })),
+        onAll: () => setAllOf(cur),
+        onExisting: () => setPickTag(cur),
+        onPage: (path) => { reviewReturn = path; goTo(path); },
+        answer,
+        handlers: { onPointerDown: onDown, onPointerMove: onMove, onPointerUp: onUp, onPointerCancel: () => { start.current = null; setDrag(null); } },
+      });
     } else if (tab === "galleries") {
       bodyEl = h(GalleryCard, {
         it: cur, next, drag, tint, busy,
@@ -2667,8 +2903,8 @@
         onAll: (keep) => setLeftOut((lo) => ({ ...lo, [allOf.sig]: keep ? new Set() : new Set((allOf.all || []).map((x) => x.key)) })),
         onView: (x) => setZoom({ ...x, name: allOf.type === "assign" ? allOf.performer.name : "", _list: allOf.all, _ctx: "all", _sig: allOf.sig }),
         onClose: () => setAllOf(null),
-        ...(allOf.st || (allOf.gal && allOf.type !== "gdetails") ? {
-          doLabel: (n) => (allOf.type === "add" || allOf.type === "gnew" ? `✓ Create · ${n}` : `✓ Add ${n}`),
+        ...(allOf.st || allOf.tg || (allOf.gal && allOf.type !== "gdetails") ? {
+          doLabel: (n) => (allOf.type === "add" || allOf.type === "gnew" || allOf.type === "tagnew" ? `✓ Create · ${n}` : `✓ Add ${n}`),
           onDo: () => { const one = allOf; setAllOf(null); answer("yes", one); },
         } : {}),
       }),
@@ -2682,6 +2918,12 @@
           ? { off: (leftOut[zoom._sig] || new Set()).has(zoom.key),
               toggle: () => setLeftOut((lo) => { const n0 = new Set(lo[zoom._sig] || []); if (n0.has(zoom.key)) n0.delete(zoom.key); else n0.add(zoom.key); return { ...lo, [zoom._sig]: n0 }; }) }
           : null,
+      }),
+      pickTag && h(PickTag, {
+        it: pickTag,
+        using: (() => { const o = leftOut[pickTag.sig]; return pickTag.keys.filter((k) => !(o && o.has(k))).length; })(),
+        onCancel: () => setPickTag(null),
+        onPick: (t) => { const one = pickTag; setPickTag(null); answer("yes", one, { tag: t }); },
       }),
       pickStudio && h(PickStudio, {
         it: pickStudio,

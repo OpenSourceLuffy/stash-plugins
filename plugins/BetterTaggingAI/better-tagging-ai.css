@@ -1764,3 +1764,4 @@ body.mui-light .bta-batch-foot { background: linear-gradient(to bottom, transpar
 @media (max-width: 576px) {
   #bta-review-return { top: calc(12px + env(safe-area-inset-top)); right: 12px; }
 }
+.bta-tt-child { margin-left: 28px; }

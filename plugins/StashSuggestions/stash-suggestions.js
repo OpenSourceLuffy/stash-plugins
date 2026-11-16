@@ -1037,6 +1037,8 @@
       { re: /^\/performers\/(\d+)/, kind: "performer", row: () => document.getElementById("performer-page") },
       { re: /^\/scenes\/(\d+)\/?$/, kind: "scene", row: () => document.querySelector(".scene-player-container")?.parentElement },
       { re: /^\/images\/(\d+)\/?$/, kind: "image", row: () => document.querySelector(".image-container")?.parentElement },
+      // a gallery's pictures: "Similar galleries" under them
+      { re: /^\/galleries\/(\d+)(?:\/images)?\/?$/, kind: "gallery", row: () => document.querySelector(".gallery-container") },
     ];
     const MAX = 12;
     const MAX_SOURCES = 3;
@@ -1250,6 +1252,41 @@
       );
     }
 
+    // Galleries like this one: the tags they share (rarer tags counting more),
+    // the same performers (on the gallery or on its pictures) and studio
+    let allGalleries = null;
+    async function similarGalleries(gid) {
+      allGalleries = allGalleries || gql(`{ findGalleries(filter: { per_page: -1 }) { galleries {
+          id title image_count paths { cover } files { path } folder { path } studio { id } performers { id } tags { id } } } }`)
+        .then((d) => d.findGalleries.galleries);
+      const [gals, pics] = await Promise.all([allGalleries, gql(
+        `query ($g: [ID!]) { findImages(image_filter: { galleries: { value: $g, modifier: INCLUDES } }, filter: { per_page: -1 }) { images { performers { id } } } }`,
+        { g: [gid] })]);
+      const me = gals.find((g) => g.id === gid);
+      if (!me) return [];
+      const df = new Map();
+      gals.forEach((g) => g.tags.forEach((t) => df.set(t.id, (df.get(t.id) || 0) + 1)));
+      const idf = (t) => Math.log((gals.length + 1) / ((df.get(t) || 0) + 0.5));
+      const myTags = new Set(me.tags.map((t) => t.id));
+      const myPerf = new Set([...me.performers.map((p) => p.id), ...pics.findImages.images.flatMap((im) => im.performers.map((p) => p.id))]);
+      const weight = (set) => [...set].reduce((a, t) => a + idf(t), 0) || 1;
+      const myW = weight(myTags);
+      const name = (g) => g.title || ((g.folder?.path || g.files?.[0]?.path || "").split("/").filter(Boolean).pop()) || "Gallery " + g.id;
+      return gals
+        .filter((g) => g.id !== gid && g.image_count > 0)
+        .map((g) => {
+          const tags = new Set(g.tags.map((t) => t.id));
+          const shared = [...tags].filter((t) => myTags.has(t)).reduce((a, t) => a + idf(t), 0);
+          const perf = g.performers.filter((p) => myPerf.has(p.id)).length;
+          const score = (10 * shared) / Math.sqrt(myW * weight(tags)) + 3 * Math.min(perf, 3)
+            + (me.studio && g.studio && me.studio.id === g.studio.id ? 2 : 0);
+          return { ...g, name: name(g), score };
+        })
+        .filter((g) => g.score >= 1.5)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, MAX);
+    }
+
     function rowHtml(title, cards) {
       return (
         '<div class="mlt-related-row">' +
@@ -1268,7 +1305,7 @@
       section.className = "mlt-perf-similar mlt-perf-similar-" + kind;
       section.dataset.key = key;
       // a slot per row, so they keep their order whichever loads first
-      const slots = kind === "performer" ? ["galleries", "studios", "similar"] : ["similar"];
+      const slots = kind === "performer" ? ["galleries", "studios", "similar"] : kind === "gallery" ? ["galleries"] : ["similar"];
       section.innerHTML = slots.map((n) => `<div class="mlt-ps-slot" data-slot="${n}"></div>`).join("");
       const fill = (slot, html) => {
         if (section.dataset.key !== key || !section.isConnected) return;
@@ -1289,6 +1326,12 @@
         window.scrollTo({ top: 0, behavior: "smooth" });
       });
 
+      if (kind === "gallery") {
+        similarGalleries(id).then((list) => {
+          if (list.length) fill("galleries", rowHtml("Similar galleries", list.map(galleryCard).join("")));
+        }).catch((e) => console.warn("[Stash Suggestions] could not load similar galleries", e));
+        return section;
+      }
       similarTo(kind, id).then((list) => {
         if (list.length) fill("similar", rowHtml("Similar Performers", list.map(card).join("")));
       }).catch((e) => console.warn("[Stash Suggestions] could not load similar performers", e));
