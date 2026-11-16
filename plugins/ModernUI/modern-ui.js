@@ -77,6 +77,7 @@
   body.toggle("mui-fit-contain", !!cfg.showWholePictures);
   body.toggle("mui-scene-stack", !cfg.sceneDetailsBeside);
   body.toggle("mui-image-stack", !cfg.imageDetailsBeside);
+  body.toggle("mui-gallery-stack", !cfg.galleryDetailsBeside);
 
   const RATIOS = { portrait: "3 / 4", square: "1 / 1", landscape: "4 / 3", wide: "16 / 9" };
   const shape = String(cfg.pictureShape || "").trim().toLowerCase();
@@ -105,7 +106,8 @@
   if (!cfg.stayOnEditAfterSave) setupBackToDetailsOnSave();
   setupVerticalPoster();
   if (!cfg.hideSelectedInfo) setupSelectedInfo();
-  if (!cfg.showGalleryDetails) setupGalleryPanelClosed();
+  if (cfg.galleryDetailsBeside && !cfg.showGalleryDetails) setupGalleryPanelClosed();
+  if (!cfg.disableGalleryFilter) setupGalleryQuickFilter();
   if (!cfg.disableQuickFilters) setupQuickFilters();
 
   // the full-screen viewer swipes between images too, unless that's off
@@ -1542,6 +1544,156 @@
   }
 
   // ------------------------------------------------------------------
+  // Gallery page: filter its pictures by a performer or tag in them
+  // ------------------------------------------------------------------
+  // A row of chips above the pictures: the performers and tags on the
+  // gallery's pictures, most used first (ones on every picture are left out,
+  // they'd change nothing). Tap one to show only the pictures with it, tap
+  // more to narrow it down, tap again (or "Show all") to undo. It's Stash's
+  // own filter in the address, so Back, paging and sorting keep working.
+  function setupGalleryQuickFilter() {
+    const PAGE = /^\/galleries\/(\d+)(?:\/images)?\/?$/;
+    const data = new Map(); // gallery id -> promise of {total, performers, tags}
+    let bar = null;
+    let shownFor = "";
+
+    const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+    const clean = (t) => String(t).replace(/[()"\\]/g, "").trim();
+
+    function load(id) {
+      if (!data.has(id)) {
+        data.set(id, fetch("/graphql", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            query: `query ($id: ID!) { findImages(image_filter: { galleries: { value: [$id], modifier: INCLUDES } }, filter: { per_page: -1 }) {
+              count images { performers { id name } tags { id name } } } }`,
+            variables: { id },
+          }),
+        }).then((r) => r.json()).then((j) => {
+          const res = j.data.findImages;
+          const names = { performers: new Map(), tags: new Map() };
+          const images = res.images.map((im) => {
+            const one = {};
+            for (const key of ["performers", "tags"]) {
+              one[key] = new Set(im[key].map((x) => { names[key].set(x.id, x.name); return x.id; }));
+            }
+            return one;
+          });
+          return { images, names };
+        }).catch(() => null));
+      }
+      return data.get(id);
+    }
+
+    // which performers / tags the address filters on now
+    function picked() {
+      const out = { performers: new Map(), tags: new Map() };
+      new URLSearchParams(location.search).getAll("c").forEach((c) => {
+        const type = (c.match(/"type":"(\w+)"/) || [])[1];
+        if (!out[type]) return;
+        for (const m of c.matchAll(/"id":"(\d+)","label":"([^"]*)"/g)) out[type].set(m[1], m[2]);
+      });
+      return out;
+    }
+
+    function go(sel) {
+      const params = new URLSearchParams(location.search);
+      const keep = params.getAll("c").filter((c) => !/"type":"(performers|tags)"/.test(c));
+      params.delete("c");
+      params.delete("p"); // back to the first page
+      keep.forEach((c) => params.append("c", c));
+      for (const type of ["performers", "tags"]) {
+        if (!sel[type].size) continue;
+        const items = [...sel[type]].map(([id, label]) => `("id":"${id}","label":"${clean(label)}")`).join(",");
+        params.append("c", `("type":"${type}","value":("items":[${items}],"excluded":[]${type === "tags" ? ',"depth":0' : ""}),"modifier":"INCLUDES_ALL")`);
+      }
+      const q = params.toString();
+      routerNavigate(location.pathname + (q ? "?" + q : ""));
+    }
+
+    // the chips for what's picked now: counts within the pictures that match,
+    // and only ones that would narrow it down further
+    function chipsFor(info, sel) {
+      const match = info.images.filter((im) => ["performers", "tags"].every((k) => [...sel[k].keys()].every((id) => im[k].has(id))));
+      const out = { total: match.length };
+      for (const key of ["performers", "tags"]) {
+        const n = new Map();
+        match.forEach((im) => im[key].forEach((id) => n.set(id, (n.get(id) || 0) + 1)));
+        out[key] = [...n].filter(([id, c]) => c < match.length && !sel[key].has(id))
+          .map(([id, c]) => ({ id, name: info.names[key].get(id), n: c }))
+          .sort((a, b) => b.n - a.n || a.name.localeCompare(b.name))
+          .slice(0, key === "performers" ? 12 : 24);
+      }
+      return out;
+    }
+
+    function render(all) {
+      const sel = picked();
+      const any = sel.performers.size + sel.tags.size > 0;
+      const info = chipsFor(all, sel);
+      const chip = (type, x) => {
+        const on = sel[type].has(x.id);
+        const pic = type === "performers" ? `<img src="/performer/${esc(x.id)}/image" alt="" loading="lazy">` : "";
+        return `<button type="button" class="mui-gqf-chip${on ? " on" : ""}${pic ? " has-pic" : ""}" data-type="${type}" data-id="${esc(x.id)}" data-name="${esc(x.name)}" aria-pressed="${on}" title="${on ? "Show all again" : "Only pictures with " + esc(x.name)}">${pic}<span>${esc(x.name)}</span><small>${x.n}</small></button>`;
+      };
+      // what's picked comes first, to undo
+      const extra = (type) => [...sel[type]].map(([id, name]) => ({ id, name: all.names[type].get(id) || name, n: "" }));
+      const perf = [...extra("performers"), ...info.performers];
+      const tags = [...extra("tags"), ...info.tags];
+      bar.innerHTML =
+        `<span class="mui-gqf-label">Show only</span>` +
+        `<button type="button" class="mui-gqf-chip mui-gqf-all${any ? "" : " on"}" data-all="1" aria-pressed="${!any}">${any ? "✕ Show all" : "All " + info.total}</button>` +
+        perf.map((x) => chip("performers", x)).join("") +
+        (perf.length && tags.length ? '<span class="mui-gqf-sep" aria-hidden="true"></span>' : "") +
+        tags.map((x) => chip("tags", x)).join("");
+    }
+
+    function tick() {
+      const id = (location.pathname.match(PAGE) || [])[1];
+      const toolbar = id && document.querySelector(".gallery-container .filtered-list-toolbar");
+      if (!toolbar) {
+        if (bar) bar.remove();
+        shownFor = "";
+        return;
+      }
+      if (!bar) {
+        bar = document.createElement("div");
+        bar.className = "mui-gqf";
+        bar.setAttribute("role", "group");
+        bar.setAttribute("aria-label", "Show only pictures with");
+        bar.addEventListener("click", (e) => {
+          const b = e.target.closest(".mui-gqf-chip");
+          if (!b) return;
+          const sel = picked();
+          if (b.dataset.all) { sel.performers.clear(); sel.tags.clear(); }
+          else {
+            const m = sel[b.dataset.type];
+            if (m.has(b.dataset.id)) m.delete(b.dataset.id);
+            else m.set(b.dataset.id, b.dataset.name);
+          }
+          go(sel);
+        });
+      }
+      // keep it right under the toolbar (after Modern UI's quick filters, if any)
+      const after = toolbar.nextElementSibling && toolbar.nextElementSibling.classList.contains("mui-qf") ? toolbar.nextElementSibling : toolbar;
+      if (bar.previousElementSibling !== after) after.after(bar);
+      const key = id + "|" + location.search;
+      if (key === shownFor) return;
+      shownFor = key;
+      load(id).then((info) => {
+        if (shownFor !== key || !info) return;
+        const first = chipsFor(info, { performers: new Map(), tags: new Map() });
+        bar.hidden = !first.performers.length && !first.tags.length;
+        render(info);
+      });
+    }
+    setInterval(tick, 400);
+    window.addEventListener("popstate", () => setTimeout(tick, 0));
+    tick();
+  }
+
+  // ------------------------------------------------------------------
   // "Count" sort on the Tags, Performers and Studios pages
   // ------------------------------------------------------------------
   // Sorts by scenes + images + galleries together. Stash can't sort by a
@@ -2275,6 +2427,24 @@
       close.className = "mui-viewer-close";
       close.textContent = "✕ Close";
       box.append(pic, close);
+      // Computer: small ‹ › buttons at the sides, doing what a swipe does
+      // on a phone (hidden on touch screens by the CSS)
+      const navBtns = nav ? [-1, 1].map((dir) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "mui-viewer-nav " + (dir < 0 ? "prev" : "next");
+        b.setAttribute("aria-label", dir < 0 ? "Previous picture" : "Next picture");
+        b.title = dir < 0 ? "Previous (←)" : "Next (→)";
+        b.innerHTML = dir < 0
+          ? '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>'
+          : '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg>';
+        b.addEventListener("pointerdown", (e) => e.stopPropagation());
+        b.addEventListener("click", (e) => { e.stopPropagation(); step(dir); });
+        box.appendChild(b);
+        return b;
+      }) : [];
+      const syncNav = () => navBtns.forEach((b, i) => { b.hidden = !nav.neighbour(i ? 1 : -1); });
+      syncNav();
       document.body.appendChild(box);
       document.body.classList.add("mui-viewer-open");
 
@@ -2323,6 +2493,7 @@
         apply(true);
         busy = false;
         prefetch();
+        syncNav();
       }
 
       const apply = (animate) => {

@@ -1,6 +1,6 @@
 name: Modern UI
 description: Cleaner scene, performer, image, gallery, studio, group and tag cards, plus a mobile-friendly layout.
-version: "0.56"
+version: "0.57"
 ui:
   javascript:
     - modern-ui.js
@@ -48,9 +48,17 @@ settings:
     displayName: Image details beside the picture
     description: On an image's page on wide screens, keep Stash's side panel instead of showing the details under the picture.
     type: BOOLEAN
+  galleryDetailsBeside:
+    displayName: Gallery details beside the pictures
+    description: On a gallery's page on wide screens, keep Stash's side panel instead of showing the cover and details above the pictures, like a performer's page.
+    type: BOOLEAN
   showGalleryDetails:
     displayName: Open gallery details panel by default
-    description: On a gallery's page, show the details panel on the left straight away instead of starting with it closed. (Wide screens only.)
+    description: With "Gallery details beside the pictures" on, show that panel straight away instead of starting with it closed.
+    type: BOOLEAN
+  disableGalleryFilter:
+    displayName: Hide the gallery "Show only" row
+    description: Turn off the row of performers and tags above a gallery's pictures that filters them with one tap.
     type: BOOLEAN
   disableQuickFilters:
     displayName: Hide quick filters

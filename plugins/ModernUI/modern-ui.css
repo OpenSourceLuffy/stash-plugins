@@ -3507,3 +3507,126 @@ body.mui .grid-card:has(.mui-sel-info) :is(.scene-specs-overlay, .studio-overlay
   body.mui .mui-sel-chip { padding: 1px 6px; font-size: 0.64rem; gap: 4px; }
   body.mui .mui-sel-dot { width: 6px; height: 6px; }
 }
+
+/* Full-screen picture on a computer: small previous / next buttons at the
+   sides (a phone swipes instead) */
+.mui-viewer-nav {
+  position: absolute;
+  top: 50%;
+  z-index: 2;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  margin-top: -22px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.75);
+  opacity: 0.55;
+  transition: opacity 0.15s ease, background 0.15s ease;
+  cursor: pointer;
+}
+.mui-viewer-nav.prev { left: 18px; }
+.mui-viewer-nav.next { right: 18px; }
+.mui-viewer-nav:hover, .mui-viewer-nav:focus-visible { opacity: 1; background: rgba(255, 255, 255, 0.18); color: #fff; }
+.mui-viewer-nav[hidden] { display: none !important; }
+.mui-viewer-zoomed .mui-viewer-nav { display: none !important; }
+@media (hover: hover) and (pointer: fine) {
+  .mui-viewer-nav { display: flex; }
+}
+
+/* Gallery page: "Show only" - a performer or tag on the gallery's pictures */
+.mui-gqf {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 10px 0 4px;
+  padding: 2px 2px 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+.mui-gqf::-webkit-scrollbar { display: none; }
+.mui-gqf[hidden] { display: none; }
+.mui-gqf-label { flex: none; margin-right: 2px; font-size: 0.8rem; font-weight: 600; opacity: 0.65; white-space: nowrap; }
+.mui-gqf-sep { flex: none; width: 1px; height: 22px; margin: 0 4px; background: currentColor; opacity: 0.2; }
+.mui-gqf-chip {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.mui-gqf-chip.has-pic { padding-left: 3px; }
+.mui-gqf-chip img { width: 24px; height: 24px; border-radius: 50%; object-fit: cover; object-position: top; }
+.mui-gqf-chip small { opacity: 0.6; font-size: 0.75rem; }
+.mui-gqf-chip.on { border-color: transparent; background: var(--primary, #3d8bfd); color: #fff; }
+.mui-gqf-chip.on small { opacity: 0.85; }
+body.mui.mui-light .mui-gqf-chip:not(.on) { border-color: var(--mui-l-border); background: var(--mui-l-surface); color: var(--mui-l-text); }
+@media (hover: hover) and (pointer: fine) {
+  .mui-gqf-chip:not(.on):hover { background: rgba(255, 255, 255, 0.12); }
+  body.mui.mui-light .mui-gqf-chip:not(.on):hover { background: var(--mui-l-hover); }
+}
+
+/* Gallery page on wide screens: cover on the left and the details beside it,
+   above the pictures, like a performer's page (instead of a side panel) */
+@media (min-width: 1200px) {
+  body.mui.mui-gallery-stack .row:has(> .gallery-tabs) { flex-direction: column; flex-wrap: nowrap; }
+  body.mui.mui-gallery-stack .row > .gallery-divider { display: none !important; }
+  body.mui.mui-gallery-stack .row > .gallery-tabs,
+  body.mui.mui-gallery-stack .row > .gallery-tabs.collapsed {
+    position: relative;
+    display: grid !important;
+    grid-template-columns: minmax(200px, 300px) minmax(0, 1fr);
+    grid-auto-rows: min-content;
+    column-gap: 32px;
+    flex: none !important;
+    width: 100% !important;
+    max-width: none !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    margin: 0 0 8px;
+    padding: 24px 28px 20px !important;
+  }
+  body.mui.mui-gallery-stack .gallery-tabs > div:first-child,
+  body.mui.mui-gallery-stack .gallery-tabs .gallery-header-container { display: contents; }
+  body.mui.mui-gallery-stack .gallery-tabs > *,
+  body.mui.mui-gallery-stack .gallery-tabs > div:first-child > *,
+  body.mui.mui-gallery-stack .gallery-tabs .gallery-header-container > * { grid-column: 2; }
+  body.mui.mui-gallery-stack .gallery-tabs .mui-gallery-cover {
+    grid-column: 1;
+    grid-row: 1 / span 30;
+    align-self: start;
+    width: 100% !important;
+    height: auto !important;
+    max-height: 440px;
+    margin: 0 !important;
+    object-fit: contain;
+    object-position: top;
+    border-radius: 12px;
+  }
+  body.mui.mui-gallery-stack .gallery-tabs .gallery-header-container h3.gallery-header { margin: 0 0 6px; text-align: left; font-size: 1.75rem; }
+  body.mui.mui-gallery-stack .gallery-tabs .gallery-header-container .studio-logo { text-align: left; margin: 0 0 4px; }
+  body.mui.mui-gallery-stack .gallery-tabs .gallery-header-container > .mui-exit { position: absolute; top: 20px; right: 24px; }
+  body.mui.mui-gallery-stack .gallery-tabs .gallery-toolbar { justify-content: flex-start; }
+  body.mui.mui-gallery-stack .gallery-tabs .tab-content { max-height: 46vh; overflow-y: auto; padding-right: 6px; }
+  /* the name is up there now: no second copy above the pictures */
+  body.mui.mui-gallery-stack .gallery-container > .mui-gallery-title { display: none !important; }
+  body.mui.mui-gallery-stack .row > .gallery-container,
+  body.mui.mui-gallery-stack .row > .gallery-container.expanded { flex: none !important; width: 100% !important; max-width: 100% !important; }
+}
+@media (min-width: 992px) and (hover: hover) {
+  .mui-gqf { flex-wrap: wrap; overflow: visible; }
+}

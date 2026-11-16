@@ -2,6 +2,16 @@
 
 Newest first. Versions are what Stash shows under Settings → Plugins.
 
+## 0.57 (2026-11-16)
+
+- Gallery pages on a computer look like a performer's page: the cover on the left and the details
+  beside it, above the pictures, instead of the side panel. **Gallery details beside the pictures**
+  brings the side panel back.
+- **Show only** above a gallery's pictures: tap a performer or tag on them to see just those pictures
+  (tap more to narrow it down, **✕ Show all** to undo).
+- Full-screen pictures on a computer have small **‹ ›** buttons to go to the previous / next one, like
+  swiping on a phone.
+
 ## 0.56 (2026-11-13)
 
 - The dashed **Filters (n)** button under the quick filters no longer disappears when no filter is
