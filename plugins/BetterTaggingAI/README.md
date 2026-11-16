@@ -205,7 +205,11 @@ once at **AI: night time** (default 03:00), so a big scan doesn't hold Stash up 
 > whether Stash can fetch pictures and reach your library files, ffmpeg, disk space, how much has been
 > scanned, the settings and tonight's run. Each problem comes with how to fix it. It also has **Test
 > the AI on a picture** (a real request, timed), recent errors from Stash's log, a list of common
-> problems with fixes, and **Copy report** to paste when asking for help. The task **Setup check:
+> problems with fixes, and **Copy report** to paste when asking for help. A check a task can fix has
+> a button to run it (e.g. the look-alike scan); **Run a task** starts any of the add-on's tasks, and
+> **Running now** shows their progress with **Stop**. **Report a problem** opens a filled-in GitHub
+> issue (what happened, versions and the checks, without file paths, addresses or names) for you to
+> read and submit. The task **Setup check:
 > write a report to the log** writes the same checks to the log.
 
 You need two things on the computer Stash runs on (or one it can reach). Each is optional; anything

@@ -1799,3 +1799,14 @@ body.mui-light .bta-batch-foot { background: linear-gradient(to bottom, transpar
   text-decoration: none !important; font-size: 0.9rem; }
 .bta-setup-link span:last-child { opacity: 0.75; }
 .bta-setup-link:hover { background: rgba(61, 139, 253, 0.2); }
+.bta-setup-do { margin-top: 8px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.bta-setup-run { display: flex; gap: 8px; }
+.bta-setup-run select { flex: 1; min-width: 0; }
+.bta-setup-job { padding: 8px 0; border-bottom: 1px solid rgba(128, 128, 128, 0.15); }
+.bta-setup-bar { height: 6px; margin: 6px 0 4px; border-radius: 3px; background: rgba(128, 128, 128, 0.2); overflow: hidden; }
+.bta-setup-bar span { display: block; height: 100%; background: var(--primary, #3d8bfd); transition: width 0.4s ease; }
+.bta-setup-report { display: flex; flex-direction: column; gap: 8px; }
+.bta-setup-report textarea { font-size: 16px; }
+.bta-setup-cb { display: flex; gap: 8px; align-items: flex-start; }
+.bta-setup-cb input { margin-top: 3px; }
+.bta-setup-report .btn { align-self: flex-start; }
