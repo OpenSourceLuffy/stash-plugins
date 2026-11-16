@@ -3718,3 +3718,14 @@ body.mui .mui-exit, body.mui .mui-image-crumb { display: none !important; }
 @media (min-width: 1200px) {
   body.mui.mui-gallery-stack .gallery-tabs .gallery-performers .performer-card { height: auto !important; min-height: 0 !important; }
 }
+@media (min-width: 1200px) {
+  /* one scroll for the whole gallery page (Stash scrolls the pictures in a
+     box of their own beside the side panel; the panel is gone here) */
+  body.mui.mui-gallery-stack .row > .gallery-container,
+  body.mui.mui-gallery-stack .row > .gallery-container.expanded {
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+  body.mui.mui-gallery-stack .row:has(> .gallery-tabs) { height: auto !important; overflow: visible !important; }
+}
