@@ -11,13 +11,13 @@
 
 /* ----- Pictures and videos ----- */
 
-html.pb-on :is(img, video, canvas):not(.top-nav *):not(.pb-keep):not(.pb-keep *) {
+html.pb-on:not(.pb-replace) :is(img, video, canvas):not(.top-nav *):not(.pb-keep):not(.pb-keep *) {
   filter: blur(var(--pb-blur)) !important;
 }
 
 /* Pictures drawn as backgrounds: performer page backdrop, video player
    poster, scrubber and seek-bar previews */
-html.pb-on :is(
+html.pb-on:not(.pb-replace) :is(
   .background-image-container,
   .vjs-poster,
   .scrubber-item,
@@ -29,7 +29,7 @@ html.pb-on :is(
 }
 
 /* Keep the blur inside each card/picture box instead of bleeding out */
-html.pb-on :is(.thumbnail-section, .image-card-preview, .wall-item, .scrubber-wrapper,
+html.pb-on:not(.pb-replace) :is(.thumbnail-section, .image-card-preview, .wall-item, .scrubber-wrapper,
   .detail-header-image, .performer-image-container, .mui-rel-thumb, .mlt-rel-thumb,
   .mlt-similar-card) {
   overflow: hidden;
@@ -37,16 +37,16 @@ html.pb-on :is(.thumbnail-section, .image-card-preview, .wall-item, .scrubber-wr
 
 /* Peek: un-blur the picture under the mouse (computers only) */
 @media (hover: hover) {
-  html.pb-on.pb-peek :is(img, video):hover,
-  html.pb-on.pb-peek .thumbnail-section:hover :is(img, video),
-  html.pb-on.pb-peek :is(.mui-rel-card, .mlt-rel-card, .mlt-similar-card):hover :is(img, video) {
+  html.pb-on.pb-peek:not(.pb-replace) :is(img, video):hover,
+  html.pb-on.pb-peek:not(.pb-replace) .thumbnail-section:hover :is(img, video),
+  html.pb-on.pb-peek:not(.pb-replace) :is(.mui-rel-card, .mlt-rel-card, .mlt-similar-card):hover :is(img, video) {
     filter: none !important;
   }
 }
 
 /* ----- Performer and studio names (optional) ----- */
 
-html.pb-on.pb-names :is(
+html.pb-on.pb-names:not(.pb-replace) :is(
   .studio-overlay,
   .performer-card .card-section-title,
   .performer-card .card-section h5,
@@ -72,7 +72,7 @@ html.pb-on.pb-names :is(
 
 /* ----- Titles and file names (optional) ----- */
 
-html.pb-on.pb-titles :is(
+html.pb-on.pb-titles:not(.pb-replace) :is(
   .grid-card .card-section-title,
   .grid-card .card-section h5,
   .scene-header,
@@ -90,3 +90,23 @@ html.pb-on.pb-titles :is(
 ) {
   filter: blur(var(--pb-text-blur)) !important;
 }
+
+/* ----- Tags (optional) ----- */
+
+html.pb-on.pb-tags:not(.pb-replace) :is(.tag-item, .tag-card .card-section-title, #tag-page .tag-name, .pts-chip, .mui-gqf-chip span) {
+  filter: blur(var(--pb-text-blur)) !important;
+}
+
+/* ----- Replace instead of blurring: a drawn picture over each video ----- */
+
+html.pb-on.pb-replace .pb-standin-host { position: relative; }
+html.pb-on.pb-replace .pb-standin-host::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: var(--pb-standin) center / cover no-repeat;
+  pointer-events: none;
+}
+html.pb-on.pb-replace .pb-standin-host .vjs-control-bar,
+html.pb-on.pb-replace .pb-standin-host .vjs-big-play-button { z-index: 2; }

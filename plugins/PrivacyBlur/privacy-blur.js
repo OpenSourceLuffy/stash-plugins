@@ -38,6 +38,8 @@
     root.classList.toggle("pb-names", !!settings.blurNames);
     root.classList.toggle("pb-titles", !!settings.blurTitles);
     root.classList.toggle("pb-peek", !!settings.peekOnHover);
+    root.classList.toggle("pb-replace", !!settings.replaceMode);
+    root.classList.toggle("pb-tags", !!settings.blurTags);
     syncTitle();
   }
 
@@ -55,7 +57,7 @@
   // or titles are being blurred
   let realTitle = document.title;
   function syncTitle() {
-    const hide = !!(settings.blurNames || settings.blurTitles) && root.classList.contains("pb-on");
+    const hide = !!(settings.blurNames || settings.blurTitles || settings.replaceMode) && root.classList.contains("pb-on");
     if (hide) {
       if (document.title !== "Stash") {
         realTitle = document.title;
