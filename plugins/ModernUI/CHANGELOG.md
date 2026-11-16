@@ -16,6 +16,7 @@ Newest first. Versions are what Stash shows under Settings → Plugins.
   swiping down does (back to where you opened the page from). It replaces the **← Galleries** and
   **← gallery** buttons; an image opened from the Images list now goes back to that list, not its gallery.
 - Scene timeline: off at first on computers too, with a small **Show timeline** button above the video.
+- An image's page on a computer has the same small **‹ ›** buttons at the sides of the picture.
 - Full-screen pictures on a computer have small **‹ ›** buttons to go to the previous / next one, like
   swiping on a phone.
 

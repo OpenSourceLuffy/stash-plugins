@@ -115,6 +115,7 @@
   const imageNav = cfg.disableImageSwipe ? null : setupImageSwipe();
   if (!cfg.disableImageSwipe) setupSceneSwipeUp();
   setupImageViewer(imageNav);
+  if (imageNav) setupImagePageNav(imageNav);
 
   // ------------------------------------------------------------------
   // Quick filters: a scrolling row of buttons between a list's toolbar
@@ -2414,6 +2415,35 @@
   }
 
   // ------------------------------------------------------------------
+  // Image page on a computer: small ‹ › buttons at the sides of the picture,
+  // the same as the arrow keys / a swipe on a phone (hidden on touch screens)
+  function setupImagePageNav(nav) {
+    const PAGE = /^\/images\/\d+\/?$/;
+    const svg = (d) => `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${d}"/></svg>`;
+    const make = (dir) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "mui-image-nav " + (dir < 0 ? "prev" : "next");
+      b.title = dir < 0 ? "Previous (←)" : "Next (→)";
+      b.setAttribute("aria-label", dir < 0 ? "Previous picture" : "Next picture");
+      b.innerHTML = svg(dir < 0 ? "M15 5l-7 7 7 7" : "M9 5l7 7-7 7");
+      b.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); nav.go(dir); });
+      return b;
+    };
+    const btns = [make(-1), make(1)];
+    function sync() {
+      const box = PAGE.test(location.pathname) && document.querySelector(".image-container");
+      if (!box) { btns.forEach((b) => b.remove()); return; }
+      btns.forEach((b, i) => {
+        if (b.parentElement !== box) box.appendChild(b);
+        const has = !!nav.neighbour(i ? 1 : -1);
+        if (b.hidden === has) b.hidden = !has;
+      });
+    }
+    setInterval(sync, 400);
+    window.addEventListener("popstate", () => setTimeout(sync, 0));
+  }
+
   // Image page: click the picture to see it full screen and zoom in
   // ------------------------------------------------------------------
   // Zoom with the mouse wheel / trackpad pinch, pinch on a phone, or

@@ -3729,3 +3729,32 @@ body.mui .mui-exit, body.mui .mui-image-crumb { display: none !important; }
   }
   body.mui.mui-gallery-stack .row:has(> .gallery-tabs) { height: auto !important; overflow: visible !important; }
 }
+
+/* Image page on a computer: ‹ › at the sides of the picture */
+.image-container { position: relative; }
+.mui-image-nav {
+  position: absolute;
+  top: 50%;
+  z-index: 3;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  margin-top: -22px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(20, 22, 26, 0.45);
+  color: #fff;
+  opacity: 0.5;
+  transition: opacity 0.15s ease, background 0.15s ease;
+  cursor: pointer;
+}
+.mui-image-nav.prev { left: 12px; }
+.mui-image-nav.next { right: 12px; }
+.mui-image-nav:hover, .mui-image-nav:focus-visible { opacity: 1; background: rgba(20, 22, 26, 0.75); }
+.mui-image-nav[hidden] { display: none !important; }
+@media (hover: hover) and (pointer: fine) {
+  .mui-image-nav { display: flex; }
+}
