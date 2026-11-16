@@ -3790,3 +3790,27 @@ body.mui .mui-exit, body.mui .mui-image-crumb { display: none !important; }
     object-fit: cover !important;
   }
 }
+
+/* Selected cards on a phone: the details go under the title, not over the
+   picture (on a computer they stay over the picture) */
+body.mui .mui-sel-info.mui-sel-below { display: none; }
+@media (max-width: 576px) {
+  body.mui .mui-sel-info.mui-sel-over { display: none; }
+  body.mui .grid-card:has(.mui-sel-below) .card-section { display: block !important; }
+  body.mui .mui-sel-info.mui-sel-below {
+    position: static;
+    display: flex;
+    margin: 0 0 4px;
+    padding: 0;
+    background: none;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    box-shadow: none;
+  }
+  body.mui .mui-sel-below .mui-sel-chip { background: rgba(128, 128, 128, 0.16); color: inherit; }
+  body.mui .mui-sel-below .mui-sel-none { color: inherit; opacity: 0.6; }
+  body.mui.mui-light .mui-sel-below .mui-sel-yes { color: #1f8a52; background: rgba(46, 160, 98, 0.14); }
+  body.mui.mui-light .mui-sel-below .mui-sel-no { color: #a3660d; background: rgba(214, 150, 40, 0.16); }
+  /* the picture's corner labels stay visible now */
+  body.mui .grid-card:has(.mui-sel-below) :is(.scene-specs-overlay, .studio-overlay) { opacity: 1; }
+}
