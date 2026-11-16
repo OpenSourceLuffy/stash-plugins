@@ -1918,6 +1918,8 @@
         h("div", { key: "q", className: "bta-fr-q" }, "Make ", h("b", { key: "c" }, it.child.name), " a sub-tag of ", h("b", { key: "p" }, it.parent.name), "?"),
         h("div", { key: "m", className: "bta-fr-meta" }, it.reasons.join(" · ")),
         h("div", { key: "m2", className: "bta-fr-meta" }, `Nothing is retagged: ${it.child.name} just sits under ${it.parent.name} (and filtering for ${it.parent.name} with sub-tags finds it).`),
+        h("button", { key: "x", type: "button", className: "bta-np-existing", onClick: () => answer("yes", it, { merge: true }) },
+          `…or merge ${it.child.name} into ${it.parent.name} instead`),
       ];
     } else {
       const total = (it.all || []).length || it.count;
@@ -2372,6 +2374,10 @@
             if (kind === "yes" && !one._name) return fail("Give the new tag a name first (or add them to a tag you have).");
           }
         }
+        if (one.type === "tagsub" && confirmed && confirmed.merge) {
+          // "…or merge instead": the child becomes an alias of the parent
+          one = { ...one, type: "tagmerge", tags: [one.parent, one.child], keep: one.parent.id, _orig: one };
+        }
         if (one.type === "tagmerge") {
           const keep = (studioPick[one.sig] || {}).keep || one.keep;
           const keepName = (one.tags.find((t) => t.id === keep) || {}).name || "";
@@ -2794,6 +2800,11 @@
                   : tab === "faces" ? ["Is this ", h("b", { key: "n" }, g.name), "?"] : ["Tag them ", h("b", { key: "n" }, g.name), "?"]),
                 h("select", { className: "bta-batch-pick", value: String(group), onChange: (e) => setGroup(e.target.value), "aria-label": "Which group" },
                   (groups || []).map((x) => h("option", { key: x.id, value: String(x.id) }, `${x.name} (${x.count})`))))),
+            items.length > 1 && h("div", { className: "bta-batch-all" },
+              h("button", { type: "button", className: "bta-fr-chip", onClick: () => setBatchOff(chk ? new Set() : new Set()) },
+                chk ? "Mark all to remove" : "Select all"),
+              h("button", { type: "button", className: "bta-fr-chip", onClick: () => setBatchOff(new Set(items.map(keyOf))) },
+                chk ? "Keep all" : "Deselect all")),
             h("div", { className: "bta-all-hint bta-batch-hint" }, batch && batch.state === "loading" ? "Loading them…"
               : chk ? `These look out of place, but they're all kept until you tap the ones that ${gTag ? "really don't fit" : "aren't them"} (they turn red). ⤢ to see one big.`
               : `Tap the ones that ${tab === "faces" ? "aren't them" : "don't fit"} - they'll be marked no. ⤢ to see one big.`),

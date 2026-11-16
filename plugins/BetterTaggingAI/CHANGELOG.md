@@ -6,6 +6,7 @@ that plugin's changes.
 
 ## 1.5 (2026-11-11)
 
+- Sub-tag cards have **…or merge into [tag] instead**. Batch view has **Select all** / **Deselect all** (on Check: **Mark all to remove** / **Keep all**). On phones the Review action row wraps instead of running off the screen.
 - Review → Tags → Similar knows synonyms and broader terms: *Big Tits* / *Big Breasts* is a merge, *Big Tits* goes under *Tits*, *Blowjob* under *Oral*. Body tags are included now. Add your own with **Tags: synonyms**.
 - Setup & troubleshooting shows where Stash runs (Docker Desktop, Docker on Linux, or installed directly), and **Find Ollama** tries every usual address from there and can save the one that works.
 - Setup & troubleshooting: **Narrow it down** buttons under the common problems (check the connection, list the installed models, check library folders, run a preview task...), with the result shown in place.

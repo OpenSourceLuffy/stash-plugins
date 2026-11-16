@@ -1813,3 +1813,16 @@ body.mui-light .bta-batch-foot { background: linear-gradient(to bottom, transpar
 .bta-setup-faq-do { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: -4px 0 12px; }
 .bta-setup-faq-out { margin: 0 0 14px; padding: 10px 12px 4px; border-radius: 12px; background: rgba(128, 128, 128, 0.08); }
 .bta-setup-faq-label { margin-bottom: 8px; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; opacity: 0.6; }
+.bta-batch-all { display: flex; gap: 6px; margin: 4px 0 2px; }
+@media (max-width: 576px) {
+  /* four actions (Tags) and the views don't fit on one line: wrap */
+  .bta-fr-actrow { flex-wrap: wrap !important; row-gap: 6px; }
+  .bta-fr-actrow .bta-fr-views { margin-left: 0; }
+}
+@media (max-width: 576px) {
+  /* (that extra line: the swipe card's picture gives up its height) */
+  .bta-fr:has(.bta-fr-acts .bta-fr-tab:nth-child(4)):has(.bta-fr-views) .bta-fr-pic {
+    height: calc(100vh - 360px - env(safe-area-inset-bottom));
+    height: calc(100dvh - 360px - env(safe-area-inset-bottom));
+  }
+}
