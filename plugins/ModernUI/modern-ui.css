@@ -3668,15 +3668,15 @@ body.mui.mui-light .mui-gqf-chip:not(.on) { border-color: var(--mui-l-border); b
   padding: 0;
   border: 0;
   border-radius: 50%;
-  background: rgba(20, 22, 26, 0.72);
-  -webkit-backdrop-filter: blur(8px);
-  backdrop-filter: blur(8px);
+  background: rgba(90, 96, 106, 0.38);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
   color: #fff;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.16);
   cursor: pointer;
 }
 @media (hover: hover) and (pointer: fine) {
-  .mui-item-x:hover { background: rgba(20, 22, 26, 0.9); }
+  .mui-item-x:hover { background: rgba(90, 96, 106, 0.6); }
 }
 @media (max-width: 576px) {
   .mui-item-x { top: calc(12px + env(safe-area-inset-top)); right: 12px; }
