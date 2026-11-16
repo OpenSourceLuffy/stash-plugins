@@ -1879,7 +1879,10 @@
 
   // Tags → Similar / New: merge two tags, nest one under another, or make a
   // tag for a group of look-alike pictures
-  function TagTidyCard({ it, next, drag, tint, busy, out, keep, setKeep, name, setName, onAll, onExisting, onPage, answer, handlers }) {
+  function TagTidyCard({ it: shownIt, next, drag, tint, busy, out, keep, setKeep, name, setName, onAll, onExisting, onPage, answer, handlers, swapped, onSwap }) {
+    // a sub-tag card the other way round (⇅): the parent becomes the sub-tag
+    const it = shownIt.type === "tagsub" && swapped
+      ? { ...shownIt, child: shownIt.parent, parent: shownIt.child, reasons: ["Switched from the suggestion (tap ⇅ again to switch back)"] } : shownIt;
     const t = it.type;
     const tagPic = (x, big) => h("button", {
       type: "button", className: "bta-fr-avatar-btn", title: `See ${x.name}'s page`,
@@ -1913,7 +1916,9 @@
         h("div", { className: "bta-st-row" }, tagPic(it.parent), h("div", { className: "bta-st-info" },
           h("div", { className: "bta-st-name" }, it.parent.name), h("div", { className: "bta-fr-meta" }, items(it.parent.count)))),
         h("div", { className: "bta-st-row bta-tt-child" }, tagPic(it.child), h("div", { className: "bta-st-info" },
-          h("div", { className: "bta-st-name" }, "↳ ", it.child.name), h("div", { className: "bta-fr-meta" }, items(it.child.count)))));
+          h("div", { className: "bta-st-name" }, "↳ ", it.child.name), h("div", { className: "bta-fr-meta" }, items(it.child.count)))),
+        h("button", { type: "button", className: "bta-st-opt bta-tt-swap", onPointerDown: (e) => e.stopPropagation(), onClick: onSwap,
+          title: "Switch which one is the parent" }, "⇅ Switch parent and sub-tag"));
       body = [
         h("div", { key: "q", className: "bta-fr-q" }, "Make ", h("b", { key: "c" }, it.child.name), " a sub-tag of ", h("b", { key: "p" }, it.parent.name), "?"),
         h("div", { key: "m", className: "bta-fr-meta" }, it.reasons.join(" · ")),
@@ -2374,9 +2379,12 @@
             if (kind === "yes" && !one._name) return fail("Give the new tag a name first (or add them to a tag you have).");
           }
         }
+        if (one.type === "tagsub" && (studioPick[one.sig] || {}).swap) {
+          one = { ...one, child: one.parent, parent: one.child, _orig: one._orig || one };
+        }
         if (one.type === "tagsub" && confirmed && confirmed.merge) {
           // "…or merge instead": the child becomes an alias of the parent
-          one = { ...one, type: "tagmerge", tags: [one.parent, one.child], keep: one.parent.id, _orig: one };
+          one = { ...one, type: "tagmerge", tags: [one.parent, one.child], keep: one.parent.id, _orig: one._orig || one };
         }
         if (one.type === "tagmerge") {
           const keep = (studioPick[one.sig] || {}).keep || one.keep;
@@ -2741,6 +2749,8 @@
         it: cur, next, drag, tint, busy,
         out: leftOut[cur.sig] || new Set(),
         keep: (studioPick[cur.sig] || {}).keep || cur.keep,
+        swapped: !!(studioPick[cur.sig] || {}).swap,
+        onSwap: () => setStudioPick((sp) => ({ ...sp, [cur.sig]: { ...(sp[cur.sig] || {}), swap: !(sp[cur.sig] || {}).swap } })),
         setKeep: (id) => { setStudioPick((sp) => ({ ...sp, [cur.sig]: { keep: id } })); setNames((n) => { const c0 = { ...n }; delete c0[cur.sig]; return c0; }); },
         name: names[cur.sig],
         setName: (v) => setNames((n) => ({ ...n, [cur.sig]: v })),

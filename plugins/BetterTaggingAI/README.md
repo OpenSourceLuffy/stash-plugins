@@ -107,7 +107,7 @@ Tapping a tab goes back to the action you used last there.
   (Female)* under *Brown Hair*), or a broader term (*Blowjob*, *Rimming* and *69* under *Oral*). Synonyms
   count (*Tits* = *Boobs* = *Breasts*, *Doggy Style* = *Doggystyle*), and so do a tag's aliases; add your
   own with the setting **Tags: synonyms** (`Oral = Blowjob` for the same thing, `Blowjob < Oral` for a
-  kind of). **…or merge into [tag] instead** turns the sub-tag into an alias of the other. A gallery counts as one place, so a long comic whose pages all
+  kind of). **…or merge into [tag] instead** turns the sub-tag into an alias of the other. **⇅ Switch parent and sub-tag** puts them the other way round. A gallery counts as one place, so a long comic whose pages all
   share tags doesn't make them look alike. Undo puts a merged tag back with its items.
 - *New*: **New tag for these?** for a group of pictures that look alike (each fingerprint compared
   after taking away the library's average look) and that no tag covers yet: type a name, or **…or add

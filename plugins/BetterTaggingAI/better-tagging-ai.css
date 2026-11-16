@@ -1826,3 +1826,4 @@ body.mui-light .bta-batch-foot { background: linear-gradient(to bottom, transpar
     height: calc(100dvh - 360px - env(safe-area-inset-bottom));
   }
 }
+.bta-tt-swap { align-self: flex-start; margin: 2px 0 0 28px; }
