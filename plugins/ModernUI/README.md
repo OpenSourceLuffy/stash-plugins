@@ -27,7 +27,7 @@ A cleaner, app-like look for Stash, built to feel good on a phone as well as a c
 
 **Lists**
 - Once you select a card (press and hold on a phone), every scene, image or gallery card in the list
-  shows a strip with whether it's organized, how many tags it has, and its performers.
+  shows whether it's organized, how many tags it has, and its performers (over the picture on a computer, under the title on a phone).
 
   ![Selected scene cards with their strips](../../docs/screenshots/MUI_Selected_Info.png)
 

@@ -2799,13 +2799,13 @@
     const React = api.React;
     const h = React.createElement;
 
-    function SelectedInfo({ item }) {
+    function SelectedInfo({ item, below }) {
       const tags = (item.tags || []).length;
       const people = (item.performers || []).map((p) => p.name);
       const who = !people.length ? "No performer"
         : people.length <= 2 ? people.join(", ")
         : `${people.slice(0, 2).join(", ")} +${people.length - 2}`;
-      return h("div", { className: "mui-sel-info", "aria-label": "Selected item details" },
+      return h("div", { className: "mui-sel-info" + (below ? " mui-sel-below" : " mui-sel-over"), "aria-label": "Selected item details" },
         h("span", { className: "mui-sel-chip " + (item.organized ? "mui-sel-yes" : "mui-sel-no") },
           h("span", { className: "mui-sel-dot" }),
           item.organized ? "Organized" : "Not organized"),
@@ -2822,6 +2822,15 @@
         // once anything in the list is selected, every card shows it
         if (!(props.selected || props.selecting) || !props[key]) return result;
         return h(React.Fragment, null, result, h(SelectedInfo, { item: props[key] }));
+      });
+    }
+    // phones: the same details under the title instead, so the picture stays clear
+    for (const [name, key] of [["SceneCard.Details", "scene"], ["ImageCard.Details", "image"], ["GalleryCard.Details", "gallery"]]) {
+      api.patch.after(name, function (...args) {
+        const props = args[0] || {};
+        const result = args[args.length - 1];
+        if (!(props.selected || props.selecting) || !props[key]) return result;
+        return h(React.Fragment, null, h(SelectedInfo, { item: props[key], below: true }), result);
       });
     }
   }

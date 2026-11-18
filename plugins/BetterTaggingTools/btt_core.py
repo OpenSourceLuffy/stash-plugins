@@ -7760,6 +7760,71 @@ TAG_GROUP_ONE_PLACE = 0.7 # a group mostly from one gallery / folder is that gal
 TAG_PAIR_SUB_SHARE = 0.3  # a tag named under another ("Solo Female" / "Solo") and with it this often: a sub-tag
 TAG_PAIR_SAME = 0.8       # items in common / items with either: the same tag twice
 TAG_PAIR_MIN = 4          # items the smaller tag needs
+# words and phrases that mean the same in tag names (first = the one used);
+# a tag's own aliases count as well. "Big Boobs" then sits under "Tits",
+# "Doggystyle POV" under "Doggy Style", "Point of View Blow Job" under "Blowjob".
+TAG_SYNONYMS = [
+    ["doggy", "doggy style", "doggystyle", "doggie style", "doggiestyle", "doggie"],
+    ["blowjob", "blow job", "bj", "blowie", "sucking cock", "cocksucking"],
+    ["cumshot", "cum shot", "cum shots"],
+    ["tits", "boobs", "breasts", "breast", "boob", "titties", "tit", "titty"],
+    ["ass", "butt", "booty", "bum", "arse"],
+    ["pussy", "vagina", "vulva"],
+    ["cock", "dick", "penis"],
+    ["pov", "point of view", "first person"],
+    ["lesbian", "girl on girl", "girlgirl", "gg", "lesbians"],
+    ["threesome", "3some", "three some"],
+    ["foursome", "4some"],
+    ["masturbation", "masturbating", "masturbate"],
+    ["handjob", "hand job", "hj"],
+    ["footjob", "foot job"],
+    ["feet", "foot"],
+    ["creampie", "cream pie"],
+    ["outdoor", "outdoors", "outside"],
+    ["toy", "toys", "sex toy", "sex toys"],
+    ["stepmom", "step mom", "step mother", "stepmother"],
+    ["stepsister", "step sister", "step sis", "stepsis"],
+    ["stepdad", "step dad", "step father", "stepfather"],
+    ["stepbrother", "step brother", "step bro", "stepbro"],
+    ["tattoo", "tattoos", "tattooed", "inked"],
+    ["piercing", "piercings", "pierced"],
+    ["stockings", "thigh highs", "thighhighs", "nylons"],
+    ["cunnilingus", "pussy licking", "eating pussy", "licking pussy"],
+    ["interracial", "ir"],
+    ["trans", "transgender", "ts", "tgirl", "t girl"],
+    ["selfie", "selfies"],
+    ["69", "sixty nine", "sixtynine"],
+    ["deepthroat", "deep throat", "deepthroating"],
+    ["facial", "facials", "cum on face"],
+    ["bondage", "tied up", "restrained", "rope"],
+    ["femdom", "female domination", "female dom"],
+    ["cowgirl", "riding"],
+    ["oral", "oral sex"],
+]
+# narrower -> broader: a tag about the first is a kind of the second
+TAG_BROADER = {"blowjob": "oral", "cunnilingus": "oral", "rimming": "oral", "69": "oral", "face fuck": "oral",
+               "deepthroat": "blowjob", "titjob": "tits", "titty fuck": "tits"}
+
+
+def tag_word_rules(text):
+    """The "Tags: synonyms" setting: lines (or ;) like "Oral = Blowjob = BJ"
+    (the same thing) or "Blowjob < Oral" (a kind of). ([groups], {narrow: broad})."""
+    groups, broader = [], {}
+    for line in re.split(r"[;\n]", text or ""):
+        line = line.strip().lower()
+        if "<" in line:
+            a, b = [x.strip() for x in line.split("<", 1)]
+            if a and b:
+                broader[a] = b
+        elif ">" in line:
+            a, b = [x.strip() for x in line.split(">", 1)]
+            if a and b:
+                broader[b] = a
+        elif "=" in line:
+            g = [x.strip() for x in line.split("=") if x.strip()]
+            if len(g) > 1:
+                groups.append(g)
+    return groups, broader
 
 
 def locked_tag_tidy(plugin_dir):
@@ -7854,7 +7919,7 @@ def run_tag_groups(stash, plugin_dir, limit=30, skip=(), fresh=False):
 def run_tag_pairs(stash, plugin_dir, limit=30, skip=()):
     cfg = settings(stash, plugin_dir)
     _, excluded = tag_lookup(stash, cfg, plugin_dir)
-    excluded = set(excluded) | gallery_name_tag_ids(plugin_dir)
+    excluded = set(excluded)  # (gallery-only tags are in it; a gallery's name tag that's used everywhere, like "Tits", counts)
     tags = {t["id"]: t for t in stash.call("{ findTags(filter: {per_page: -1}) { tags { id name aliases image_path "
                                            "scene_count image_count parents { id } children { id } } } }")["findTags"]["tags"]}
     # where each tag is, counting a gallery as one place (a 1,000-page comic
@@ -7869,8 +7934,7 @@ def run_tag_pairs(stash, plugin_dir, limit=30, skip=()):
     with locked_tag_tidy(plugin_dir) as d:
         skip = set(skip or ()) | set(d.get("no", []))
     norm = lambda n: re.sub(r"s$", "", re.sub(r"[^a-z0-9]", "", (n or "").lower()))
-    ids = [t for t in tags if t not in excluded and len(have.get(t, ())) >= 1
-           and tags[t]["name"].strip().lower() not in BODY_TAG_NAMES]
+    ids = [t for t in tags if t not in excluded and len(have.get(t, ())) >= 1]
     by_item = defaultdict(set)
     for t in ids:
         for k in have[t]:
@@ -7891,12 +7955,85 @@ def run_tag_pairs(stash, plugin_dir, limit=30, skip=()):
         return {"id": t["id"], "name": t["name"], "count": n, "aliases": t.get("aliases") or [],
                 "picture": f"/tag/{t['id']}/image"}
 
-    words = lambda t: set(re.findall(r"[a-z0-9]+", tags[t]["name"].lower()))
+    raw = (stash.call("{ configuration { plugins } }")["configuration"]["plugins"] or {}).get(AI_ID) or {}
+    mine, mine_broader = tag_word_rules(raw.get("tagSynonyms"))
+    syn = {}
+    for group in TAG_SYNONYMS:
+        for w in group:
+            syn[w] = group[0]
+    for group in mine:  # yours win: they can join or override the built-in ones
+        head = syn.get(group[0], group[0])
+        for w in group:
+            syn[w] = head
+    broader = {syn.get(k, k): syn.get(v, v) for k, v in {**TAG_BROADER, **mine_broader}.items()}
+    phrases = sorted((w for w in syn if " " in w), key=len, reverse=True)
+
+    def seq(text):
+        """A name as its meanings in order: synonyms and plurals made one."""
+        t = " " + re.sub(r"[^a-z0-9+]+", " ", (text or "").lower()) + " "
+        for ph in phrases:
+            t = t.replace(" " + ph + " ", " " + syn[ph].replace(" ", "_") + " ")
+        out = []
+        for w in t.split():
+            w = w.replace("_", " ")
+            w = syn.get(w, w)
+            if w not in syn.values() and len(w) > 3 and w.endswith("s") and not w.endswith("ss"):
+                w = syn.get(w[:-1], w[:-1])
+            out.append(w)
+        return tuple(out)
+
+    def base(text):
+        """Without its qualifier: "Brown Hair (Female)", "Doggy Style - Standing" -> the first part."""
+        return re.split(r"\s+-\s+|\s*\(", text or "")[0].strip()
+
+    names_of = lambda t: [n for n in [tags[t]["name"]] + (tags[t].get("aliases") or []) if n]
+    spellings = {t: {frozenset(seq(n)) for n in names_of(t)} for t in tags}
+    seqs = {t: {seq(n) for n in names_of(t)} for t in tags}
+    bases = {t: {seq(base(n)) for n in names_of(t)} for t in tags}
+    DIRECTION = {"on", "by", "to", "fucks", "fucked", "into", "over"}
+    NOT_KIND = DIRECTION | {"no", "non", "not", "without", "and", "&", "or", "vs", "with"}
 
     def named_under(child, parent):
-        """"Solo Female" under "Solo": the parent's words are all in the child's name."""
-        pw, cw = words(parent), words(child)
-        return bool(pw) and pw < cw
+        """"Solo Female" under "Solo", "Big Boobs" under "Tits": every word of
+        the parent's name (or an alias of it, or a synonym) is in the child's."""
+        return any(pw and pw < cw for pw in spellings[parent] for cw in spellings[child])
+
+    def wider(word, steps=3):
+        out = []
+        while word in broader and steps:
+            word = broader[word]
+            out.append(word)
+            steps -= 1
+        return out
+
+    def broadly(child, parent):
+        """Blowjob is a kind of Oral (the built-in list and your setting)."""
+        for ps in seqs[parent]:
+            if len(ps) != 1:
+                continue
+            for cs in bases[child]:
+                if cs and not set(cs) & NOT_KIND and ps[0] in wider(cs[-1]):
+                    return True
+        return False
+
+    def kind_of(child, parent):
+        """The parent is what the child is a kind of: the end of its name
+        ("Standing Missionary", "Big Nipples") or its name before a
+        qualifier ("Brown Hair (Female)", "Doggy Style - Standing")."""
+        if broadly(child, parent):
+            return True
+        for ps in seqs[parent]:
+            if not ps:
+                continue
+            for cs in bases[child]:  # (the words in a qualifier don't count)
+                if set(cs) & NOT_KIND:
+                    continue  # "No Bra", "Black and White", "White on Black"
+                if len(cs) > len(ps) and cs[-len(ps):] == ps:
+                    return True
+            for cb in bases[child]:
+                if cb == ps and cb not in seqs[child]:
+                    return True
+        return False
 
     def related(a, b):
         return b in {p["id"] for p in tags[a].get("parents") or []} or a in {p["id"] for p in tags[b].get("parents") or []}
@@ -7905,6 +8042,18 @@ def run_tag_pairs(stash, plugin_dir, limit=30, skip=()):
     groups = defaultdict(list)
     for t in ids:
         groups[norm(tags[t]["name"])].append(t)
+    # ... and the same meaning in other words (synonyms, aliases)
+    by_meaning = defaultdict(set)
+    for t in ids:
+        for sp in spellings[t]:
+            if sp:
+                by_meaning[sp].add(t)
+    for sp, ts in by_meaning.items():
+        if sp & DIRECTION:
+            continue  # word order matters ("Black on White" isn't "White on Black")
+        ts = [t for t in ts if not any(t in g for g in groups.values() if len(g) > 1)]
+        if len(ts) > 1:
+            groups[" ".join(sorted(sp)) + "#syn"] = sorted(ts)
     for key, ts in groups.items():
         if len(ts) < 2 or not key:
             continue
@@ -7917,7 +8066,8 @@ def run_tag_pairs(stash, plugin_dir, limit=30, skip=()):
                 continue
             seen.add(pair)
             out.append({"sig": sig, "tp": True, "type": "tagmerge", "tags": [card(a), card(b)], "keep": a,
-                        "count": len(have[a] | have[b]), "reasons": ["The same name written differently"]})
+                        "count": len(have[a] | have[b]),
+                        "reasons": ["The same thing in other words" if key.endswith("#syn") else "The same name written differently"]})
     # on the same items
     for (a, b), c in both.items():
         pair = (a, b)
@@ -7936,13 +8086,54 @@ def run_tag_pairs(stash, plugin_dir, limit=30, skip=()):
             seen.add(pair)
             out.append({"sig": sig, "tp": True, "type": "tagmerge", "tags": [card(big), card(small)], "keep": big,
                         "count": union, "reasons": [f"Almost always together: {c} of the {union} places (galleries, scenes, loose photos) with either have both"]})
-        elif named_under(small, big) and c / ns >= TAG_PAIR_SUB_SHARE:
+        elif kind_of(small, big) and c / ns >= TAG_PAIR_SUB_SHARE:
             sig = f"ts:{small}:{big}"
             if sig in skip:
                 continue
             seen.add(pair)
             out.append({"sig": sig, "tp": True, "type": "tagsub", "child": card(small), "parent": card(big),
                         "count": ns, "reasons": [f"{c} of the {ns} places (galleries, scenes, loose photos) with {tags[small]['name']} also have {tags[big]['name']}"]})
+    # named under another (synonyms included) - even when they're seldom on
+    # the same items, the name says it ("Big Boobs" is a kind of "Tits")
+    by_word = defaultdict(set)
+    for t in ids:
+        for sp in spellings[t]:
+            for w in sp:
+                by_word[w].add(t)
+    for child in ids:
+        if tags[child].get("parents"):
+            continue
+        cands = set()
+        for sp in spellings[child]:
+            for w in sp:
+                cands |= by_word[w]
+                for b in wider(w):
+                    cands |= by_word[b]
+        best = None
+        for parent in cands:
+            if parent == child or tuple(sorted((child, parent))) in seen or related(child, parent):
+                continue
+            if not kind_of(child, parent):
+                continue
+            if len(have[parent]) < len(have[child]) and not broadly(child, parent):
+                continue
+            # the most specific parent ("Big Tits" over "Tits" for "Big Natural Tits")
+            size = max(len(pw) for pw in spellings[parent])
+            if not best or size > best[0] or (size == best[0] and len(have[parent]) > len(have[best[1]])):
+                best = (size, parent)
+        if not best:
+            continue
+        parent = best[1]
+        pair = tuple(sorted((child, parent)))
+        sig = f"ts:{child}:{parent}"
+        if sig in skip:
+            continue
+        seen.add(pair)
+        c = both.get(pair, 0)
+        out.append({"sig": sig, "tp": True, "type": "tagsub", "child": card(child), "parent": card(parent), "count": len(have[child]),
+                    "reasons": [(f'"{tags[parent]["name"]}" is the broader term' if broadly(child, parent) else
+                                 f'"{tags[child]["name"]}" is a kind of "{tags[parent]["name"]}"')
+                                + (f" - {c} of its {len(have[child])} places also have it" if c else "")]})
     order = {"tagmerge": 0, "tagsub": 1}
     out.sort(key=lambda x: (order[x["type"]], -x["count"]))
     return {"items": out[:limit], "total": len(out)}

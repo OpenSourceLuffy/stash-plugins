@@ -148,6 +148,10 @@ tasks:
       mode: perf_details
 
 settings:
+  tagSynonyms:
+    displayName: "Tags: synonyms"
+    description: Words that mean the same in tag names, for Review → Tags → Similar (merge and sub-tag suggestions). Separate with ; or new lines. "Oral = Blowjob" makes them the same thing; "Blowjob < Oral" puts Blowjob under Oral. Common ones (Tits = Boobs = Breasts, Doggy Style = Doggystyle, Blowjob < Oral...) are built in, and every tag's aliases count too.
+    type: STRING
   faceAutoAssign:
     displayName: "Faces: add confident matches automatically"
     description: Lets the "Faces" tasks add performers they're confident about, and checks new scenes and images after a scan too. When off, the tasks only write suggestions to the log and you pick matches yourself with "Find performers by face" while editing.
