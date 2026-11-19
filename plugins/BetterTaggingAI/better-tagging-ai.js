@@ -31,6 +31,55 @@
     }).then((d) => d.runPluginOperation);
   }
 
+  // ---- what's installed: a feature shows only when what it needs is there ----
+  // (the face helper and its models, Apple's Vision, CLIP's text model, the AI
+  // model in Ollama, Auto Seek's model, a look-alike scan). The last answer is
+  // kept, so pages don't wait; before the very first answer nothing that needs
+  // a model shows.
+  const CAPS_KEY = "bta-caps";
+  const caps = { data: null, listeners: new Set(), at: 0 };
+  try { caps.data = JSON.parse(localStorage.getItem(CAPS_KEY) || "null"); } catch (e) { /* fine */ }
+  function refreshCaps(force) {
+    if (!force && Date.now() - caps.at < 5 * 60 * 1000) return;
+    caps.at = Date.now();
+    ask({ mode: "capabilities" }).then((d) => {
+      caps.data = d || {};
+      try { localStorage.setItem(CAPS_KEY, JSON.stringify(caps.data)); } catch (e) { /* fine */ }
+      caps.listeners.forEach((fn) => fn());
+    }).catch(() => {});
+  }
+  const capsNow = () => caps.data || {};
+  function useCaps() {
+    const [, bump] = React.useState(0);
+    React.useEffect(() => {
+      const fn = () => bump((n) => n + 1);
+      caps.listeners.add(fn);
+      refreshCaps();
+      return () => caps.listeners.delete(fn);
+    }, []);
+    return capsNow();
+  }
+  // what each feature needs
+  const NEEDS = {
+    none: () => true,
+    ollama: (c) => !!c.ollama,
+    looks: (c) => !!(c.embed && c.looks),
+    tags: (c) => !!(c.ollama || (c.embed && c.looks)),
+    faces: (c) => !!c.faces,
+    search: (c) => !!(c.text && c.embed && c.looks),
+    markers: (c) => !!c.auto_seek,
+    body: (c) => !!c.body,
+    apple: (c) => !!c.apple,
+    helper: (c) => !!c.helper,
+  };
+  const can = (need, c) => (NEEDS[need] || NEEDS.none)(c || capsNow());
+  // a page part that shows only when it can work
+  function Gate({ need, children }) {
+    const c = useCaps();
+    return can(need, c) ? children : null;
+  }
+  refreshCaps();
+
   // ---- "Ask AI for tags" under the Tags box ---------------------------------
   const ITEM_PAGE = /^\/(scenes|images)\/(\d+)/;
 
@@ -39,6 +88,7 @@
   }
 
   function AiTags({ values, onSelect }) {
+    const cz = useCaps();
     const m = location.pathname.match(ITEM_PAGE);
     const [ai, setAi] = React.useState({ state: "idle" });
     const [look, setLook] = React.useState({ state: "idle" });
@@ -119,13 +169,14 @@
     };
     const SURE = new Set(["both", "looks", "body"]);
     const busy = (st) => st.state === "loading";
+    if (!can("tags", cz)) return null;
     return h(
       "div",
       { className: "pts-suggest pts-ai bta-tags" },
       h("span", { className: "pts-label" }, "AI"),
-      ai.state === "idle" &&
+      ai.state === "idle" && can("ollama", cz) &&
         h("button", { type: "button", className: "pts-chip pts-ai-ask", onClick: go, title: "Ask the local AI model (Ollama) which of your tags fit, checked against look-alikes" }, "Ask AI for tags"),
-      look.state === "idle" &&
+      look.state === "idle" && can("looks", cz) &&
         h("button", { type: "button", className: "pts-chip pts-ai-ask", onClick: goLook, title: "Tags of the scenes and images you've tagged that look most like this one (quick, no AI model)" }, "Tags from look-alikes"),
       (busy(ai) || busy(look)) && h("span", { className: "pts-ai-note" }, "Looking at it…"),
       ai.state === "error" &&
@@ -209,7 +260,7 @@
     if (!props.isMulti || !props.onSelect || props.isDisabled || props.ptsNoSuggest) return result;
     if (!ITEM_PAGE.test(location.pathname)) {
       // a list page: only in the bulk Edit window (BulkAiTags checks)
-      return h(React.Fragment, null, result, h(BulkAiTags, { values: props.values, onSelect: props.onSelect }));
+      return h(React.Fragment, null, result, h(Gate, { need: "looks" }, h(BulkAiTags, { values: props.values, onSelect: props.onSelect })));
     }
     return h(React.Fragment, null, result, h(AiTags, { values: props.values, onSelect: props.onSelect }));
   });
@@ -295,7 +346,7 @@
     const props = args[0] || {};
     const result = args[args.length - 1];
     if (!props.isMulti || !props.onSelect || props.isDisabled || !IMAGE_EDIT.test(location.pathname)) return result;
-    return h(React.Fragment, null, result, h(LookGalleries, { values: props.values, onSelect: props.onSelect }));
+    return h(React.Fragment, null, result, h(Gate, { need: "looks" }, h(LookGalleries, { values: props.values, onSelect: props.onSelect })));
   });
 
   // ---- "Find performers by face" under the Performers box ------------------
@@ -413,7 +464,7 @@
     const props = args[0] || {};
     const result = args[args.length - 1];
     if (!props.isMulti || !props.onSelect || props.isDisabled || !ITEM_PAGE.test(location.pathname)) return result;
-    return h(React.Fragment, null, result, h(FaceRow, { values: props.values, onSelect: props.onSelect }));
+    return h(React.Fragment, null, result, h(Gate, { need: "faces" }, h(FaceRow, { values: props.values, onSelect: props.onSelect })));
   });
 
   // ---- performer page: "Might also be in" ----------------------------------
@@ -582,7 +633,7 @@
 
   function checkPerformerPage() {
     const m = location.pathname.match(PERF_PAGE);
-    if (!m) return;
+    if (!m || !can("faces")) return;
     const tabs = document.querySelector("#performer-page .performer-tabs");
     if (!tabs) return;
     const old = document.querySelector(".bta-lookalikes");
@@ -659,7 +710,7 @@
 
   function checkPerformerForm() {
     const m = location.pathname.match(PERF_PAGE);
-    if (!m) return;
+    if (!m || !can("ollama")) return;
     const field = document.querySelector("form #hair_color");
     if (!field) return;
     const form = field.closest("form");
@@ -865,8 +916,9 @@
   }
 
   new MutationObserver(() => {
-    clearTimeout(titleTimer);
+    if (titleTimer) return; // (at most every 200 ms, even on a page that never stops changing)
     titleTimer = setTimeout(() => {
+      titleTimer = null;
       checkTitles();
       checkPerformerForm();
       checkPerformerPage();
@@ -990,7 +1042,12 @@
       avatar: (it) => `/tag/${it.tag}/image`,
       page: (it) => `/tags/${it.tag}`,
       question: (it) => ["Tag it ", h("b", null, it.name), "?"],
-      meta: (it, pct) => `${pct(it.score)} sure · ${it.near} of its 20 closest look-alikes have it`,
+      meta: (it, pct) => [it.near ? `${pct(it.score)} sure · ${it.near} of its 20 closest look-alikes have it` : "",
+        it.frames ? `seen in ${it.frames} of ${it.looked} video frames` + (it.times && it.times.length ? ` · at ${it.times.map(clock).join(", ")}` : "") : "",
+        it.why || "", it.aesthetic != null ? `looks ${it.aesthetic}/100` : ""]
+        .filter(Boolean).join(" · "),
+      tileMeta: (it, pct) => [it.near ? `${pct(it.score)} · ${it.near}/20 look-alikes` : "",
+        it.frames ? `▶ ${it.frames}/${it.looked} frames` : "", it.why ? "near-miss" : ""].filter(Boolean).join(" · "),
       extra: (it) => ` · has ${it.tags} tag${it.tags === 1 ? "" : "s"}`,
       noLabel: "✕ No", yesLabel: "✓ Yes, add", noStamp: "NO",
       empty: "No confident tags left. New ones show up after \"Look-alike tags: scan scenes and images\" and as you tag more.",
@@ -1005,9 +1062,16 @@
       load: (only, skip, fresh) => ask({ mode: "check", limit: 40, skip, fresh: !!fresh, only: REVIEW_MODES._checkOnly }),
       keyOf: (it) => `${it.kind}:${it.id}:${it.what}:${it.target}`,
       yes: (it) => ask({ mode: "check_answer", key: `${it.kind}:${it.id}`, what: `${it.what}:${it.target}`, keep: true }),
-      no: (it) => setOnItem(it, CHECK_FIELD[it.what], it.target, "REMOVE"),
+      // taking a tag off also remembers it for that item, so no task puts it back
+      no: async (it) => {
+        await setOnItem(it, CHECK_FIELD[it.what], it.target, "REMOVE");
+        if (it.what === "t") await ask({ mode: "tag_review_answer", key: `${it.kind}:${it.id}`, tag: it.target, no: true });
+      },
       undoYes: (it) => ask({ mode: "check_answer", key: `${it.kind}:${it.id}`, what: `${it.what}:${it.target}`, keep: false }),
-      undoNo: (it) => setOnItem(it, CHECK_FIELD[it.what], it.target, "ADD"),
+      undoNo: async (it) => {
+        await setOnItem(it, CHECK_FIELD[it.what], it.target, "ADD");
+        if (it.what === "t") await ask({ mode: "tag_review_answer", key: `${it.kind}:${it.id}`, tag: it.target, no: false });
+      },
       avatar: (it) => checkAvatar(it.what, it.target),
       page: (it) => (it.what === "t" ? `/tags/${it.target}` : it.what === "g" ? `/galleries/${it.target}` : `/performers/${it.target}`),
       question: (it) => (it.what === "t" ? ["Does ", h("b", null, it.name), " fit?"]
@@ -1142,6 +1206,21 @@
     tags: { ...REVIEW_MODES.tags, base: "tags", label: "Suggested" },
     tags_check: { ...REVIEW_MODES.check, base: "check", label: "Check", checkOnly: "t",
       empty: "No tag looks out of place. New ones show up as you tag (and after look-alike scans)." },
+    // tags for markers: their own look-alikes and the positions seen in them
+    tags_markers: { ...REVIEW_MODES.tags, base: "tags", label: "Markers",
+      load: (only, skip, fresh) => ask({ mode: "marker_tag_review", tag: only || null, limit: 40, skip, fresh: !!fresh }),
+      batchLoad: (gid, fresh) => ask({ mode: "marker_tag_review", tag: gid, limit: 400, fresh: !!fresh }),
+      question: (it) => ["Tag this marker ", h("b", null, it.name), "?"],
+      empty: "No tag suggestions for markers. Markers come from \"AI markers\" (a scene's Markers tab, or the AI markers task); tagging some teaches the next suggestions." },
+    // poses for photos and markers, learnt from the ones you've tagged
+    tags_poses: { ...REVIEW_MODES.tags, base: "tags", label: "Poses",
+      load: (only, skip, fresh) => ask({ mode: "pose_review", tag: only || null, limit: 40, skip, fresh: !!fresh }),
+      batchLoad: (gid, fresh) => ask({ mode: "pose_review", tag: gid, limit: 400, fresh: !!fresh }),
+      question: (it) => [it.kind === "marker" ? "Tag this marker " : "Tag it ", h("b", null, it.name), "?"],
+      meta: (it) => it.why || "",
+      tileMeta: (it, pct) => pct(it.score),
+      loading: "Comparing body shapes and looks…",
+      empty: "No pose suggestions. They come from photos and markers you tag with a pose (Face Down Ass Up, All Fours, Kneeling… - set in the add-on's settings), and need \"Poses: read body poses\" (on a Mac)." },
     tags_similar: { ...REVIEW_MODES.tagtidy, base: "tagtidy", label: "Similar", card: true, tidyMode: "tag_pairs",
       empty: "No tags to merge or nest. Tags named alike, or nested in name (\"Solo Female\" / \"Solo\"), show up here." },
     tags_new: { ...REVIEW_MODES.tagtidy, base: "tagtidy", label: "New", card: true, tidyMode: "tag_groups",
@@ -1161,19 +1240,29 @@
   };
   const REVIEW_GROUPS = [
     { key: "faces", label: "Faces", actions: ["faces", "faces_check", "new"] },
-    { key: "tags", label: "Tags", actions: ["tags", "tags_check", "tags_similar", "tags_new"] },
+    { key: "tags", label: "Tags", actions: ["tags", "tags_markers", "tags_check", "tags_similar", "tags_new"] },
     { key: "studios", label: "Studios", actions: ["studios_add", "studios_check", "studios_new"] },
     { key: "galleries", label: "Galleries", actions: ["galleries_add", "galleries_check", "galleries_new"] },
   ];
-  const OLD_MODES = { check: "tags_check", studios: "studios_check" }; // links from before
+  const OLD_MODES = { check: "tags_check", studios: "studios_check", tags_video: "tags", tags_poses: "tags" }; // links from before
   const groupOf = (k) => REVIEW_GROUPS.find((g) => g.actions.includes(k)) || REVIEW_GROUPS[0];
   // the action last used in each tab, so tapping Faces / Tags / Studios goes back to it
+  // what each Review action needs (the rest need no model)
+  const ACTION_NEEDS = { faces: "faces", faces_check: "faces", new: "faces", tags: "looks", tags_markers: "looks",
+    tags_check: "looks", tags_new: "looks", galleries_add: "looks", galleries_check: "looks" };
+  const reviewGroups = (c) => REVIEW_GROUPS.map((g) => ({ ...g, actions: g.actions.filter((k) => can(ACTION_NEEDS[k] || "none", c)) }))
+    .filter((g) => g.actions.length);
   const lastAction = (g) => {
     try { const k = localStorage.getItem("bta-review-" + g.key); if (g.actions.includes(k)) return k; } catch (e) { /* fine */ }
     return g.actions[0];
   };
 
   async function setOnKeys(keys, field, id, mode) {
+    const markers = (keys || []).filter((k) => k.startsWith("marker:")).map((k) => k.split(":")[1]);
+    if (markers.length && field === "tag_ids") {
+      await gql("mutation($i: BulkSceneMarkerUpdateInput!) { bulkSceneMarkerUpdate(input: $i) { id } }",
+        { i: { ids: markers, tag_ids: { ids: [id], mode } } });
+    }
     for (const kind of ["scene", "image"]) {
       const ids = (keys || []).filter((k) => k.startsWith(kind + ":")).map((k) => k.split(":")[1]);
       if (!ids.length) continue;
@@ -1202,10 +1291,15 @@
   }
 
   async function setOnItem(it, field, id, mode) {
+    if (it.kind === "marker") return setOnKeys([`marker:${it.id}`], field, id, mode);
     const [mutation, type] = it.kind === "scene" ? ["bulkSceneUpdate", "BulkSceneUpdateInput"] : ["bulkImageUpdate", "BulkImageUpdateInput"];
     await gql(`mutation($i: ${type}!) { ${mutation}(input: $i) { id } }`, { i: { ids: [it.id], [field]: { ids: [id], mode } } });
   }
 
+  // a marker card is looked at as its scene, from the marker's start
+  const asScene = (it) => (it && it.kind === "marker"
+    ? { ...it, kind: "scene", id: it.scene, marker: it.id, times: it.times || [Math.round(it.start || 0)],
+        best_at: Math.round(it.start || 0) + 2 } : it); // (the video starts 2 s before best_at)
   const clock = (sec) => {
     sec = Math.max(0, Math.round(sec || 0));
     const hh = Math.floor(sec / 3600), mm = Math.floor((sec % 3600) / 60), ss = sec % 60;
@@ -2182,17 +2276,28 @@
       h("div", { className: "bta-fr-hint" }, "Swipe right for yes, left for no."));
   }
 
+  // Review waits for the first word on what's installed (a moment, once per
+  // browser), so it doesn't start loading a tab it then switches away from
   function FaceReview() {
+    const cz = useCaps();
+    if (!caps.data) return h("div", { className: "bta-fr" }, h("div", { className: "bta-fr-empty" }, "Loading…"));
+    return h(FaceReviewPage, { cz });
+  }
+
+  function FaceReviewPage({ cz }) {
+    const rGroups = reviewGroups(cz);
+    const allowed = rGroups.flatMap((g) => g.actions);
     const params = new URLSearchParams(window.location.search);
-    const asked = OLD_MODES[params.get("mode")] || params.get("mode");
-    const tabKey = window.location.pathname === REVIEW_PATH ? "faces" : (ACTIONS[asked] ? asked : "faces");
+    const asked0 = OLD_MODES[params.get("mode")] || params.get("mode");
+    const asked = window.location.pathname === REVIEW_PATH ? "faces" : asked0;
+    const tabKey = ACTIONS[asked] && allowed.includes(asked) ? asked : (allowed[0] || "studios_add");
     const M = ACTIONS[tabKey];
     const tab = M.base; // what kind of cards (faces, tags, check, new, studios)
     REVIEW_MODES._checkOnly = M.checkOnly || null;
     REVIEW_MODES._studioKinds = M.studioKinds || null;
     REVIEW_MODES._galleryKinds = M.galleryKinds || null;
     REVIEW_MODES._tidyMode = M.tidyMode || null;
-    const grp = groupOf(tabKey);
+    const grp = rGroups.find((g) => g.actions.includes(tabKey)) || groupOf(tabKey);
     React.useEffect(() => { try { localStorage.setItem("bta-review-" + grp.key, tabKey); } catch (e) { /* fine */ } }, [tabKey]);
     const only = params.get(M.param) || "";
     const [queue, setQueue] = React.useState([]);
@@ -2284,7 +2389,7 @@
         setQueue((q) => (fresh ? items : [...q, ...items]));
         // r.total counts what's left apart from the ones already shown
         setTotal(Math.max(0, (r.total || 0) - items.length));
-        setState({ loading: false });
+        setState({ loading: false, note: r.note || "" });
       } catch (e) {
         setState({ loading: false, error: e.message });
       } finally {
@@ -2317,7 +2422,7 @@
     }, [queue, counts, undo, total, state.loading]);
 
     // (for a moment after switching tabs the old tab's cards are still here)
-    const shown = queue.filter((it) => (tab === "tags" ? it.tag != null : tab === "new" ? it.sig != null && !it.st && !it.gal && !it.tp && !it.tg
+    const shown = queue.filter((it) => (tab === "tags" ? it.tag != null && (tabKey === "tags_poses" ? !!it.pose : !it.pose && (tabKey === "tags_markers") === (it.kind === "marker")) : tab === "new" ? it.sig != null && !it.st && !it.gal && !it.tp && !it.tg
       : tab === "studios" ? !!it.st : tab === "galleries" ? !!it.gal : tab === "tagtidy" ? !!(it.tp || it.tg)
       : tab === "check" ? it.what != null : it.kind != null && it.performer != null));
     const cur = shown[0];
@@ -2501,7 +2606,7 @@
     }
 
     // Batch view: the groups, then the chosen group's suggestions (all of them)
-    const batchLoad = (gid, fresh) => (tab === "faces"
+    const batchLoad = (gid, fresh) => (M.batchLoad ? M.batchLoad(gid, fresh) : tab === "faces"
       ? ask({ mode: "face_review", performer: gid, limit: 400 })
       : tab === "check" ? ask({ mode: "check", group: gid, limit: gid ? 400 : 1, fresh: !!fresh, only: M.checkOnly })
       : ask({ mode: "tag_review", tag: gid, limit: 400, fresh: !!fresh }));
@@ -2828,7 +2933,7 @@
                     onClick: () => setBatchOff((s0) => { const n0 = new Set(s0); if (n0.has(k)) n0.delete(k); else n0.add(k); return n0; }) },
                     h("img", { src: it.picture, alt: "", loading: "lazy", draggable: false }),
                     h("span", { className: "bta-all-mark" }, chk ? (off ? "✓" : "✕") : off ? "✕" : "✓"),
-                    it.kind === "scene" && h("span", { className: "bta-fr-tile-kind" }, "▶ Scene"),
+                    (it.kind === "scene" || it.kind === "marker") && h("span", { className: "bta-fr-tile-kind" }, it.kind === "marker" ? "▶ Marker " + clock(it.start) : "▶ Scene"),
                     h("span", { className: "bta-batch-score" }, chk ? (it.what === "p" ? "no face" : `${it.score}%`) : tab === "faces" ? `${Math.min(99, it.score)}%` : `${it.score}%`)),
                   h("button", { type: "button", className: "bta-all-view", title: "See it big", "aria-label": "See it big",
                     onClick: () => setZoom({ ...it, _list: items, _ctx: "batch" }) }, "⤢"));
@@ -2855,13 +2960,14 @@
             return h("div", { key: k, className: "bta-fr-tile" + (saving ? " saving" : "") },
               h("button", { type: "button", className: "bta-fr-tile-pic", title: "See it big", onClick: () => setZoom(it) },
                 h("img", { src: it.picture, alt: "", loading: "lazy", draggable: false }),
-                it.kind === "scene" && h("span", { className: "bta-fr-tile-kind" }, "▶ Scene")),
+                (it.kind === "scene" || it.kind === "marker") && h("span", { className: "bta-fr-tile-kind" }, it.kind === "marker" ? "▶ Marker " + clock(it.start) : "▶ Scene")),
               h("button", { type: "button", className: "bta-fr-tile-who", title: `See ${it.name}'s page`,
                 onClick: () => { reviewReturn = M.page(it); goTo(M.page(it)); } },
                 h("img", { className: tab === "tags" || (tab === "check" && it.what !== "p") ? "bta-fr-avatar-tag" : "", src: M.avatar(it), alt: "", loading: "lazy" }),
                 h("span", { className: "bta-fr-tile-name" }, it.name)),
               h("div", { className: "bta-fr-tile-meta" },
-                tab === "faces"
+                M.tileMeta ? M.tileMeta(it, pct)
+                : tab === "faces"
                   ? `${pct(it.score)} alike` + (it.times && it.times.length ? ` · ${it.times.map(clock).join(", ")}` : "")
                   : tab === "check" ? (it.what === "p" ? "Face not found" : `${it.score}% of look-alikes`)
                   : `${pct(it.score)} · ${it.near}/20 look-alikes`),
@@ -2897,8 +3003,9 @@
               h("div", { className: "bta-fr-q" }, ...M.question(cur)),
               h("div", { className: "bta-fr-meta" }, M.meta(cur, pct)),
               h("div", { className: "bta-fr-meta" },
-                h("a", { href: `/${cur.kind}s/${cur.id}`, target: "_blank", rel: "noopener", onPointerDown: (e) => e.stopPropagation() },
-                  (cur.kind === "scene" ? "Scene" : "Photo") + ": " + (cur.title || cur.id) + " ↗"),
+                h("a", { href: cur.kind === "marker" ? `/scenes/${cur.scene}?t=${Math.round(cur.start || 0)}` : `/${cur.kind}s/${cur.id}`,
+                  target: "_blank", rel: "noopener", onPointerDown: (e) => e.stopPropagation() },
+                  (cur.kind === "marker" ? "Marker" : cur.kind === "scene" ? "Scene" : "Photo") + ": " + (cur.title || cur.id) + " ↗"),
                 M.extra(cur))))),
         next && h("link", { rel: "preload", as: "image", href: next.picture }),
         h("div", { className: "bta-fr-actions" },
@@ -2915,7 +3022,7 @@
         // Faces / Tags / New, and under it Swipe / List
         h("div", { className: "bta-fr-switches" },
           h("div", { className: "bta-fr-tabs", role: "tablist", "aria-label": "What to review" },
-            REVIEW_GROUPS.map((g) =>
+            rGroups.map((g) =>
               h("button", { key: g.key, type: "button", role: "tab", "aria-selected": grp.key === g.key,
                 className: "bta-fr-tab" + (grp.key === g.key ? " active" : ""),
                 onClick: () => grp.key !== g.key && goTo(`${REVIEW_PAGE}?mode=${lastAction(g)}`) }, g.label))),
@@ -2957,7 +3064,7 @@
         } : {}),
       }),
       zoom && h(ZoomView, {
-        it: zoom, onClose: () => setZoom(null), list: zoom._list,
+        it: asScene(zoom), onClose: () => setZoom(null), list: zoom._list && zoom._list.map(asScene),
         onNav: (x) => setZoom((z) => ({ ...x, name: z.name, _list: z._list, _ctx: z._ctx, _sig: z._sig })),
         pick: zoom._ctx === "batch"
           ? { off: batchOff.has(keyOf(zoom)), check: tab === "check",
@@ -3236,7 +3343,9 @@
     const other = (id) => (plugins || []).find((p) => p.id === id);
     return h("div", { className: "bta-setup" },
       h("h2", null, "AI setup & troubleshooting"),
-      h("p", { className: "bta-setup-sub" }, "Checks everything the Better Organizing AI Add-on needs. Nothing is changed."),
+      h("p", { className: "bta-setup-sub" }, "Checks everything the Better Organizing AI Add-on needs. Nothing is changed. ",
+        h("button", { type: "button", className: "btn btn-secondary btn-sm", onClick: () => { refreshCaps(true); tourBus.open && tourBus.open(); } }, "Show the welcome tour"), " ",
+        h("button", { type: "button", className: "btn btn-secondary btn-sm", onClick: () => { refreshCaps(true); tourBus.setup && tourBus.setup(); } }, "Setup guide")),
       res.state === "loading" && h("div", { className: "bta-setup-banner" }, "Checking…"),
       res.state === "error" && h("div", { className: "bta-setup-banner fail" }, "The checks couldn't run: " + res.message),
       res.state === "done" && h("div", { className: "bta-setup-banner " + (bad ? "fail" : warn ? "warn" : "ok") },
@@ -3310,7 +3419,358 @@
       h("p", { className: "bta-setup-sub" }, "More in the add-on's README (setup is at the end). A copy of these checks can also be written to the log with the task \"Setup check: write a report to the log\"."));
   }
 
+  // ---- welcome and tour --------------------------------------------------
+  // The first time the add-on runs: a welcome with what it does, then an
+  // optional tour - one feature per slide (swipe, or Back / Next), each with a
+  // screenshot. "Don't show again" is saved in the add-on's settings
+  // ("Welcome: don't show the welcome and tour"); "Remind me later" asks again
+  // the next day on this device. The Setup page can open the tour any time.
+  const TOUR_IMG = (f) => `/plugin/${PLUGIN_ID}/assets/tour/${f}`;
+  const LATER_KEY = "bta-welcome-later";
+  const TOUR = [
+    { k: "review", need: "looks", img: "review-swipe.jpg", title: "Review: tag suggestions",
+      text: "Tags your photos and scenes are likely missing, one card at a time: swipe right (or ✓ Yes) to add, left (✕ No) to skip it for good. They come from the photos and scenes you've already tagged that look most alike, from what the video shows, and from body tags that were nearly sure - better-looking photos first.",
+      where: "Review → Tags → Suggested", go: "/review?mode=tags" },
+    { k: "batch", need: "looks", img: "review-batch.jpg", title: "Review: batch view",
+      text: "The same suggestions, all at once for one tag: untick the ones that don't fit and add the rest in one go. List view shows them as rows instead.",
+      where: "Review → any tab → Batch", go: "/review?mode=tags" },
+    { k: "faces", need: "faces", img: "review-faces.jpg", title: "Review: faces",
+      text: "Scenes and photos where a performer's face is found but they aren't added yet, and new people who turn up in several items. Faces are matched on your computer by the face helper.",
+      where: "Review → Faces", go: "/review?mode=faces" },
+    { k: "check", need: "looks", img: "review-check.jpg", title: "Review: check",
+      text: "Tags and performers that look out of place on an item. ✓ It fits keeps it and never asks again; ✕ Remove takes it off, and no task ever adds it back to that item.",
+      where: "Review → Tags → Check", go: "/review?mode=tags_check" },
+    { k: "studios", need: "none", img: "review-studios.jpg", title: "Review: studios and galleries",
+      text: "Studios for scenes and photos from their folders, galleries and the accounts in their names, studios to merge, and folders of photos that could be a gallery.",
+      where: "Review → Studios / Galleries", go: "/review?mode=studios_add" },
+    { k: "edit", need: "tags", img: "edit-tags.jpg", title: "Tags while you edit",
+      text: "Under the Tags box of a scene or photo: Ask AI for tags (the local AI model) and Tags from look-alikes. Tap one to add it; ✓ marks the sure ones.",
+      where: "A scene or photo → Edit → Tags", go: null },
+    { k: "search", need: "search", img: "search.jpg", title: "Search by description",
+      text: "Describe what you're looking for - \"red dress at the beach\", \"kneeling on a bed\", \"black and white photo\" - and it finds the photos, scenes and markers that look like it, even when no tag or title says so.",
+      where: "Search (in the menu)", go: "/ai-search" },
+    { k: "markers", need: "markers", img: "ai-markers.jpg", title: "AI markers",
+      text: "Markers where a scene shifts, with a picture of each: tap one to watch from there, then + Add (or Add all). A task does it for every scene without markers.",
+      where: "A scene → Markers → ✨ AI markers", go: null },
+    { k: "quick", need: "none", img: "quick-marker.jpg", title: "Quick markers",
+      text: "Create Marker starts at the video's current time, offers end times (the next marker, the next change the AI saw, +1 min) and fills in the name. The marker it falls inside can end where the new one starts - with Undo.",
+      where: "A scene → Markers → Create Marker", go: null },
+    { k: "chapters", need: "none", img: "chapters.jpg", title: "Gallery chapters",
+      text: "Suggest chapters finds where a gallery's parts start - folders, file names, a change of look, and on a Mac the chapter headings printed in comics. Tap a chapter to pick its pages, then add them all.",
+      where: "A gallery → Chapters → Suggest chapters", go: null },
+    { k: "body", need: "body", img: "body-tags.jpg", title: "Body tags and clothing",
+      text: "Tags for what's shown and worn - bare or covered, bras, panties, shoes, swimsuits, a butt sticking out - from a body-part detector and the picture's look. Ones it's nearly sure of wait in Review instead.",
+      where: "Settings → Tasks → Body tags", go: "/settings?tab=tasks" },
+    { k: "facts", need: "apple", img: "picture-facts.jpg", title: "Picture scores and labels",
+      text: "Every photo gets an aesthetic score (0-100) and what's in it (beach, bedroom, swimsuit…), saved as custom fields you can filter by in Stash, and Review shows the better-looking photos first.",
+      where: "Images → Filter → Custom fields", go: "/images" },
+    { k: "screens", need: "helper", img: "screenshots.jpg", title: "Screenshot crop",
+      text: "Phone screenshots of Instagram, OnlyFans or Reddit posts are cut down to the photo in them, so they look right and tag better. The originals are kept, and one task puts them all back.",
+      where: "Settings → Tasks → Screenshots", go: "/settings?tab=tasks" },
+    { k: "pictures", need: "none", img: "tag-pictures.jpg", title: "Tag pictures",
+      text: "Every tag gets a picture of its own - the most typical photo for it, never one another tag has, skipping blurry or dark ones. Pick a new one from the Tags list's ••• menu.",
+      where: "Tags → select → ••• → Most typical picture", go: "/tags" },
+    { k: "setup", need: "none", img: "setup.jpg", title: "Setup and help",
+      text: "The setup page checks the face helper, the AI model and Auto Seek, says what to install for anything missing, and starts the tasks. Features show up as soon as what they need is installed.",
+      where: "Settings → Plugins → Better Organizing AI → Setup", go: SETUP_PAGE },
+  ];
+  const tourBus = { open: null };
+
+  async function welcomeOff() {
+    const d = await gql("{ configuration { plugins } }");
+    const cur = ((d.configuration || {}).plugins || {})[PLUGIN_ID] || {};
+    await gql("mutation ($id: ID!, $i: Map!) { configurePlugin(plugin_id: $id, input: $i) }", { id: PLUGIN_ID, i: { ...cur, welcomeOff: true } });
+  }
+
+  function Tour({ onClose, slides }) {
+    const [at, setAt] = React.useState(0);
+    const track = React.useRef(null);
+    const go = (i) => {
+      const el = track.current;
+      const n = Math.max(0, Math.min(slides.length - 1, i));
+      if (el) el.scrollTo({ left: n * el.clientWidth, behavior: "smooth" });
+      setAt(n);
+    };
+    React.useEffect(() => {
+      const key = (e) => {
+        if (e.key === "ArrowRight") go(at + 1);
+        else if (e.key === "ArrowLeft") go(at - 1);
+        else if (e.key === "Escape") onClose();
+      };
+      window.addEventListener("keydown", key);
+      return () => window.removeEventListener("keydown", key);
+    }, [at]);
+    const onScroll = () => {
+      const el = track.current;
+      if (el && el.clientWidth) setAt(Math.round(el.scrollLeft / el.clientWidth));
+    };
+    const last = at === slides.length - 1;
+    return h("div", { className: "bta-tour" },
+      h("div", { className: "bta-tour-head" },
+        h("span", null, `Tour · ${at + 1} of ${slides.length}`),
+        h("button", { type: "button", className: "bta-tour-x", "aria-label": "Close the tour", onClick: onClose }, "✕")),
+      h("div", { className: "bta-tour-track", ref: track, onScroll },
+        slides.map((sl) => h("div", { className: "bta-tour-slide", key: sl.k },
+          // (pb-keep: Privacy Blur leaves these alone - they're made with it on)
+          h("div", { className: "bta-tour-shot pb-keep" }, h("img", { src: TOUR_IMG(sl.img), alt: sl.title, loading: "lazy" })),
+          h("h3", null, sl.title),
+          h("p", null, sl.text),
+          h("div", { className: "bta-tour-where" }, h("b", null, "Where: "), sl.where,
+            sl.go && h("button", { type: "button", className: "btn btn-link btn-sm", onClick: () => { onClose(); goTo(sl.go); } }, "Open it →"))))),
+      h("div", { className: "bta-tour-foot" },
+        h("button", { type: "button", className: "btn btn-secondary", disabled: at === 0, onClick: () => go(at - 1) }, "‹ Back"),
+        h("div", { className: "bta-tour-dots" }, slides.map((sl, i) =>
+          h("button", { key: sl.k, type: "button", className: "bta-tour-dot" + (i === at ? " on" : ""), "aria-label": sl.title, title: sl.title, onClick: () => go(i) }))),
+        last ? h("button", { type: "button", className: "btn btn-primary", onClick: onClose }, "Done")
+          : h("button", { type: "button", className: "btn btn-primary", onClick: () => go(at + 1) }, "Next ›")));
+  }
+
+  // ---- setup guide: what's missing, step by step (instead of the tour) -----
+  // Each step: what it's for, what to do (commands to copy), a screenshot, the
+  // matching common problems, and "Check again" to tick it off.
+  const tip = (start) => COMMON.find(([q]) => q.startsWith(start));
+  function setupSteps(c) {
+    const docker = c.docker;
+    const steps = [];
+    const working = "What the setup page shows once it's working.";
+    if (!c.helper) steps.push({ k: "helper", img: "setup-helper.jpg", caption: working, title: "Install the face helper", done: (x) => x.helper,
+      intro: "Faces, look-alikes, body tags, search and picture scores all use the face helper - a small program that runs on your own computer" +
+        (docker ? " (outside Docker, on the computer Stash's container runs on)." : "."),
+      todo: [
+        ["Open Terminal in the add-on's folder (plugins/BetterTaggingAI, in Stash's config folder) and run the setup - it takes a few minutes and downloads the models:", "sh face-helper/setup.sh"],
+        ["Check that it answers:", "curl http://127.0.0.1:11535/health"],
+        [`The add-on looks for it at ${c.face_url || "http://localhost:11535"}` + (docker ? " (Stash in Docker Desktop reaches your computer at host.docker.internal)." : ".") +
+          " If yours is somewhere else: Settings → Plugins → Better Organizing AI → Faces: helper address.", null],
+      ],
+      tips: [tip("\"Can't reach the face helper"), tip("setup.sh fails")] });
+    else if (!c.embed || !c.text) steps.push({ k: "update", img: "setup-helper.jpg", caption: working, title: "Update the face helper", done: (x) => x.embed && x.text,
+      intro: "The face helper is running, but it's missing " + [!c.embed && "the picture model (look-alikes, search)", !c.text && "the text model (search by description)"].filter(Boolean).join(" and ") + ".",
+      todo: [["Run the setup again in the add-on's folder - it updates in place:", "sh face-helper/setup.sh"]],
+      tips: [tip("\"The face helper is too old"), tip("setup.sh fails")] });
+    if (c.helper && c.embed && !c.looks) steps.push({ k: "scan", img: "setup-scan.jpg", caption: "Settings → Tasks → Look-alike tags.", title: "Scan your library's looks", done: (x) => x.looks,
+      intro: "Look-alike tags, Review's suggestions, Check and search compare pictures by their look. Each scene and photo needs its fingerprint once (well under a second each); new ones get it as they're scanned.",
+      todo: [["Run the task (Settings → Tasks → Look-alike tags), or start it here:", null]],
+      task: "Look-alike tags: scan scenes and images",
+      tips: [tip("Look-alike tags, Similar"), tip("No face matches")] });
+    if (!c.ollama) steps.push({ k: "ollama", img: "setup-ollama.jpg", caption: working, title: "Install the AI model (Ollama)", done: (x) => x.ollama,
+      intro: "Ask AI for tags, AI titles and performer details use a local AI model in Ollama. Everything else works without it.",
+      todo: [
+        ["Install Ollama from ollama.com (on a Mac: brew install ollama, then start it with brew services start ollama), then get the model (about 3.3 GB):", `ollama pull ${c.model || "gemma3:4b"}`],
+        [`The add-on looks for it at ${c.ollama_url || "http://localhost:11434"}.` + (docker ? " Stash in Docker Desktop: http://host.docker.internal:11434; in Docker on Linux use network_mode: host and http://127.0.0.1:11434." : "") +
+          " Change it under AI: Ollama address.", null],
+      ],
+      tips: [tip("\"Can't reach Ollama"), tip("\"Ollama doesn't have")] });
+    if (!c.auto_seek) steps.push({ k: "autoseek", img: "setup-autoseek.jpg", caption: "Settings → Plugins → Available Plugins.", title: "Add Auto Seek (for AI markers)", done: (x) => x.auto_seek, optional: true,
+      intro: "AI markers and positions in videos use Auto Seek's video model. Optional - only needed for those.",
+      todo: [
+        ["Settings → Plugins → Available Plugins: add Auto Seek's plugin source (see the add-on's README) and install Auto Seek.", null],
+        ["Run one of Auto Seek's tasks once so it downloads its model. The add-on keeps its own copy after that.", null],
+      ],
+      tips: [] });
+    steps.push({ k: "check", img: "setup.jpg", title: "Check it all", last: true,
+      intro: "The setup page checks everything the add-on needs, says what to do about anything still missing, shows recent errors and makes a report you can copy. Features show up by themselves once what they need is installed.",
+      todo: [], tips: [tip("Tasks stop working"), tip("The AI is slow")] });
+    return steps;
+  }
+
+  function CopyLine({ text }) {
+    const [ok, setOk] = React.useState(false);
+    return h("div", { className: "bta-guide-code" }, h("code", null, text),
+      h("button", { type: "button", className: "btn btn-secondary btn-sm", onClick: () => {
+        navigator.clipboard?.writeText(text).then(() => { setOk(true); setTimeout(() => setOk(false), 1500); });
+      } }, ok ? "Copied" : "Copy"));
+  }
+
+  function SetupGuide({ onClose, onTour }) {
+    const cz = useCaps();
+    const [steps] = React.useState(() => setupSteps(capsNow())); // (the list stays put while you work through it)
+    const [at, setAt] = React.useState(0);
+    const [checking, setChecking] = React.useState(false);
+    const [started, setStarted] = React.useState({});
+    const track = React.useRef(null);
+    const go = (i) => {
+      const el = track.current;
+      const n = Math.max(0, Math.min(steps.length - 1, i));
+      if (el) el.scrollTo({ left: n * el.clientWidth, behavior: "smooth" });
+      setAt(n);
+    };
+    const onScroll = () => { const el = track.current; if (el && el.clientWidth) setAt(Math.round(el.scrollLeft / el.clientWidth)); };
+    const recheck = () => { setChecking(true); refreshCaps(true); setTimeout(() => setChecking(false), 2500); };
+    const todo = steps.filter((s) => s.done && !s.optional && !s.done(cz));
+    const last = at === steps.length - 1;
+    return h("div", { className: "bta-tour" },
+      h("div", { className: "bta-tour-head" },
+        h("span", null, `Setup · step ${at + 1} of ${steps.length}`),
+        h("button", { type: "button", className: "bta-tour-x", "aria-label": "Close the setup guide", onClick: onClose }, "✕")),
+      h("div", { className: "bta-tour-track", ref: track, onScroll },
+        steps.map((s) => h("div", { className: "bta-tour-slide", key: s.k },
+          h("div", { className: "bta-tour-shot bta-guide-shot pb-keep" }, h("img", { src: TOUR_IMG(s.img), alt: s.title, loading: "lazy" })),
+          s.caption && h("div", { className: "bta-guide-caption" }, s.caption),
+          h("h3", null, s.title, " ",
+            s.done && h("span", { className: "bta-guide-state" + (s.done(cz) ? " ok" : "") }, s.done(cz) ? "✓ Done" : s.optional ? "Optional" : "To do")),
+          h("p", null, s.intro),
+          s.todo.length > 0 && h("ol", { className: "bta-guide-steps" }, s.todo.map(([say, cmd], i) =>
+            h("li", { key: i }, say, cmd && h(CopyLine, { text: cmd })))),
+          s.task && h("div", { className: "bta-guide-actions" },
+            h("button", { type: "button", className: "btn btn-primary btn-sm", disabled: !!started[s.task],
+              onClick: () => runTask(s.task).then(() => setStarted((x) => ({ ...x, [s.task]: "Started - it runs in Settings → Tasks." })))
+                .catch((e) => setStarted((x) => ({ ...x, [s.task]: "Couldn't start: " + e.message }))) }, "▶ " + s.task),
+            started[s.task] && h("span", { className: "bta-guide-note" }, started[s.task])),
+          s.last && h("div", { className: "bta-guide-actions" },
+            h("button", { type: "button", className: "btn btn-secondary btn-sm", onClick: () => { onClose(); goTo(SETUP_PAGE); } }, "Open the setup page"),
+            todo.length === 0 && h("button", { type: "button", className: "btn btn-primary btn-sm", onClick: onTour }, "All set - take the tour"),
+            todo.length > 0 && h("span", { className: "bta-guide-note" }, "Still to do: " + todo.map((x) => x.title).join(", "))),
+          s.tips.filter(Boolean).length > 0 && h("div", { className: "bta-guide-tips" },
+            h("div", { className: "bta-guide-tips-head" }, "If it doesn't work"),
+            s.tips.filter(Boolean).map(([q, a]) => h("details", { key: q }, h("summary", null, q), h("p", null, a)))),
+          s.done && h("div", { className: "bta-guide-actions" },
+            h("button", { type: "button", className: "btn btn-secondary btn-sm", disabled: checking, onClick: recheck }, checking ? "Checking…" : "↻ Check again"))))),
+      h("div", { className: "bta-tour-foot" },
+        h("button", { type: "button", className: "btn btn-secondary", disabled: at === 0, onClick: () => go(at - 1) }, "‹ Back"),
+        h("div", { className: "bta-tour-dots" }, steps.map((s, i) =>
+          h("button", { key: s.k, type: "button", className: "bta-tour-dot" + (i === at ? " on" : ""), "aria-label": s.title, title: s.title, onClick: () => go(i) }))),
+        last ? h("button", { type: "button", className: "btn btn-primary", onClick: onClose }, "Close")
+          : h("button", { type: "button", className: "btn btn-primary", onClick: () => go(at + 1) }, "Next ›")));
+  }
+
+  function Welcome() {
+    const cz = useCaps();
+    const [step, setStep] = React.useState(null); // null (hidden) | "hello" | "tour" | "setup"
+    React.useEffect(() => {
+      tourBus.open = () => setStep("tour");
+      tourBus.setup = () => setStep("setup");
+      if (/^\/login/.test(location.pathname)) return undefined;
+      let live = true;
+      const t = setTimeout(async () => {
+        try { if (Number(localStorage.getItem(LATER_KEY) || 0) > Date.now()) return; } catch (e) { /* fine */ }
+        try {
+          const d = await gql("{ configuration { plugins } }");
+          const cur = ((d.configuration || {}).plugins || {})[PLUGIN_ID] || {};
+          if (!cur.welcomeOff && live) setStep((s0) => s0 || "hello");
+        } catch (e) { /* fine */ }
+      }, 1500);
+      return () => { live = false; clearTimeout(t); };
+    }, []);
+    if (!step) return null;
+    const known = cz.helper !== undefined;
+    const ready = TOUR.filter((sl) => can(sl.need, cz));
+    const missing = known ? TOUR.filter((sl) => !can(sl.need, cz)) : [];
+    const needsSetup = known && setupSteps(cz).some((s) => s.done && !s.optional);
+    const close = () => setStep(null);
+    const off = () => { welcomeOff().catch(() => {}); close(); };
+    const later = () => { try { localStorage.setItem(LATER_KEY, String(Date.now() + 24 * 3600 * 1000)); } catch (e) { /* fine */ } close(); };
+    return h("div", { className: "bta-welcome-back", onClick: (e) => { if (e.target === e.currentTarget && step === "tour") off(); } },
+      h("div", { className: "bta-welcome modal-content", role: "dialog", "aria-modal": "true", "aria-label": "Welcome to Better Organizing AI" },
+        step === "hello" ? h(React.Fragment, null,
+          h("h2", null, "Welcome to Better Organizing AI"),
+          h("p", null, "It helps you tag and organize your library with AI that runs on your own computer - nothing is sent anywhere. It suggests tags, performers and studios, finds look-alikes and faces, makes markers and chapters, crops screenshots and lets you search by describing a picture. You decide: suggestions wait in Review until you say yes."),
+          known && h("div", { className: "bta-welcome-list" },
+            h("b", null, "Ready to use: "), ready.map((sl) => sl.title).join(" · ")),
+          missing.length > 0 && h("div", { className: "bta-welcome-list bta-welcome-missing" },
+            h("b", null, "Needs setting up: "), missing.map((sl) => sl.title).join(" · "), " ",
+            h("a", { href: SETUP_PAGE, onClick: (e) => { e.preventDefault(); close(); goTo(SETUP_PAGE); } }, "Open the setup page")),
+          h("p", { className: "bta-welcome-ask" }, needsSetup
+            ? "A few things need setting up first. Want to go through them step by step?"
+            : "Would you like a quick tour of what it can do?"),
+          h("div", { className: "bta-welcome-btns" },
+            needsSetup
+              ? h("button", { type: "button", className: "btn btn-primary", onClick: () => setStep("setup") }, "Set it up with me")
+              : h("button", { type: "button", className: "btn btn-primary", onClick: () => setStep("tour") }, "Show me around"),
+            h("button", { type: "button", className: "btn btn-secondary", onClick: later }, "Remind me later"),
+            h("button", { type: "button", className: "btn btn-link", onClick: off }, "Don't show again")))
+          : step === "setup" ? h(SetupGuide, { onClose: later, onTour: () => setStep("tour") })
+          : h(Tour, { slides: ready.length ? ready : TOUR, onClose: off })));
+  }
+  {
+    const host = document.createElement("div");
+    host.className = "bta-welcome-host";
+    document.body.appendChild(host);
+    api.ReactDOM.render(h(Welcome), host);
+  }
+
+  // ---- "Describe it" search: find photos, scenes and markers by words ------
+  const SEARCH_PAGE = "/ai-search";
+  const SEARCH_ICON = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/><path d="M8.5 9.5l1 1 2-2" opacity=".6"/></svg>';
+  const SEARCH_KINDS = [["image", "Photos"], ["scene", "Scenes"], ["marker", "Markers"]];
+  const SEARCH_LOOKS = [[0, "Any look"], [55, "Decent+"], [65, "Good+"], [75, "Great+"]];
+
+  function AISearch() {
+    const cz = useCaps();
+    const params = new URLSearchParams(window.location.search);
+    const [text, setText] = React.useState(params.get("q") || "");
+    const [kinds, setKinds] = React.useState(new Set((params.get("kinds") || "image,scene,marker").split(",")));
+    const [looks, setLooks] = React.useState(Number(params.get("looks") || 0));
+    const [st, setSt] = React.useState({ state: "idle", items: [] });
+    const Link = api.libraries && api.libraries.ReactRouterDOM && api.libraries.ReactRouterDOM.Link;
+
+    const run = React.useCallback(async (q, ks, lk) => {
+      if (!q.trim()) return;
+      const u = new URL(window.location.href);
+      u.searchParams.set("q", q); u.searchParams.set("kinds", [...ks].join(",")); u.searchParams.set("looks", String(lk));
+      window.history.replaceState(null, "", u.pathname + u.search);
+      setSt({ state: "loading", items: [] });
+      try {
+        const r = await ask({ mode: "ai_search", text: q, kinds: [...ks], limit: 90, min_aesthetic: lk || null });
+        setSt({ state: "done", items: (r && r.items) || [], weak: !!(r && r.weak) });
+      } catch (e) {
+        setSt({ state: "error", items: [], message: e.message });
+      }
+    }, []);
+    React.useEffect(() => { if (text) run(text, kinds, looks); }, []);
+
+    const toggle = (k) => {
+      const next = new Set(kinds);
+      next.has(k) ? next.delete(k) : next.add(k);
+      if (!next.size) return;
+      setKinds(next);
+      if (text.trim()) run(text, next, looks);
+    };
+    const card = (it) => {
+      const inner = [
+        h("div", { className: "bta-search-pic", key: "p" }, h("img", { src: it.picture, loading: "lazy", alt: "" }),
+          h("span", { className: "bta-search-kind" }, it.kind === "image" ? "Photo" : it.kind === "scene" ? "Scene" : "Marker")),
+        h("div", { className: "bta-search-meta", key: "m" },
+          h("div", { className: "bta-search-title" }, it.title || ""),
+          h("div", { className: "bta-search-sub" }, `match ${Math.round(it.score * 100)}` + (it.aesthetic != null ? ` · looks ${it.aesthetic}/100` : ""))),
+      ];
+      return Link ? h(Link, { to: it.link, className: "bta-search-card", key: it.kind + it.id }, ...inner)
+        : h("a", { href: it.link, className: "bta-search-card", key: it.kind + it.id }, ...inner);
+    };
+    if (!can("search", cz)) {
+      return h("div", { className: "bta-search" }, h("h2", null, "Search by description"),
+        h("p", { className: "bta-search-help" }, cz.text === undefined ? "Checking what's installed…"
+          : !cz.helper ? `Can't reach the face helper${cz.face_url ? " at " + cz.face_url : ""} - is it running? On a Mac it starts at login; check it with curl http://127.0.0.1:11535/health, or run face-helper/setup.sh again. `
+          : !cz.text || !cz.embed ? "The face helper is missing CLIP's text model, which search uses - run face-helper/setup.sh again (it updates in place). "
+          : "Search needs your library's look-alike fingerprints first: run \"Look-alike tags: scan scenes and images\" under Settings → Tasks. ",
+          cz.text !== undefined && h("a", { href: SETUP_PAGE }, "Open the setup page"),
+          cz.text !== undefined && " · ",
+          cz.text !== undefined && h("a", { href: "#", onClick: (e) => { e.preventDefault(); refreshCaps(true); } }, "Check again")));
+    }
+    return h("div", { className: "bta-search" },
+      h("h2", null, "Search by description"),
+      h("form", { className: "bta-search-form", onSubmit: (e) => { e.preventDefault(); run(text, kinds, looks); } },
+        h("input", { type: "search", className: "form-control", value: text, autoFocus: true, enterKeyHint: "search",
+          placeholder: "e.g. red dress at the beach, kneeling on a bed, black and white photo",
+          onChange: (e) => setText(e.target.value) }),
+        h("button", { type: "submit", className: "btn btn-primary" }, "Search")),
+      h("div", { className: "bta-search-filters" },
+        SEARCH_KINDS.map(([k, label]) => h("button", { type: "button", key: k,
+          className: "bta-fr-chip" + (kinds.has(k) ? " active" : ""), onClick: () => toggle(k) }, (kinds.has(k) ? "✓ " : "") + label)),
+        h("select", { className: "form-control bta-search-looks", value: looks, title: "Photos by their aesthetic score",
+          onChange: (e) => { const v = Number(e.target.value); setLooks(v); if (text.trim()) run(text, kinds, v); } },
+          SEARCH_LOOKS.map(([v, label]) => h("option", { key: v, value: v }, label)))),
+      st.state === "loading" && h("div", { className: "bta-fr-empty" }, "Looking through your pictures… (the first search after a scan takes a little longer)"),
+      st.state === "error" && h("div", { className: "bta-fr-empty" }, "Couldn't search: " + st.message),
+      st.state === "done" && !st.items.length && h("div", { className: "bta-fr-empty" }, "Nothing found."),
+      st.state === "idle" && h("p", { className: "bta-search-help" },
+        "Describe what's in the picture - people, clothes, place, pose, colours, mood. It compares your words with how every photo, scene and AI marker looks (the look-alike fingerprints), so it finds things no tag or title says. \"Looks\" filters photos by their aesthetic score."),
+      st.weak && st.items.length > 0 && h("p", { className: "bta-search-help" },
+        "Nothing looks much like that - these are the closest. Describe what's in the picture in plain English (people, clothes, place, colours)."),
+      st.items.length > 0 && h("div", { className: "bta-search-grid" }, st.items.map(card)));
+  }
+
   if (api.register && api.register.route) {
+    api.register.route(SEARCH_PAGE, AISearch);
     api.register.route(SETUP_PAGE, SetupPage);
     api.register.route(REVIEW_PATH, FaceReview);
     api.register.route(REVIEW_PAGE, FaceReview);
@@ -3328,7 +3788,16 @@
         },
           h("span", { dangerouslySetInnerHTML: { __html: FACE_ICON }, style: { display: "contents" } }),
           h("span", null, "Review")));
-      return React.cloneElement(result, {}, ...React.Children.toArray(result.props.children), item);
+      const search = h("div", { className: "nav-link", key: "bta-ai-search" },
+        h(Link, {
+          to: SEARCH_PAGE,
+          className: "minimal p-4 p-xl-2 d-flex d-xl-inline-block flex-column justify-content-between align-items-center btn btn-primary" +
+            (window.location.pathname === SEARCH_PAGE ? " active" : ""),
+          title: "Find photos, scenes and markers by describing them",
+        },
+          h("span", { dangerouslySetInnerHTML: { __html: SEARCH_ICON }, style: { display: "contents" } }),
+          h("span", null, "Search")));
+      return React.cloneElement(result, {}, ...React.Children.toArray(result.props.children), item, ...(can("search") ? [search] : []));
     });
   }
 
@@ -3336,7 +3805,7 @@
     const props = args[0] || {};
     const op = {
       text: "Most typical picture (AI)",
-      isDisplayed: (result, filter, selectedIds) => !!selectedIds && selectedIds.size > 0,
+      isDisplayed: (result, filter, selectedIds) => !!selectedIds && selectedIds.size > 0 && can("looks"),
       onClick: (result, filter, selectedIds) => {
         typical.request = [...(selectedIds || [])].map(String);
         typical.listeners.forEach((fn) => fn());
@@ -3349,4 +3818,472 @@
     const result = args[args.length - 1];
     return h(React.Fragment, null, result, h(TypicalHost));
   });
+
+  // ---- Scene page → Markers: "AI markers" ----------------------------------
+  // Where the scene shifts (from the Auto Seek plugin's model), each with a
+  // picture, as markers named by their time, under the tag from the setting
+  // "Markers: tag for AI markers" (Scene Shift unless changed; made when first
+  // needed). Each runs until the next. Nothing is added without a tap.
+  async function aiMarkerTagName() {
+    try {
+      const d = await gql("{ configuration { plugins } }");
+      const v = (((d.configuration.plugins || {})[PLUGIN_ID] || {}).aiMarkerTag || "").trim();
+      if (v) return v;
+    } catch (e) { /* the default */ }
+    return "Scene Shift";
+  }
+  function AiMarkers({ sceneId }) {
+    const [st, setSt] = React.useState({ state: "idle" });
+    const [have, setHave] = React.useState([]); // the scene's markers: [{seconds, tag}]
+    const [busy, setBusy] = React.useState({});
+    const [tagName, setTagName] = React.useState("Scene Shift");
+    const [showAll, setShowAll] = React.useState(false); // the cards again after all were added
+    React.useEffect(() => { aiMarkerTagName().then(setTagName); }, []);
+    const loadHave = () => gql("query($id: ID!) { findScene(id: $id) { scene_markers { seconds } } }", { id: sceneId })
+      .then((d) => setHave(((d.findScene || {}).scene_markers || []).map((m) => ({ seconds: m.seconds }))))
+      .catch(() => {});
+    React.useEffect(() => { setSt({ state: "idle" }); loadHave(); }, [sceneId]);
+    async function look(fresh) {
+      setShowAll(false);
+      setSt({ state: "loading" });
+      try {
+        const out = await ask({ mode: "video_markers", id: sceneId, fresh: !!fresh });
+        setSt({ state: "done", ...out });
+      } catch (e) {
+        setSt({ state: "error", message: e.message });
+      }
+    }
+    const added = (m) => have.some((x) => Math.abs(x.seconds - m.start) < 2 * (st.step || 8));
+    function play(t) {
+      const v = document.querySelector(".video-js video, video");
+      if (!v) return;
+      // (before the video has loaded, a jump is lost: wait for it)
+      const seek = () => { v.currentTime = t; };
+      if (v.readyState >= 1) seek(); else v.addEventListener("loadedmetadata", seek, { once: true });
+      const p = v.play();
+      if (p && p.catch) p.catch(() => {});
+    }
+    async function refreshStash() {
+      try {
+        const c = api.utils.StashService.getClient();
+        await c.refetchQueries({ include: "active" });
+      } catch (e) { /* the list shows them after a reload */ }
+    }
+    async function add(list) {
+      const todo = list.filter((m) => !added(m));
+      setBusy((b) => ({ ...b, ...Object.fromEntries(todo.map((m) => [m.start, true])) }));
+      try {
+        // named "time - scene title", tagged Scene Shift (or the setting's
+        // tag), each with the picture shown on its card
+        await ask({ mode: "add_markers", scene: sceneId, markers: todo.map((m) => ({ start: m.start, end: m.end, picture: m.picture })) });
+      } catch (e) {
+        setSt((s) => ({ ...s, addError: e.message }));
+      }
+      await loadHave();
+      setBusy({});
+      refreshStash();
+    }
+    if (st.state === "idle") {
+      return h("div", { className: "bta-markers" },
+        h("button", { type: "button", className: "btn btn-secondary bta-markers-go", onClick: () => look(false) }, "✨ AI markers"),
+        h("span", { className: "bta-markers-note" }, "Finds where the scene shifts and shows a picture of each; you choose which to add."));
+    }
+    if (st.state === "loading") {
+      return h("div", { className: "bta-markers" },
+        h("div", { className: "bta-markers-note" }, "Looking through the scene… a frame every few seconds, so a long scene can take a minute."));
+    }
+    if (st.state === "error") {
+      return h("div", { className: "bta-markers" },
+        h("div", { className: "bta-markers-error" }, "Couldn't look at it: " + st.message),
+        h("button", { type: "button", className: "btn btn-secondary", onClick: () => look(false) }, "Try again"));
+    }
+    const ms = st.markers || [];
+    const left = ms.filter((m) => !added(m));
+    // all added (Add all, or one by one): the cards are put away
+    if (ms.length && !left.length && !showAll) {
+      return h("div", { className: "bta-markers" },
+        h("div", { className: "bta-markers-head" },
+          h("span", { className: "bta-markers-done" }, `✓ All ${ms.length} AI markers added`),
+          h("button", { type: "button", className: "btn btn-secondary btn-sm", onClick: () => setShowAll(true) }, "Show them"),
+          h("button", { type: "button", className: "btn btn-secondary btn-sm", onClick: () => look(true) }, "↻ Look again")));
+    }
+    return h("div", { className: "bta-markers" },
+      h("div", { className: "bta-markers-head" },
+        h("b", null, ms.length ? `AI markers (${ms.length})` : "No shifts found"),
+        showAll && !left.length && h("button", { type: "button", className: "btn btn-secondary btn-sm", onClick: () => setShowAll(false) }, "Hide them"),
+        left.length > 1 && h("button", { type: "button", className: "btn btn-primary btn-sm", onClick: () => add(left) }, `+ Add all ${left.length}`),
+        h("button", { type: "button", className: "btn btn-secondary btn-sm", onClick: () => look(true) }, "↻ Look again")),
+      h("div", { className: "bta-markers-note" },
+        `Looked at ${st.looked} frames (one every ${Math.round(st.step)} s). A marker where the action starts and at each big shift, ` +
+        `running until the next. Each is named by its time and the scene's title, and tagged "${tagName}". Tap a picture to watch from there.`),
+      st.addError && h("div", { className: "bta-markers-error" }, st.addError),
+      h("div", { className: "bta-markers-grid" },
+        ms.map((m) => h("div", { key: m.start, className: "bta-markers-card" },
+          h("button", { type: "button", className: "bta-markers-pic", title: "Watch from here", onClick: () => play(m.start) },
+            m.picture ? h("img", { src: "data:image/jpeg;base64," + m.picture, alt: "" }) : h("span", null, "▶"),
+            h("span", { className: "bta-markers-at" }, "▶ " + clock(m.start))),
+          h("div", { className: "bta-markers-line" },
+            h("span", { className: "bta-markers-span" }, `${clock(m.start)} – ${clock(m.end)}`),
+            added(m) ? h("span", { className: "bta-markers-done" }, "✓ Added")
+              : h("button", { type: "button", className: "btn btn-primary btn-sm", disabled: !!busy[m.start], onClick: () => add([m]) },
+                busy[m.start] ? "Adding…" : "+ Add"))))));
+  }
+
+
+  // ---- Scene page → Markers → Create Marker: a quicker way ---------------
+  // Start = where the video is, end = one tap on a suggestion (the next
+  // marker, the next big changes the AI saw, +1 min, the end), the name filled
+  // in, and the marker it falls inside ends where it starts. Stash's own form
+  // is a tap away.
+  const parseClock = (txt) => {
+    const parts = String(txt || "").trim().split(":").map((x) => Number(x));
+    if (!parts.length || parts.some((x) => !Number.isFinite(x) || x < 0)) return null;
+    return parts.reduce((a, x) => a * 60 + x, 0);
+  };
+  const playerVideo = () => document.querySelector(".scene-player-container video, .video-js video");
+  let quickBypass = false; // (to open Stash's own form)
+
+  function QuickMarker({ sceneId }) {
+    const [open, setOpen] = React.useState(false);
+    const [start, setStart] = React.useState(0);
+    const [startTxt, setStartTxt] = React.useState("0:00");
+    const [end, setEnd] = React.useState(null);
+    const [endTxt, setEndTxt] = React.useState("");
+    const [name, setName] = React.useState("");
+    const [named, setNamed] = React.useState(false); // you typed a name: keep it
+    const [trim, setTrim] = React.useState(true);
+    const [info, setInfo] = React.useState(null);
+    const [busy, setBusy] = React.useState(false);
+    const [done, setDone] = React.useState(null); // {undo, start, end}
+    const [err, setErr] = React.useState("");
+    React.useEffect(() => {
+      const go = () => {
+        const v = playerVideo();
+        const t = Math.max(0, Math.round(v ? v.currentTime : 0));
+        if (v && !v.paused) v.pause();
+        setStart(t); setStartTxt(clock(t)); setEnd(null); setEndTxt(""); setNamed(false); setTrim(true);
+        setDone(null); setErr(""); setOpen(true);
+      };
+      window.addEventListener("bta-quick-marker", go);
+      return () => window.removeEventListener("bta-quick-marker", go);
+    }, []);
+    React.useEffect(() => { setOpen(false); }, [sceneId]);
+    // suggestions for this start
+    React.useEffect(() => {
+      if (!open) return undefined;
+      let live = true;
+      const t = setTimeout(() => {
+        ask({ mode: "marker_suggest", scene: sceneId, start }).then((out) => {
+          if (!live) return;
+          setInfo(out);
+          if (!named) setName(out.name);
+          setEnd((cur) => {
+            if (cur != null && cur > start) return cur;
+            const e = out.next ? out.next.seconds : (out.changes[0] ? out.changes[0].at : Math.min(out.duration, start + 60));
+            setEndTxt(clock(e));
+            return e;
+          });
+        }).catch((e) => live && setErr(e.message));
+      }, 250);
+      return () => { live = false; clearTimeout(t); };
+    }, [open, start]);
+    if (!open && !done) return null;
+    const setS = (t) => {
+      t = Math.max(0, Math.min(Math.round(t), Math.floor((info && info.duration) || t)));
+      setStart(t); setStartTxt(clock(t));
+      const v = playerVideo();
+      if (v) v.currentTime = t;
+    };
+    const pickEnd = (t) => { setEnd(t); setEndTxt(clock(t)); };
+    async function save() {
+      setBusy(true); setErr("");
+      try {
+        const undo = await ask({ mode: "marker_add_manual", scene: sceneId, start, end, title: name, trim_prev: !!(trim && info && info.prev) });
+        setDone({ undo, start, end }); setOpen(false);
+        try { await api.utils.StashService.getClient().refetchQueries({ include: "active" }); } catch (e) { /* shows after a reload */ }
+      } catch (e) {
+        setErr(e.message);
+      }
+      setBusy(false);
+    }
+    async function undo() {
+      setBusy(true);
+      try {
+        await ask({ mode: "marker_add_undo", undo: done.undo });
+        setDone(null);
+        try { await api.utils.StashService.getClient().refetchQueries({ include: "active" }); } catch (e) { /* fine */ }
+      } catch (e) { setErr(e.message); }
+      setBusy(false);
+    }
+    if (done) {
+      return h("div", { className: "bta-quick" },
+        h("div", { className: "bta-quick-row" },
+          h("span", { className: "bta-markers-done" }, `✓ Marker added at ${clock(done.start)}` + (done.end != null ? `–${clock(done.end)}` : "")),
+          h("button", { type: "button", className: "btn btn-secondary btn-sm", disabled: busy, onClick: undo }, "↶ Undo"),
+          h("button", { type: "button", className: "btn btn-link btn-sm", onClick: () => setDone(null) }, "Close")),
+        err && h("div", { className: "bta-markers-error" }, err));
+    }
+    const chips = [];
+    if (info) {
+      if (info.next) chips.push({ t: info.next.seconds, label: `Next marker ${clock(info.next.seconds)}` });
+      info.changes.forEach((c) => chips.push({ t: c.at, label: `Change at ${clock(c.at)}`, hint: c.strength >= 1 ? "big change" : "smaller change" }));
+      if (start + 60 < info.duration) chips.push({ t: start + 60, label: "+1 min" });
+      chips.push({ t: Math.floor(info.duration), label: `End of scene ${clock(info.duration)}` });
+    }
+    return h("div", { className: "bta-quick" },
+      h("div", { className: "bta-quick-head" },
+        h("b", null, "New marker"),
+        h("button", { type: "button", className: "btn btn-link btn-sm", onClick: () => {
+          setOpen(false); quickBypass = true;
+          const b = document.querySelector(".scene-markers-panel > button.btn-primary");
+          if (b) b.click();
+          quickBypass = false;
+        } }, "Use Stash's form instead")),
+      h("label", { className: "bta-quick-label" }, "Start"),
+      h("div", { className: "bta-quick-row" },
+        h("button", { type: "button", className: "btn btn-secondary btn-sm", onClick: () => setS(start - 5) }, "−5s"),
+        h("input", { className: "form-control bta-quick-time", value: startTxt, inputMode: "numeric",
+          onChange: (e) => { setStartTxt(e.target.value); const t = parseClock(e.target.value); if (t != null) setStart(Math.round(t)); } }),
+        h("button", { type: "button", className: "btn btn-secondary btn-sm", onClick: () => setS(start + 5) }, "+5s"),
+        h("button", { type: "button", className: "btn btn-secondary btn-sm", onClick: () => { const v = playerVideo(); if (v) setS(v.currentTime); } }, "Use the video's time")),
+      h("label", { className: "bta-quick-label" }, "End"),
+      h("div", { className: "bta-quick-row" },
+        chips.map((c) => h("button", { key: c.label, type: "button", title: c.hint || "",
+          className: "btn btn-sm " + (end === c.t ? "btn-primary" : "btn-secondary"), onClick: () => pickEnd(c.t) }, c.label)),
+        h("input", { className: "form-control bta-quick-time", value: endTxt, placeholder: "m:ss",
+          onChange: (e) => { setEndTxt(e.target.value); const t = parseClock(e.target.value); setEnd(t == null ? null : Math.round(t)); } })),
+      h("label", { className: "bta-quick-label" }, "Name"),
+      h("input", { className: "form-control bta-quick-name", value: name, onChange: (e) => { setName(e.target.value); setNamed(true); } }),
+      info && info.prev && h("label", { className: "bta-quick-check" },
+        h("input", { type: "checkbox", checked: trim, onChange: (e) => setTrim(e.target.checked) }),
+        h("span", null, " End \"", h("span", { className: "bta-quick-prev" }, info.prev.title),
+          `" at ${clock(start)}` + (info.prev.end != null ? ` (it runs to ${clock(info.prev.end)} now)` : ""))),
+      info && h("div", { className: "bta-markers-note" }, `Tagged ${info.tag}, with a picture from ${clock(start)}.`),
+      err && h("div", { className: "bta-markers-error" }, err),
+      h("div", { className: "bta-quick-row" },
+        h("button", { type: "button", className: "btn btn-primary", disabled: busy || (end != null && end <= start),
+          onClick: save }, busy ? "Adding…" : "Add marker"),
+        h("button", { type: "button", className: "btn btn-secondary", onClick: () => setOpen(false) }, "Cancel"),
+        end != null && end <= start && h("span", { className: "bta-markers-error" }, "The end has to be after the start")));
+  }
+
+  // Create Marker opens the quick panel (unless you asked for Stash's form)
+  document.addEventListener("click", (e) => {
+    if (quickBypass) return;
+    const b = e.target instanceof Element && e.target.closest(".scene-markers-panel > button.btn-primary");
+    if (!b || !/Create Marker/i.test(b.textContent || "")) return;
+    if (!document.querySelector(".bta-quick-host")) return;
+    e.preventDefault();
+    e.stopPropagation();
+    window.dispatchEvent(new Event("bta-quick-marker"));
+  }, true);
+
+
+  // ---- Gallery page → Chapters → Suggest chapters ---------------------------
+  // Where the gallery changes (folder, file names, look, performers, studio,
+  // tags, date), with a title for each from what that part has; you choose
+  // which to add.
+  // A chapter's images: the chapter is a run of images (it lasts until the
+  // next one starts), so ticking one before or after it grows it, and
+  // unticking one trims it from that end (images after go to the next chapter)
+  function ChapterPicker({ list, k, imgs, onDone, onClose }) {
+    const n = imgs.length;
+    const c = list[k];
+    const end0 = list[k + 1] ? list[k + 1].index - 1 : n;
+    const minStart = k > 0 ? list[k - 1].index + 1 : 1;
+    const maxEnd = list[k + 1] ? (list[k + 2] ? list[k + 2].index - 2 : n - 1) : n;
+    const [s, setS] = React.useState(c.index);
+    const [e, setE] = React.useState(end0);
+    const lo = Math.max(minStart, c.index - 8), hi = Math.min(maxEnd, end0 + 8);
+    const last = !list[k + 1]; // (the last chapter runs to the end of the gallery)
+    function tap(p) {
+      if (p < s) setS(p);
+      else if (p > e) { if (!last) setE(p); }
+      else if (p - s <= e - p || last) { if (p + 1 <= e) setS(p + 1); }
+      else if (p - 1 >= s) setE(p - 1);
+    }
+    const pages = [];
+    for (let p = lo; p <= hi; p++) pages.push(p);
+    return h("div", { className: "bta-chpick-back", onClick: onClose },
+      h("div", { className: "bta-chpick", onClick: (ev) => ev.stopPropagation() },
+        h("div", { className: "bta-chpick-head" },
+          h("b", null, c.title || "Chapter"),
+          h("span", { className: "bta-chpick-count" }, ` · images ${s}–${e} (${e - s + 1})`),
+          h("button", { type: "button", className: "btn btn-secondary btn-sm", onClick: () => { setS(lo); if (!last) setE(hi); } }, "Select all"),
+          h("button", { type: "button", className: "btn btn-secondary btn-sm", onClick: () => onDone(null) }, "✕ Not a chapter"),
+          h("button", { type: "button", className: "btn btn-secondary btn-sm", onClick: () => { setS(c.index); setE(end0); } }, "Reset"),
+          h("button", { type: "button", className: "btn btn-primary btn-sm", onClick: () => onDone({ start: s, end: e }) }, "Done")),
+        h("div", { className: "bta-markers-note" },
+          "Tap an image before or after the chapter to add it; tap one inside to trim the chapter from that end" +
+          (last ? " (it's the last chapter: it runs to the end)." : " (the rest go to the next chapter).") +
+          " Not a chapter: its images join the chapter before."),
+        h("div", { className: "bta-chpick-grid" },
+          pages.map((p) => h("button", { key: p, type: "button", className: "bta-chpick-tile" + (p >= s && p <= e ? " on" : ""), onClick: () => tap(p) },
+            h("img", { src: `/image/${imgs[p - 1]}/thumbnail`, alt: "", loading: "lazy" }),
+            h("span", { className: "bta-chpick-num" }, p),
+            p >= s && p <= e && h("span", { className: "bta-chpick-tick" }, "✓"))))));
+  }
+
+  // ---- Gallery page → Chapters → Suggest chapters ---------------------------
+  // Where the gallery changes (folder, file names, look, performers, studio,
+  // tags, date - or a comic's chapter headings), with a title for each; you
+  // choose which to add. Added ones are put away.
+  function GalleryChapters({ galleryId }) {
+    const [st, setSt] = React.useState({ state: "idle" });
+    const [list, setList] = React.useState([]); // [{key, index, title, why}]
+    const [have, setHave] = React.useState([]);
+    const [busy, setBusy] = React.useState(false);
+    const [err, setErr] = React.useState("");
+    const [pick, setPick] = React.useState(null); // the chapter whose images are shown
+    const [showAdded, setShowAdded] = React.useState(false);
+    React.useEffect(() => { setSt({ state: "idle" }); setList([]); setPick(null); }, [galleryId]);
+    async function look() {
+      setSt({ state: "loading" }); setErr(""); setShowAdded(false);
+      try {
+        let out = await ask({ mode: "gallery_chapters", id: galleryId });
+        // a comic: its pages are read a few hundred at a time
+        while (out && out.unread) {
+          setSt({ state: "loading", reading: out.reading, count: out.count });
+          out = await ask({ mode: "gallery_chapters", id: galleryId });
+        }
+        setHave(out.have || []);
+        setList((out.chapters || []).map((c) => ({ key: c.index, index: c.index, title: c.title, why: c.why || [] })));
+        setSt({ state: "done", count: out.count, comic: out.comic, no_reader: out.no_reader, images: out.images || [] });
+      } catch (e) {
+        setSt({ state: "error", message: e.message });
+      }
+    }
+    const imgs = st.images || [];
+    const added = (c) => have.some((x) => x.image_index === c.index);
+    async function add(cs) {
+      setBusy(true); setErr("");
+      try {
+        for (const c of cs.filter((x) => !added(x))) {
+          const d = await gql("mutation($i: GalleryChapterCreateInput!) { galleryChapterCreate(input: $i) { id title image_index } }",
+            { i: { gallery_id: galleryId, title: (c.title || "").trim() || `Chapter at image ${c.index}`, image_index: c.index } });
+          setHave((hv) => [...hv, d.galleryChapterCreate]);
+        }
+        try { await api.utils.StashService.getClient().refetchQueries({ include: "active" }); } catch (e) { /* shows after a reload */ }
+      } catch (e) {
+        setErr(e.message);
+      }
+      setBusy(false);
+    }
+    function edit(k, change) {
+      setList((l) => {
+        const next = l.map((x) => ({ ...x }));
+        if (!change) { next.splice(k, 1); return next; } // not a chapter: its images join the one before
+        next[k].index = change.start;
+        if (next[k + 1]) next[k + 1].index = change.end + 1;
+        return next;
+      });
+      setPick(null);
+    }
+    if (st.state === "idle") {
+      return h("div", { className: "bta-markers" },
+        h("button", { type: "button", className: "btn btn-secondary bta-markers-go", onClick: look }, "✨ Suggest chapters"),
+        h("span", { className: "bta-markers-note" }, "Finds where the gallery changes (folder, file names, look, performers, tags, a comic's chapter headings...) and suggests chapters; you choose which to add."));
+    }
+    if (st.state === "loading") {
+      return h("div", { className: "bta-markers" }, h("div", { className: "bta-markers-note" },
+        st.count ? `Reading the comic's pages for chapter headings… ${st.reading} of ${st.count}` : "Looking through the gallery…"));
+    }
+    if (st.state === "error") {
+      return h("div", { className: "bta-markers" },
+        h("div", { className: "bta-markers-error" }, "Couldn't look at it: " + st.message),
+        h("button", { type: "button", className: "btn btn-secondary", onClick: look }, "Try again"));
+    }
+    const left = list.filter((c) => !added(c));
+    const shown = showAdded ? list : left;
+    const sizeOf = (c) => {
+      const k = list.indexOf(c);
+      return (list[k + 1] ? list[k + 1].index : imgs.length + 1) - c.index;
+    };
+    // all added: put away
+    if (list.length && !left.length && !showAdded) {
+      return h("div", { className: "bta-markers" },
+        h("div", { className: "bta-markers-head" },
+          h("span", { className: "bta-markers-done" }, `✓ All ${list.length} chapters added`),
+          h("button", { type: "button", className: "btn btn-secondary btn-sm", onClick: () => setShowAdded(true) }, "Show them"),
+          h("button", { type: "button", className: "btn btn-secondary btn-sm", onClick: look }, "↻ Look again")));
+    }
+    return h("div", { className: "bta-markers" },
+      h("div", { className: "bta-markers-head" },
+        h("b", null, list.length ? `Suggested chapters (${left.length} to add${list.length > left.length ? `, ${list.length - left.length} added` : ""})` : "No chapters to suggest"),
+        left.length > 1 && h("button", { type: "button", className: "btn btn-primary btn-sm", disabled: busy, onClick: () => add(left) }, `+ Add all ${left.length}`),
+        list.length > left.length && h("button", { type: "button", className: "btn btn-secondary btn-sm", onClick: () => setShowAdded((v) => !v) },
+          showAdded ? "Hide added ones" : "Show added ones"),
+        h("button", { type: "button", className: "btn btn-secondary btn-sm", disabled: busy, onClick: look }, "↻ Look again")),
+      h("div", { className: "bta-markers-note" },
+        (st.comic ? `${st.count} pages. Chapters from the chapter headings printed on the pages.`
+          : list.length ? `${st.count} images. Each chapter starts where the gallery changes.`
+          : `${st.count} images, and nothing changes enough to split them.`) +
+        (list.length ? " Tap a chapter's picture to choose its images; edit a title before adding it." : "")),
+      st.no_reader && h("div", { className: "bta-markers-note" },
+        "This looks like a comic: with the face helper's text reader (on a Mac, run the add-on's face-helper/setup.sh again), chapters come from the chapter headings printed on its pages."),
+      err && h("div", { className: "bta-markers-error" }, err),
+      h("div", { className: "bta-chapters" },
+        shown.map((c) => {
+          const k = list.indexOf(c);
+          const size = sizeOf(c);
+          return h("div", { key: c.key, className: "bta-chapter" },
+            h("button", { type: "button", className: "bta-chapter-pic", title: "Choose its images", disabled: added(c), onClick: () => setPick(k) },
+              h("img", { src: `/image/${imgs[c.index - 1]}/thumbnail`, alt: "", loading: "lazy" })),
+            h("div", { className: "bta-chapter-body" },
+              h("button", { type: "button", className: "bta-chapter-at", disabled: added(c), onClick: () => setPick(k) },
+                `Image ${c.index} · ${size} image${size === 1 ? "" : "s"}` + (added(c) ? "" : " ▸")),
+              h("input", { className: "form-control form-control-sm bta-chapter-title", value: c.title, disabled: added(c),
+                onChange: (e) => { const v = e.target.value; setList((l) => l.map((x) => (x.key === c.key ? { ...x, title: v } : x))); } }),
+              h("div", { className: "bta-chapter-why" }, c.why.join(" · "))),
+            added(c) ? h("span", { className: "bta-markers-done" }, "✓ Added")
+              : h("button", { type: "button", className: "btn btn-primary btn-sm", disabled: busy, onClick: () => add([c]) }, "+ Add"));
+        })),
+      pick != null && list[pick] && h(ChapterPicker, { key: list[pick].key, list, k: pick, imgs, onClose: () => setPick(null),
+        onDone: (change) => edit(pick, change) }));
+  }
+
+  function checkChaptersPanel() {
+    const m = location.pathname.match(/^\/galleries\/(\d+)/);
+    if (!m) return;
+    // (in any tab: switching tabs only shows another one, nothing new is added)
+    const btn = [...document.querySelectorAll(".tab-pane button.btn-primary")].find((b) => /Create Chapter/i.test(b.textContent || ""));
+    if (!btn) return;
+    let host = btn.parentElement.querySelector(":scope > .bta-chapters-host");
+    if (host && host.dataset.gallery === m[1]) return;
+    if (!host) {
+      host = document.createElement("div");
+      host.className = "bta-chapters-host";
+      btn.after(host);
+    }
+    host.dataset.gallery = m[1];
+    api.ReactDOM.render(h(GalleryChapters, { galleryId: m[1] }), host);
+  }
+  // (at most every 150 ms while the page keeps changing - some pages never
+  // stop, e.g. another plugin rewriting a title - rather than waiting for quiet)
+  const soon = (fn, ms = 150) => { if (!fn.t) fn.t = setTimeout(() => { fn.t = null; fn(); }, ms); };
+  new MutationObserver(() => soon(checkChaptersPanel)).observe(document.body, { childList: true, subtree: true });
+
+  function checkMarkersPanel() {
+    const m = location.pathname.match(/^\/scenes\/(\d+)/);
+    const panel = m && document.querySelector(".scene-markers-panel");
+    if (!panel) return;
+    let host = panel.querySelector(":scope > .bta-markers-host");
+    if (host && host.dataset.scene === m[1]) return;
+    if (!host) {
+      host = document.createElement("div");
+      host.className = "bta-markers-host";
+      const btn = panel.querySelector(":scope > button");
+      if (btn) btn.after(host); else panel.prepend(host);
+    }
+    host.dataset.scene = m[1];
+    api.ReactDOM.render(h(Gate, { need: "markers" }, h(AiMarkers, { sceneId: m[1] })), host);
+    let quick = panel.querySelector(":scope > .bta-quick-host");
+    if (!quick) {
+      quick = document.createElement("div");
+      quick.className = "bta-quick-host";
+      host.before(quick);
+    }
+    api.ReactDOM.render(h(QuickMarker, { sceneId: m[1] }), quick);
+  }
+  new MutationObserver(() => soon(checkMarkersPanel)).observe(document.body, { childList: true, subtree: true });
 })();

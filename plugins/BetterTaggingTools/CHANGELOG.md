@@ -6,6 +6,9 @@ only bring the other plugin's changes.
 
 ## 2.3 (2026-11-11)
 
+- Tag pictures skip blurry, dark and screenshot-like candidates when the AI add-on's face helper runs
+  on a Mac (Apple's aesthetics score), using the best of the next few if none scores well.
+- Tag pictures prefer photos: a decent photo is used before any scene screenshot, marker or video frame.
 - No suggestion rows in Stash's scrape dialog.
 - Renamed **Better Organizing Tools** (it was Better Tagging Tools), to match the AI add-on. Its ID and folder are unchanged, so settings and saved data carry over.
 - **Patreon** accounts count for studios from accounts: `patreon.com/name`, `patreon.com/c/name` or

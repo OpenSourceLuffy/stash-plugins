@@ -107,6 +107,15 @@
     if (/^[A-Z][\w ]{0,20}:$/.test(t)) return text;       // field labels ("Studio:")
     return text.replace(t, pick(kind, t.toLowerCase()));
   }
+  // a marker's name: "7:44 - <scene title>" keeps its time and gets the same
+  // stand-in title as the scene; any other name is a made-up title
+  function fakeMarker(text) {
+    const m = text.match(/^(\s*\d+(?::\d\d){1,2}\s*[-–]\s*)(.+?)(\s*)$/);
+    if (!m) return fake("title", text);
+    const t = m[2].trim();
+    if (/^[\d\s.,:/()%+-]*$/.test(t)) return text; // just times
+    return m[1] + pick("title", t.toLowerCase()) + m[3];
+  }
 
   // which text is what (the same places the blur covers)
   const TEXT = [
@@ -121,12 +130,17 @@
     ["detail", ".tab-content p.pre, .scene-details .pre, #performer-page .detail-item-value.details"],
     ["performer", "a[href*='photographer']"],
     ["title", ".scene-card .card-section-title, .image-card .card-section-title, .group-card .card-section-title, .scene-header, " +
-      ".image-header, #image-page .image-header, .group-head h2, .mlt-rel-title, .mui-rel-title, .wall-item-text, .bta-zoom-title"],
+      ".image-header, #image-page .image-header, .group-head h2, .mlt-rel-title, .mui-rel-title, .bta-zoom-title, " +
+      ".scene-marker-card__scene a"],
+    // markers: the Markers page, a scene's Markers tab, the AI markers panels
+    ["marker", ".scene-marker-card .card-section-title, .scene-markers-panel .primary-card-body .row > .btn-link:first-child, " +
+      ".wall-item-text > div, .bta-quick-prev"],
   ];
 
   const origText = new WeakMap(); // text node -> what it said
   const origSrc = new WeakMap();  // img / video -> {src, srcset, poster}
   const origBg = new WeakMap();   // element -> its inline background-image
+  const origTitle = new WeakMap(); // element -> its tooltip {real, shown}
   let on = false;
 
   function textNodes(el) {
@@ -157,7 +171,7 @@
       // React changed it since: that's the new real text
       if (origText.has(n) && n.nodeValue !== origText.get(n).shown) origText.delete(n);
       const base = origText.has(n) ? origText.get(n).real : n.nodeValue;
-      const shown = fake(kind, base);
+      const shown = kind === "marker" ? fakeMarker(base) : fake(kind, base);
       if (n.nodeValue !== shown) n.nodeValue = shown;
       origText.set(n, { real: base, shown });
       void real;
@@ -227,7 +241,15 @@
           origText.set(n, { real: parts[k], shown: want });
         });
       });
-      TEXT.filter(([k]) => k === "title" || k === "gallery" || k === "detail").forEach(([k, sel]) => document.querySelectorAll(sel).forEach((el) => swapText(el, k)));
+      TEXT.filter(([k]) => k === "title" || k === "gallery" || k === "detail" || k === "marker").forEach(([k, sel]) => document.querySelectorAll(sel).forEach((el) => swapText(el, k)));
+      // hover tooltips that name a marker (the pictures under the video, the Markers tab)
+      document.querySelectorAll(".mui-detail-marker[title], .wall-item-text > div[title]").forEach((el) => {
+        const o = origTitle.get(el);
+        const real = o && el.title === o.shown ? o.real : el.title;
+        const shown = fakeMarker(real.replace(/ - play from .*$/, "")) + (/ - play from .*$/.exec(real) || [""])[0];
+        if (el.title !== shown) el.title = shown;
+        origTitle.set(el, { real, shown });
+      });
     }
     if (root.classList.contains("pb-tags")) {
       TEXT.filter(([k]) => k === "tag").forEach(([k, sel]) => document.querySelectorAll(sel).forEach((el) => swapText(el, k)));
@@ -252,6 +274,11 @@
     document.querySelectorAll("[style*='background-image']").forEach((el) => {
       if (origBg.has(el)) { el.style.backgroundImage = origBg.get(el); origBg.delete(el); }
     });
+    document.querySelectorAll("[title]").forEach((el) => {
+      const o = origTitle.get(el);
+      if (o && el.title === o.shown) el.title = o.real;
+      origTitle.delete(el);
+    });
     const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
     let n;
     while ((n = w.nextNode())) {
@@ -269,7 +296,7 @@
       queued = false;
       observer.disconnect();
       pass();
-      observer.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["src", "srcset", "style", "poster"] });
+      observer.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["src", "srcset", "style", "poster", "title"] });
     });
   });
 
@@ -279,7 +306,7 @@
     on = want;
     if (on) {
       pass();
-      observer.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["src", "srcset", "style", "poster"] });
+      observer.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["src", "srcset", "style", "poster", "title"] });
     } else {
       observer.disconnect();
       restore();

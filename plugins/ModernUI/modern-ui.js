@@ -73,6 +73,7 @@
   body.toggle("mui-show-popovers", !!cfg.showPopovers);
   body.toggle("mui-show-overlays", !!cfg.showOverlays);
   body.toggle("mui-hide-title", !!cfg.hideTitle);
+  body.toggle("mui-hide-donate", !!cfg.hideDonate);
   body.toggle("mui-mobile", !cfg.disableMobile);
   body.toggle("mui-fit-contain", !!cfg.showWholePictures);
   body.toggle("mui-scene-stack", !cfg.sceneDetailsBeside);
@@ -103,6 +104,9 @@
   setupHomeCustomiseDrag();
   setupItemReturn();
   setupExitX();
+  setupMarkerWallLabels();
+  setupDetailMarkers();
+  if (cfg.autoMute) setupAutoMute();
   setupTagIndex();
   if (!cfg.stayOnEditAfterSave) setupBackToDetailsOnSave();
   setupVerticalPoster();
@@ -779,7 +783,10 @@
         container.insertBefore(heading, container.firstChild);
       }
       const text = heading.querySelector("h2");
-      if (text.textContent !== name) {
+      // (compared with the name it last set, not what's shown: Privacy Blur
+      // swaps the shown text, and putting it back each time looped endlessly)
+      if (heading.dataset.name !== name) {
+        heading.dataset.name = name;
         text.textContent = name;
         text.title = name;
       }
@@ -1453,6 +1460,202 @@
   // The ✕ on an item's page (gallery, performer, image, tag, studio): the
   // same spot on every page, and it does what swiping down does - back to
   // wherever you opened it from
+  // Under a scene's video: its markers' pictures as a row in time order,
+  // like a timeline - tap one to play from there; the one playing is
+  // highlighted and the row follows along
+  function setupDetailMarkers() {
+    const cache = new Map(); // scene id -> Promise of [{id, seconds, end, title}]
+    const load = (id) => {
+      if (!cache.has(id)) {
+        cache.set(id, fetch("/graphql", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query: "query($id: ID!) { findScene(id: $id) { scene_markers { id seconds end_seconds title primary_tag { name } } } }", variables: { id } }),
+        }).then((r) => r.json()).then((j) => ((j.data.findScene || {}).scene_markers || [])
+          .slice().sort((a, b) => a.seconds - b.seconds))
+          .catch(() => { cache.delete(id); return []; }));
+        setTimeout(() => cache.delete(id), 30000); // (markers you add show up on the next visit)
+      }
+      return cache.get(id);
+    };
+    const clock = (sec) => {
+      sec = Math.max(0, Math.round(sec || 0));
+      const hh = Math.floor(sec / 3600), mm = Math.floor((sec % 3600) / 60), ss = sec % 60;
+      return (hh ? hh + ":" + String(mm).padStart(2, "0") : mm) + ":" + String(ss).padStart(2, "0");
+    };
+    const play = (t) => {
+      const v = document.querySelector(".video-js video, video");
+      if (!v) return;
+      // (before the video has loaded, a jump is lost: wait for it)
+      const seek = () => { v.currentTime = t; };
+      if (v.readyState >= 1) seek(); else v.addEventListener("loadedmetadata", seek, { once: true });
+      const p = v.play();
+      if (p && p.catch) p.catch(() => {});
+    };
+    let follow = null; // the video being followed, and how to stop
+    const run = async () => {
+      const m = location.pathname.match(/^\/scenes\/(\d+)\/?$/);
+      const player = m && document.querySelector(".scene-player-container");
+      if (!player) return;
+      const old = document.querySelector(".mui-detail-markers");
+      if (old && old.dataset.scene === m[1] && old.previousElementSibling === player) return;
+      if (old) old.remove();
+      const box = document.createElement("div");
+      box.className = "mui-detail-markers";
+      box.dataset.scene = m[1];
+      // (the page row orders its parts: sit with the video, just after it)
+      box.style.order = getComputedStyle(player).order;
+      player.after(box);
+      const markers = await load(m[1]);
+      if (!box.isConnected || !markers.length) { box.remove(); return; }
+      const strip = document.createElement("div");
+      strip.className = "mui-detail-markers-row";
+      const buttons = markers.map((mk) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "mui-detail-marker";
+        b.title = (mk.title || mk.primary_tag.name) + " - play from " + clock(mk.seconds);
+        const img = document.createElement("img");
+        img.loading = "lazy";
+        img.alt = "";
+        img.src = `/scene/${m[1]}/scene_marker/${mk.id}/screenshot`;
+        const label = document.createElement("span");
+        label.textContent = clock(mk.seconds) + (mk.end_seconds ? "-" + clock(mk.end_seconds) : "");
+        b.append(img, label);
+        b.addEventListener("click", () => play(mk.seconds));
+        strip.append(b);
+        return b;
+      });
+      box.append(strip);
+      // quicker to move along: the scroll wheel scrolls it sideways (3x),
+      // and on a computer ‹ › jump a screenful
+      strip.addEventListener("wheel", (e) => {
+        if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return; // (a sideways swipe: as it is)
+        const max = strip.scrollWidth - strip.clientWidth;
+        const want = Math.max(0, Math.min(max, strip.scrollLeft + e.deltaY * 3));
+        if (want === strip.scrollLeft) return; // at the end: the page scrolls
+        e.preventDefault();
+        strip.scrollLeft = want;
+      }, { passive: false });
+      const jump = (dir) => strip.scrollBy({ left: dir * strip.clientWidth * 0.85, behavior: "smooth" });
+      const arrows = ["‹", "›"].map((c, k) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "mui-detail-markers-arrow " + (k ? "next" : "prev");
+        b.textContent = c;
+        b.setAttribute("aria-label", k ? "Later markers" : "Earlier markers");
+        b.title = k ? "Later markers" : "Earlier markers";
+        b.addEventListener("click", () => jump(k ? 1 : -1));
+        box.append(b);
+        return b;
+      });
+      const ends = () => {
+        arrows[0].classList.toggle("off", strip.scrollLeft <= 2);
+        arrows[1].classList.toggle("off", strip.scrollLeft >= strip.scrollWidth - strip.clientWidth - 2);
+      };
+      strip.addEventListener("scroll", ends, { passive: true });
+      requestAnimationFrame(ends);
+      // follow the video: highlight the marker it's in, keep it in view
+      if (follow) follow();
+      const v = document.querySelector(".video-js video, video");
+      if (!v) return;
+      let cur = -1;
+      const update = () => {
+        if (!box.isConnected) { if (follow) follow(); return; }
+        const t = v.currentTime;
+        let at = -1;
+        markers.forEach((mk, n) => {
+          const end = mk.end_seconds || (markers[n + 1] ? markers[n + 1].seconds : Infinity);
+          if (t >= mk.seconds && t < end) at = n;
+        });
+        if (at === cur) return;
+        if (cur >= 0 && buttons[cur]) buttons[cur].classList.remove("is-current");
+        cur = at;
+        if (at < 0) return;
+        const b = buttons[at];
+        b.classList.add("is-current");
+        // scroll the row only (not the page) so the current one is near the start
+        strip.scrollTo({ left: Math.max(0, b.offsetLeft - strip.offsetLeft - 24), behavior: "smooth" });
+      };
+      v.addEventListener("timeupdate", update);
+      v.addEventListener("seeked", update);
+      follow = () => {
+        v.removeEventListener("timeupdate", update);
+        v.removeEventListener("seeked", update);
+        follow = null;
+      };
+      update();
+    };
+    let t = null;
+    new MutationObserver(() => { clearTimeout(t); t = setTimeout(run, 200); })
+      .observe(document.body, { childList: true, subtree: true });
+  }
+
+  // "Scenes start muted": every scene's video starts muted and stays muted
+  // (even if the player brings back an earlier volume) until you unmute it -
+  // the speaker button, the volume slider or M. The next scene starts muted again.
+  function setupAutoMute() {
+    let touched = 0; // when you last used the player's sound controls (or pressed M)
+    document.addEventListener("pointerdown", (e) => {
+      if (e.target instanceof Element && e.target.closest(".vjs-mute-control, .vjs-volume-panel, .vjs-volume-control, .vjs-volume-bar")) touched = Date.now();
+    }, true);
+    document.addEventListener("keydown", (e) => {
+      if ((e.key === "m" || e.key === "M" || e.key === "ArrowUp") && !(e.target instanceof Element && e.target.closest("input, textarea, [contenteditable]"))) touched = Date.now();
+    }, true);
+    const keyOf = (v) => {
+      const m = location.pathname.match(/^\/scenes\/(\d+)/);
+      return m ? m[1] + "|" + (v.currentSrc || v.src || "") : null;
+    };
+    const isScene = (v) => v instanceof HTMLVideoElement && !!v.closest(".scene-player-container, .VideoPlayer");
+    const hold = (e) => {
+      const v = e.target;
+      if (!isScene(v)) return;
+      const key = keyOf(v);
+      if (!key || v.dataset.muiUnmuted === key) return;
+      if (e.type === "volumechange" && !v.muted && Date.now() - touched < 1500) {
+        v.dataset.muiUnmuted = key; // you unmuted it: leave it be for this scene
+        return;
+      }
+      if (!v.muted) v.muted = true;
+    };
+    for (const type of ["loadstart", "loadedmetadata", "canplay", "play", "volumechange"]) {
+      document.addEventListener(type, hold, true);
+    }
+    // a video already on the page
+    const now = () => document.querySelectorAll(".scene-player-container video").forEach((v) => hold({ target: v, type: "loadstart" }));
+    now();
+    let t = null;
+    new MutationObserver(() => { clearTimeout(t); t = setTimeout(now, 200); })
+      .observe(document.body, { childList: true, subtree: true });
+  }
+
+  // A scene's Markers tab: each picture's label is just its time
+  // ("4:00-4:48"); the full title is in the list above it (and on hover)
+  function setupMarkerWallLabels() {
+    const RANGE = /(\d+(?::\d\d){1,2}-\d+(?::\d\d){1,2})\s*$/;
+    const run = () => {
+      // in time order (the row reads like a timeline)
+      document.querySelectorAll(".scene-markers-panel .wall > .wall-item").forEach((it) => {
+        const a = it.querySelector("a[href*='t=']");
+        const t = a && Number(new URL(a.href, location.href).searchParams.get("t"));
+        if (Number.isFinite(t) && it.style.order !== String(Math.round(t))) it.style.order = String(Math.round(t));
+      });
+      document.querySelectorAll(".scene-markers-panel .wall-item-text > div:first-child").forEach((d) => {
+        const full = d.textContent || "";
+        if (d.dataset.muiShort === full) return; // (done; React may put the full text back)
+        const m = full.match(RANGE);
+        if (!m) return;
+        d.dataset.muiFull = full;
+        d.dataset.muiShort = m[1];
+        d.title = full;
+        d.textContent = m[1];
+      });
+    };
+    let t = null;
+    new MutationObserver(() => { clearTimeout(t); t = setTimeout(run, 150); })
+      .observe(document.body, { childList: true, subtree: true });
+  }
+
   function setupExitX() {
     const KINDS = /^\/(galleries|performers|images|tags|studios)\/\d+/;
     const btn = document.createElement("button");

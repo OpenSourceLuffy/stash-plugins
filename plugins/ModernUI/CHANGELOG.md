@@ -2,6 +2,23 @@
 
 Newest first. Versions are what Stash shows under Settings → Plugins.
 
+## 0.58 (2026-11-16)
+
+- New setting **Hide the Donate button**: takes Stash's Donate (heart) button off the top bar and the phone's More menu.
+- Fixed: with Privacy Blur's replace mode on, a gallery page's title was rewritten about 180 times a
+  second (Modern UI put the real name back each time Privacy Blur swapped it), slowing the page and
+  stopping other plugins' parts from appearing.
+- New setting **Scenes start muted**: every scene's video starts muted and stays muted (even if the
+  player brings back an earlier volume) until you unmute it; the next scene starts muted again.
+- Under a scene's video, its markers' pictures in a row like a timeline (in time order): tap one to play
+  from there; the marker playing is outlined and the row follows along. Swipe it on a phone (each swipe lands on a
+  picture); on a computer the scroll wheel moves it sideways quickly, and ‹ › jump a screenful.
+- Marker cards (the Markers page) look like scene cards: the picture filling the top, the length in a
+  pill, just the title under it.
+- A scene's Markers tab: the pictures are one row in time order, like a timeline (scroll sideways on a
+  computer, swipe on a phone), each with just a small time label (no title or tags over it); the list
+  above is one compact line per marker, without tag chips.
+
 ## 0.57 (2026-11-16)
 
 - A list on a tag's, performer's, studio's or group's page (e.g. a tag's Studios) starts with the filter sidebar closed; the Filters button opens it.

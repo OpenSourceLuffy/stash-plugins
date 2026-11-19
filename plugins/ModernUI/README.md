@@ -91,6 +91,9 @@ A cleaner, app-like look for Stash, built to feel good on a phone as well as a c
 **Scenes**
 - **Show timeline / Hide timeline** in a scene's ⋮ menu: the strip of thumbnails and markers under the video. Remembered separately for phones and bigger screens, and off at first on both; on a computer there's also a small **Show timeline / Hide timeline** button above the video. On a phone, drag the strip with a finger and tap a thumbnail to jump there. Needs the scene's sprites (Tasks → Generate → Sprites).
 - On wide screens, details sit under the video instead of in a side panel, with the studio logo beside the title.
+- The **Markers** tab: the markers' pictures are one row in time order, like a timeline (scroll sideways on a computer, swipe on a phone), each with just a small time label; the list above is one compact line per marker.
+- Under the video, the scene's markers as a row of pictures, like a timeline (in time order): tap one to play from there; the one playing is outlined and the row follows along as the video plays. Swipe the row on a phone (each swipe lands on a picture); on a computer the scroll wheel moves it sideways quickly and ‹ › jump a screenful.
+- Marker cards on the **Markers** page look like scene cards: the picture, the length, and the title.
 
 **Images and galleries**
 - Image details (title, rating, tabs) sit under the picture on wide screens, like scenes. You can change this in the settings.
@@ -132,6 +135,7 @@ Under **Settings → Plugins → Modern UI**:
 | Show count buttons | Bring back the tag/performer/scene/marker/O-count buttons on cards. |
 | Show rating banner | Bring back the rating ribbon on card pictures. |
 | Hide titles | Pictures only, no titles, on every card. |
+| Hide the Donate button | Take Stash's Donate (heart) button off the top bar and the phone's More menu. |
 | Show whole pictures | Fit the whole picture inside image, gallery and tag cards instead of cropping. |
 | Image and gallery card shape | `portrait` (default), `square`, `landscape` or `wide`. |
 | Cards per row on phones | `1` or `2` (default). Image grids show one extra. |
@@ -147,6 +151,7 @@ Under **Settings → Plugins → Modern UI**:
 | Disable swiping between images and other items | Turn off swiping (left/right and down to go back) on image, scene, gallery, performer, tag, studio and group pages, and the arrow keys on image pages. The back buttons then stay on phones. |
 | Disable bottom tab bar on phones | Turn off the tab bar. |
 | Bottom tab bar pages / More panel order | Set from the phone via **More → Edit tab bar**. |
+| Scenes start muted | Every scene's video starts muted and stays muted until you unmute it (speaker button, volume slider or M); the next scene starts muted again. |
 
 ## Optional: login page
 

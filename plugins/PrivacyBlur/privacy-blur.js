@@ -1,6 +1,7 @@
 // Privacy Blur - blur pictures (and optionally names/titles).
 // Turned on and off with the "Blur on" switch in Settings -> Plugins ->
-// Privacy Blur, or with Shift+Alt+B (which flips that same setting).
+// Privacy Blur, the floating button on Settings pages, or Shift+Alt+B (all
+// flip that same setting).
 (async function () {
   "use strict";
 
@@ -24,6 +25,7 @@
   }
 
   let settings = {};
+  let button = null; // the floating button (made further down)
 
   function apply() {
     const on = !!settings.enabled;
@@ -41,6 +43,7 @@
     root.classList.toggle("pb-replace", !!settings.replaceMode);
     root.classList.toggle("pb-tags", !!settings.blurTags);
     syncTitle();
+    if (button) syncButton();
   }
 
   async function loadSettings() {
@@ -106,19 +109,52 @@
     true
   );
 
-  // Keyboard shortcut: Shift+Alt+B flips the "Blur on" setting
-  document.addEventListener("keydown", async (e) => {
-    if (!(e.shiftKey && e.altKey && !e.ctrlKey && !e.metaKey && e.code === "KeyB")) return;
-    e.preventDefault();
+  // Flip the "Blur on" setting (the shortcut and the floating button)
+  async function flip() {
     settings = Object.assign({}, settings, { enabled: !settings.enabled });
     apply();
+    syncButton();
     try {
       await gql(
         "mutation($id: ID!, $input: Map!) { configurePlugin(plugin_id: $id, input: $input) }",
         { id: PLUGIN_ID, input: settings }
       );
+      // the switch on the settings page shows the new value too
+      try { await window.PluginApi.utils.StashService.getClient().refetchQueries({ include: "active" }); } catch (e2) { /* fine */ }
     } catch (err) {
       console.warn("[Privacy Blur] could not save setting", err);
     }
+  }
+
+  // Keyboard shortcut: Shift+Alt+B
+  document.addEventListener("keydown", (e) => {
+    if (!(e.shiftKey && e.altKey && !e.ctrlKey && !e.metaKey && e.code === "KeyB")) return;
+    e.preventDefault();
+    flip();
   });
+
+  // A floating Blur on / Blur off button, only on Settings pages (so it's
+  // quick to reach there, and never shows while browsing)
+  button = document.createElement("button");
+  button.type = "button";
+  button.className = "pb-float";
+  button.addEventListener("click", flip);
+  function syncButton() {
+    const show = location.pathname.startsWith("/settings");
+    if (!show) { button.remove(); return; }
+    const on = !!settings.enabled;
+    button.textContent = on ? "🔒 Blur is on" : "👁 Blur is off";
+    button.title = on ? "Turn Privacy Blur off" : "Turn Privacy Blur on";
+    button.setAttribute("aria-pressed", on ? "true" : "false");
+    button.classList.toggle("on", on);
+    if (!button.isConnected) document.body.append(button);
+  }
+  syncButton();
+  {
+    let last = location.pathname;
+    new MutationObserver(() => {
+      if (location.pathname !== last) { last = location.pathname; syncButton(); }
+    }).observe(document.body, { childList: true, subtree: true });
+    window.addEventListener("popstate", syncButton);
+  }
 })();
