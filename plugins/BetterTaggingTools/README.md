@@ -176,6 +176,13 @@ another tag's, it's left without one (or keeps its old one) rather than sharing.
 comic page, near-identical shots) count as the same picture too. Tags that are only on a gallery
 can use the pages inside it, not just its cover.
 
+**Good-looking pictures first.** With the AI add-on's face helper on a Mac, each candidate gets Apple's
+aesthetics score (sharp, well lit, well framed). One that scores low (blurry, dark, a phone
+screenshot) is passed over for the next; if none of the next 15 does better, the best of them is used,
+so tags whose pictures are all comic pages or screenshots still get one.
+Photos come first: one that isn't dark, blurry or a screenshot is used before any scene screenshot,
+marker or video frame, even a better-scoring one.
+
 ### Don't like a tag's picture?
 
 On the **Tags** page, select one or more tags and choose **••• → Pick a new picture**. Each one

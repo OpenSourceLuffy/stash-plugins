@@ -1827,3 +1827,137 @@ body.mui-light .bta-batch-foot { background: linear-gradient(to bottom, transpar
   }
 }
 .bta-tt-swap { align-self: flex-start; margin: 2px 0 0 28px; }
+
+/* Scene page → Markers: AI markers */
+.bta-markers-host { margin: 0.6rem 0; }
+.bta-markers { display: flex; flex-direction: column; gap: 0.4rem; align-items: flex-start; }
+.bta-markers-go { font-weight: 600; }
+.bta-markers-note { font-size: 0.85rem; opacity: 0.75; }
+.bta-markers-error { color: #e5534b; font-size: 0.9rem; }
+.bta-markers-head { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.bta-markers-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 0.6rem; width: 100%; }
+.bta-markers-card { display: flex; flex-direction: column; gap: 0.3rem; }
+.bta-markers-pic { position: relative; padding: 0; border: 0; border-radius: 8px; overflow: hidden; background: #000;
+  aspect-ratio: 16 / 9; color: #fff; }
+.bta-markers-pic img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.bta-markers-at { position: absolute; left: 6px; bottom: 6px; background: rgba(0, 0, 0, 0.65); border-radius: 999px;
+  padding: 0.05rem 0.5rem; font-size: 0.85rem; font-variant-numeric: tabular-nums; }
+.bta-markers-line { display: flex; align-items: center; justify-content: space-between; gap: 0.4rem; }
+.bta-markers-span { font-size: 0.85rem; opacity: 0.75; font-variant-numeric: tabular-nums; }
+.bta-markers-done { color: #2da44e; font-weight: 600; }
+
+/* Scene page → Markers → Create Marker: the quick panel */
+.bta-quick { display: flex; flex-direction: column; gap: 0.35rem; margin: 0.6rem 0; padding: 0.75rem;
+  border-radius: 10px; background: rgba(127, 127, 127, 0.1); max-width: 720px; }
+.bta-quick-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.bta-quick-label { font-size: 0.8rem; font-weight: 600; opacity: 0.75; margin: 0.2rem 0 0; }
+.bta-quick-row { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
+.bta-quick-time { width: 6.5rem; display: inline-block; font-variant-numeric: tabular-nums; }
+.bta-quick-check { display: flex; gap: 0.4rem; align-items: flex-start; font-size: 0.9rem; margin: 0.2rem 0 0; }
+.bta-quick-check input { margin-top: 0.25rem; }
+
+/* Gallery page → Chapters → Suggest chapters */
+.bta-chapters-host { margin: 0.6rem 0; }
+.bta-chapters { display: flex; flex-direction: column; gap: 0.4rem; width: 100%; max-width: 760px; }
+.bta-chapter { display: flex; gap: 0.6rem; align-items: center; padding: 0.35rem; border-radius: 8px;
+  background: rgba(127, 127, 127, 0.08); }
+.bta-chapter img { width: 72px; height: 72px; object-fit: cover; border-radius: 6px; flex: none; background: #000; }
+.bta-chapter-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.2rem; }
+.bta-chapter-at { font-size: 0.8rem; font-weight: 600; opacity: 0.75; }
+.bta-chapter-why { font-size: 0.75rem; opacity: 0.6; }
+
+/* a chapter's images (Suggest chapters) */
+.bta-chapter-pic { padding: 0; border: 0; background: none; flex: none; cursor: pointer; }
+.bta-chapter-pic img { width: 72px; height: 72px; object-fit: cover; border-radius: 6px; display: block; background: #000; }
+.bta-chapter-at { padding: 0; border: 0; background: none; color: inherit; text-align: left; cursor: pointer;
+  font-size: 0.8rem; font-weight: 600; opacity: 0.75; }
+.bta-chapter-at:not(:disabled):hover { text-decoration: underline; opacity: 1; }
+.bta-chpick-back { position: fixed; inset: 0; z-index: 1060; background: rgba(0, 0, 0, 0.6); display: flex;
+  align-items: flex-start; justify-content: center; padding: 3vh 12px; overflow-y: auto; }
+.bta-chpick { background: var(--mui-card-bg, var(--bs-body-bg, #fff)); color: inherit; border-radius: 12px; padding: 0.9rem; width: 100%;
+  max-width: 1100px; display: flex; flex-direction: column; gap: 0.5rem; box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4); }
+.bta-chpick-head { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
+.bta-chpick-head b { font-size: 1.05rem; }
+.bta-chpick-count { opacity: 0.7; margin-right: auto; font-variant-numeric: tabular-nums; }
+.bta-chpick-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 6px; }
+.bta-chpick-tile { position: relative; padding: 0; border: 3px solid transparent; border-radius: 8px; overflow: hidden;
+  background: #000; aspect-ratio: 3 / 4; opacity: 0.45; cursor: pointer; }
+.bta-chpick-tile.on { border-color: #2da44e; opacity: 1; }
+.bta-chpick-tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.bta-chpick-num { position: absolute; left: 4px; bottom: 4px; padding: 0 6px; border-radius: 999px;
+  background: rgba(0, 0, 0, 0.65); color: #fff; font-size: 0.75rem; font-variant-numeric: tabular-nums; }
+.bta-chpick-tick { position: absolute; left: 4px; top: 4px; width: 22px; height: 22px; border-radius: 50%;
+  background: #2da44e; color: #fff; font-size: 0.8rem; display: flex; align-items: center; justify-content: center; }
+@media (max-width: 576px) {
+  .bta-chpick-grid { grid-template-columns: repeat(3, 1fr); }
+}
+
+/* "Describe it" search page */
+.bta-search { max-width: 1400px; margin: 0 auto; padding: 12px 16px 40px; }
+.bta-search h2 { font-size: 1.3rem; margin: 4px 0 12px; }
+.bta-search-form { display: flex; gap: 8px; }
+.bta-search-form input { flex: 1; min-width: 0; }
+.bta-search-filters { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 10px 0 14px; }
+.bta-search-filters .bta-fr-chip.active { background: var(--primary, #137cbd); color: #fff; border-color: transparent; }
+.bta-search-looks { width: auto; display: inline-block; padding: 2px 8px; height: auto; }
+.bta-search-help { opacity: .75; max-width: 46em; }
+.bta-search-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
+.bta-search-card { display: block; border-radius: 8px; overflow: hidden; background: rgba(127,127,127,.12); color: inherit; text-decoration: none; }
+.bta-search-card:hover { text-decoration: none; color: inherit; outline: 2px solid var(--primary, #137cbd); }
+.bta-search-pic { position: relative; aspect-ratio: 3 / 4; background: #000; }
+.bta-search-pic img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.bta-search-kind { position: absolute; left: 6px; top: 6px; font-size: .7rem; padding: 1px 6px; border-radius: 4px; background: rgba(0,0,0,.6); color: #fff; }
+.bta-search-meta { padding: 6px 8px; }
+.bta-search-title { font-size: .85rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bta-search-sub { font-size: .72rem; opacity: .7; }
+@media (max-width: 576px) { .bta-search-grid { grid-template-columns: repeat(2, 1fr); gap: 6px; } }
+
+/* welcome and tour */
+.bta-welcome-back { position: fixed; inset: 0; z-index: 2000; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; padding: 16px; }
+.bta-welcome { background: #30404d; color: #f5f8fa; border-radius: 14px; width: 100%; max-width: 760px; max-height: calc(100vh - 32px); overflow: auto; padding: 20px 22px; box-shadow: 0 10px 40px rgba(0,0,0,.4); }
+.bta-welcome h2 { font-size: 1.35rem; margin: 0 0 10px; }
+.bta-welcome p { line-height: 1.45; }
+.bta-welcome-list { font-size: .9rem; margin: 8px 0; line-height: 1.5; }
+.bta-welcome-missing { opacity: .8; }
+.bta-welcome-ask { font-weight: 600; margin-top: 14px; }
+.bta-welcome-btns { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.bta-tour-head { display: flex; justify-content: space-between; align-items: center; font-size: .85rem; opacity: .8; margin-bottom: 8px; }
+.bta-tour-x { background: none; border: 0; font-size: 1.2rem; color: inherit; padding: 2px 8px; cursor: pointer; }
+.bta-tour-track { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+.bta-tour-track::-webkit-scrollbar { display: none; }
+.bta-tour-slide { flex: 0 0 100%; scroll-snap-align: start; scroll-snap-stop: always; box-sizing: border-box; padding: 0 2px; }
+.bta-tour-shot { background: #111; border-radius: 10px; overflow: hidden; aspect-ratio: 16 / 10; display: flex; align-items: center; justify-content: center; }
+.bta-tour-shot img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
+.bta-tour-slide h3 { font-size: 1.1rem; margin: 12px 0 6px; }
+.bta-tour-slide p { font-size: .92rem; margin: 0 0 8px; }
+.bta-tour-where { font-size: .82rem; opacity: .85; }
+.bta-tour-where .btn-link { padding: 0 6px; vertical-align: baseline; }
+.bta-tour-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 12px; }
+.bta-tour-dots { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; flex: 1; }
+.bta-tour-dot { width: 9px; height: 9px; border-radius: 50%; border: 0; padding: 0; background: rgba(127,127,127,.45); cursor: pointer; }
+.bta-tour-dot.on { background: var(--primary, #137cbd); transform: scale(1.25); }
+@media (max-width: 576px) { .bta-welcome { padding: 16px 14px; } .bta-tour-shot { aspect-ratio: 4 / 5; max-height: 52vh; } }
+.bta-tour-head { position: sticky; top: -20px; z-index: 1; background: inherit; padding: 4px 0; }
+.bta-welcome .bta-tour-head { background: inherit; }
+body.mui-light .bta-welcome { background: #fff; color: #1f2933; }
+body.mui-light .bta-tour-dot { background: rgba(0,0,0,.2); }
+
+/* setup guide */
+.bta-guide-shot { aspect-ratio: 16 / 7; background: #f4f5f7; }
+body:not(.mui-light) .bta-guide-shot { background: #202b33; }
+.bta-guide-state { font-size: .72rem; font-weight: 600; padding: 2px 8px; border-radius: 10px; background: rgba(217,130,43,.2); color: #d9822b; vertical-align: middle; }
+.bta-guide-state.ok { background: rgba(15,153,96,.18); color: #0f9960; }
+.bta-guide-steps { padding-left: 20px; margin: 6px 0 8px; font-size: .9rem; }
+.bta-guide-steps li { margin-bottom: 6px; }
+.bta-guide-code { display: flex; gap: 6px; align-items: center; margin-top: 4px; }
+.bta-guide-code code { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; padding: 5px 8px; border-radius: 6px; background: rgba(127,127,127,.18); color: inherit; font-size: .82rem; }
+.bta-guide-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
+.bta-guide-note { font-size: .8rem; opacity: .8; }
+.bta-guide-tips { margin-top: 8px; font-size: .85rem; }
+.bta-guide-tips-head { font-weight: 600; opacity: .8; margin-bottom: 2px; }
+.bta-guide-tips details { padding: 3px 0; border-top: 1px solid rgba(127,127,127,.2); }
+.bta-guide-tips summary { cursor: pointer; }
+.bta-guide-tips p { margin: 4px 0 4px 14px; opacity: .85; }
+.bta-guide-caption { font-size: .75rem; opacity: .7; margin-top: 4px; text-align: center; }
+.bta-tour-foot { position: sticky; bottom: -20px; z-index: 1; background: inherit; padding: 10px 0 6px; }
+.bta-welcome .bta-tour, .bta-welcome .bta-tour-foot { background: inherit; }

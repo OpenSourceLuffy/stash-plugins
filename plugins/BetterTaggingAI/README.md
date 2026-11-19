@@ -60,6 +60,39 @@ scene by hand. (Pictures blurred; every name, title and tag is an example.)*
 - [**Other plugins' pages**](#on-other-pages): face matches on performer pages, and better rows in
   [Stash Suggestions](../StashSuggestions).
 
+## Welcome and tour
+
+The first time the add-on runs, a welcome says what it does, lists what's ready and what still needs
+setting up, and offers a tour: one feature per slide, each with a screenshot, where to find it and an
+**Open it** link (swipe, Back / Next, or the dots). **Remind me later** asks again the next day;
+**Don't show again** turns it off (setting **Welcome: don't show the welcome and tour**). The setup
+page's **Show the welcome tour** opens it any time.
+
+When something isn't set up yet, the welcome offers **Set it up with me** instead: a setup guide with
+only the steps you still need (install the face helper, update it, scan your library's looks, install
+the AI model in Ollama, add Auto Seek), each with a screenshot, the commands to copy, where the add-on
+looks for things (with the right address when Stash runs in Docker), the common problems for that step,
+and **Check again** to tick it off. When everything's done it offers the tour. The setup page's
+**Setup guide** button opens it too.
+
+Features that need something that isn't installed yet (the face helper and its models, Apple's
+Vision, CLIP's text model, the AI model in Ollama, Auto Seek's model, a look-alike scan) stay hidden
+until it is - Review's tabs, the Search link, Ask AI for tags, faces, AI markers and the rest.
+
+## Search by description
+
+**Search** in Stash's menu opens a page where you describe what you're looking for, e.g. *red dress
+at the beach*, *kneeling on a bed*, *black and white photo*. Your words are turned into a CLIP
+fingerprint and compared with how every photo, scene and AI marker looks (the look-alike
+fingerprints), so it finds things no tag or title says. Toggle Photos / Scenes / Markers, and filter
+photos by their aesthetic score. It needs the face helper (with CLIP's text model, which `setup.sh`
+downloads) and "Look-alike tags: scan scenes and images".
+
+Describe what's in the picture in plain English (CLIP knows English best); a few wordings are tried
+together ("a photo of …", and "a photo of a woman, …" when no person is named), near-identical
+pictures show once, and at most two results come from one scene, so one video doesn't fill the page.
+When nothing looks much like the words it says so. Poses are its weakest point.
+
 ## Review
 
 **Review** in Stash's menu (on a phone with [Modern UI](../ModernUI): **More → Review**). The top
@@ -97,9 +130,32 @@ Tapping a tab goes back to the action you used last there.
   the closest faces. Tap the pictures to leave some items out.
 
 **Tags**
-- *Suggested*: tags that 50% or more of the 20 closest look-alikes you've tagged have.
+- *Suggested*: tags that 50% or more of the 20 closest look-alikes you've tagged have, and positions
+  seen in a scene's video (with the [Auto Seek](#positions-in-videos-optional-auto-seek) plugin), with
+  the moments they were seen (tap the picture to jump there). When both point to the same tag it's one
+  card, shown first; otherwise every fifth card is one from the video. Items with 3 tags or fewer
+  also get body tags the body detector was nearly sure of (within 0.08 of what it needs to add one
+  itself), marked "just under the body detector's bar"; fewest tags first.
+- *Markers*: tags for each marker on its own: the tags its 20 closest look-alikes have (your tagged
+  scenes and photos, and the markers you've tagged, never its own scene), and positions the video
+  model sees in most of the marker's frames. Tags about the people (hair, ethnicity, tattoos, body type,
+  age) are left to the scene. A card plays the scene from the marker; **Yes** tags the marker. Every
+  marker you tag is learned from, so the suggestions get better as you go (they're worked out again
+  every 15 minutes, or with **↻ Check for new suggestions**).
+- Poses (shown among *Suggested* for photos and *Markers* for markers, marked "pose: …"): body positions (**Face Down Ass Up**, **All Fours**, **Frog Pose**, **Kneeling**, **Squatting**,
+  **Spread Legs**, **Legs Up**, **Bent Over**, **Lying on Stomach**, or your own list in the setting
+  **Poses: tags**) for photos and markers, learnt from the ones you tag: tag at least 3 with a pose
+  and the photos and markers closest to them are suggested, by body shape (Apple's body pose, on a
+  Mac; run **Poses: read body poses** first) and by look. Neither tool can tell these poses by
+  itself (on 700 test pictures Apple found a whole body in about 1 in 6, and CLIP's descriptions
+  mostly found bottoms), so they're only ever suggestions. **Yes** adds another example; **No** is
+  remembered and counts against the pose next time.
 - *Check*: "Does [tag] fit?" when under 5% of its look-alikes have it, only for tags look-alikes
-  judge well. **✓ It fits** never asks again.
+  judge well. **✓ It fits** never asks again; **✕ Remove** takes it off and it stays off.
+- **Removed tags stay removed:** a tag you take off an item (in Check, or anywhere in Stash when the
+  add-on had added it), or say No to in Suggested, is never put back on that item by any task (AI
+  tags, look-alikes, body tags, gallery / studio tags, tags from file names), and isn't suggested
+  for it again.
 - *Similar*: **Merge these two tags?** for the same name written differently (*Toy* / *Toys*) or two
   tags that are nearly always together (pick which to keep and its name; the other becomes an alias),
   and **Make [tag] a sub-tag of [tag]?** when one is a kind of the other: the end of its name (*Big Tits*
@@ -158,6 +214,30 @@ small files in the plugin's folder.
 
 Nothing is saved until you click a suggestion and save.
 
+## Gallery chapters
+
+On a gallery's **Chapters** tab, **✨ Suggest chapters** (next to Create Chapter) finds where the gallery
+changes and suggests a chapter at each place: a new folder, file names that change (`beach_…` to
+`pool_…`) or start counting again, a different look (the picture fingerprints; images after it look
+like none just before it, so a mix of close-ups doesn't count), new performers or a new studio, much
+changed tags, or a different day. Each suggestion shows its first image, where it starts and how many
+images it covers, and a title from the folder's name, the file names, its performers, the tags that
+stand out in it or its studio ("Part 2" when nothing does), which you can edit before **+ Add** (or
+**+ Add all**). Tap a chapter's picture (or its "Image 40 · 32 images" line) to see its images and the
+ones either side: tap one before or after it to add it, or one inside to trim the chapter from that
+end (a chapter is a run of images, lasting until the next one starts, so the images trimmed off the end
+go to the next chapter); **✕ Not a chapter** joins it to the one before. Added chapters are put away
+(**Show added ones** brings them back). Galleries made of sets split best; a mixed collection mostly splits by folder and
+performer.
+
+**Comics** (a gallery from a zip or cbz) are read page by page instead: a chapter starts at each
+page with a chapter heading ("CHAPTER 2: FED UP", "Ch. 12", "Episode 3"), titled from it. A heading
+only counts when its number follows the last one, so "chapter" in a speech bubble doesn't start one.
+A compilation without headings is split after each translator's credits page. This needs the face
+helper's text reader (Apple's, so on a Mac: run `face-helper/setup.sh` again to add it); it reads
+about 5 pages a second, a few hundred at a time with the progress shown, and remembers what it read.
+In a 1,287-page manga it found 60 of its 64 chapters with their titles.
+
 ## Tasks
 
 Under **Settings → Tasks → Plugin Tasks → Better Organizing AI Add-on (local AI)**. Each section starts with a
@@ -171,7 +251,18 @@ stopped if cancelled.
   each). An item then gets the tags most of its 20 closest look-alikes have. The add-on's own tags are
   never learned from (except on items you've marked organized), and a tag you keep removing stops
   being added.
-- **Body tags**: a body-part detector adds which parts are shown, using your tags for them; sizes
+- **Body tags**: a body-part detector adds which parts are shown, and what's worn when you have those
+  tags: **Bra** and **Panties** (covered, with a bare belly, so a shirt or jeans don't count; **Bikini**
+  instead when the picture looks like one), **Shoes**, bare **Feet**, **Topless** (bare breasts, covered below) and **Nude** (bare breasts and genitals or bottom, nothing seen covered; it
+  wins over any underwear or swimwear the picture seemed to show). Photos also get clothing from
+  their picture fingerprint (CLIP, compared with descriptions worked out once and kept in
+  `clothing.json`): Lingerie, Panties, Thong, Bikini, Latex, Leather, Crop Top, Skirt, Socks, Sneakers,
+  Schoolgirl Outfit and Animal Ears, the items that held up when checked by eye, at a high bar, and
+  never on drawings or comics (CLIP reads the word "bra" in a speech bubble). On a Mac, the face
+  helper also uses Apple's own picture tools: its picture classifier for **Woman's Heels**, **Boots**,
+  **Sneakers**, **Socks**, **Shoes**, **Jeans**, **Glasses**, **Swimsuit** (or **Bikini**), **Mask**,
+  **Gloves**, **Costume** and **Hat**, and its hand and body pose for **Hand Bra** (fingers over a breast,
+  one person in the picture). Using your tags for them; sizes
   come from the performer (the size you usually tag them with, or their cup size and details). Items
   that already have a body tag are skipped.
 - **AI titles**: scenes or images without a title get one from the file name, or the AI's best idea.
@@ -184,8 +275,45 @@ stopped if cancelled.
   where they're alone), find who's in items without performers, and list performers who may be the
   same person. Confident matches can be added automatically.
 - **Tag pictures**: give tags their most typical scene or photo (from the look-alike fingerprints),
-  never using one picture twice; also from the Tags list (**••• → Most typical picture (AI)**).
+  never using one picture twice; also from the Tags list (**••• → Most typical picture (AI)**). On a
+  Mac, Apple's aesthetics score passes over blurry, dark or screenshot-like ones (also for AI marker
+  pictures, which take a frame 3 or 6 seconds on, or 2 or 4 seconds before the marker, instead).
+- **Pictures: replace blurry or dark tag pictures** and **… marker pictures** (on a Mac): go back over
+  the pictures tags and markers already have and swap the ones Apple scores low (blurry, dark,
+  screenshots) for a clearly better one; the rest are left alone. A marker picture with nobody in it
+  (a title card, a logo, a black or empty frame) counts as low too: people are looked for with Apple's
+  person, face and pose detection and its "people" label, and the body-part detector for close-ups.
+  **Preview** first shows what 40 random tags and markers would get.
+  Vertical scenes' marker pictures are cut to a wide picture around the people (faces kept in), so
+  cards and the marker row don't crop them in the middle; new AI markers get that too.
 - **Performer details**: fills empty hair and eye colour only when two looks at different photos agree.
+- **AI markers**: markers where each scene shifts (see [Positions in videos](#positions-in-videos-optional-auto-seek)),
+  with their pictures, for every scene that has no markers yet. Scenes with markers are never touched.
+  **Redo with the newest method** replaces the AI markers you already have (other markers are kept).
+- **Pictures: aesthetic score and labels** (on a Mac): every photo gets Apple's aesthetic score
+  (0-100: sharp, well lit, well framed; a screenshot about 50, studio photos 85+) and what Apple's
+  picture labels see in it (beach, bedroom, swimsuit, high heels...), saved as the image's custom
+  fields `aesthetic` and `seen`. Filter by them in Stash itself: Images → Filter → Custom fields
+  (e.g. `aesthetic` greater than 70, `seen` includes `beach`). Review → Tags → Suggested shows
+  better-looking photos first (and says "looks 72/100"), and tag pictures reuse the scores. New
+  images get them by themselves after a scan.
+- **Body tags: clothing from the look (quick)**: the clothing tags, and **Ass** whether it's
+  bare or clothed (a picture that's about a butt sticking out: shorts, leggings, lingerie, bent over),
+  from each photo's look-alike fingerprint alone, so the whole library takes under a minute. Ass only
+  for women or no one named, never for drawings. On 400 photos not tagged Ass, about 4 in 5 it added
+  were right (misses: crowd screenshots, group photos). Ones nearly there go to Review as near-misses.
+- **Screenshots: crop to the photo**: a phone screenshot of a post (Instagram, OnlyFans, Reddit...) is
+  cut down to the photo in it, so it looks right and tags better. Only images exactly a phone screen's
+  size (and not tagged as drawn) with the phone's status bar on top are touched; the app around the
+  photo is found as rows of the app's own flat colours. The file is replaced at the same path, so
+  Stash keeps its performers and tags, and the screenshot is kept in `screenshot-originals` in Stash's
+  config folder; **Screenshots: put back the originals** undoes it. **Preview** lists them first. Needs
+  the face helper.
+- **Poses: read body poses** (on a Mac): Apple's body pose for every photo (not drawings) and marker
+  picture, for the pose suggestions in **Review → Tags**. Well under a second each; done ones are skipped.
+- **Positions in videos**: with the [Auto Seek](#positions-in-videos-optional-auto-seek) plugin
+  installed, looks at 24 frames of every scene (about 4 s each) and suggests what it sees under
+  **Review → Tags → Suggested**. It never tags by itself.
 
 ## New items after a scan
 
@@ -267,6 +395,46 @@ sh face-helper/setup.sh --from /backup/dir   # the same, with every model from a
 Run **Look-alike tags: scan scenes and images** and **Faces: scan scenes and images** once (a while
 on a big library; cancel and rerun to carry on), then turn on the after-scan settings you want.
 
+## Positions in videos (optional, Auto Seek)
+
+If you have the **Auto Seek** plugin (it finds where the action starts in a scene), this add-on can
+use its model too: a CLIP model tuned on videos (MIT licence, about 90 MB, downloaded by Auto Seek
+itself, not by this add-on). Auto Seek only uses its "has it started" score; the same model also
+scores each frame for 10 sex positions. Once Auto Seek has downloaded it, this add-on keeps its own copy (the model,
+the runtime it runs on, and Auto Seek's code for reading frames) in `auto-seek-copy` in its folder,
+refreshed when Auto Seek updates, so positions and AI markers keep working if you remove Auto Seek.
+
+Tried on 60 scenes that were already tagged, four of those positions matched the tags well enough
+to suggest: when it said yes it was right 60–76% of the time, and it found 86–95% of the scenes
+tagged with them. The other six were right only 25–60% of the time, so they're left out. Some of
+its "wrong" answers were probably scenes missing a tag, so it may do a little better than that.
+Because it isn't always right, it only ever suggests (**Review → Tags → Suggested**) and you approve.
+
+**AI markers:** on a scene's page, **Markers → ✨ AI markers** looks through that scene more closely
+(a frame every 8 seconds; under a minute for most scenes) and finds where it shifts: where the action
+starts, and each point where either the positions Auto Seek's model sees change a lot, or the frames
+after it look like none of the frames just before it (a CLIP picture fingerprint from the face helper:
+a new setting, activity or people). Each frame is compared with its closest match rather than the
+average look, so a camera cutting between a close-up and a wide shot doesn't count. Checked by eye on
+30 scenes, about 3 in 4 markers start at a real shift, within a few seconds; the picture fingerprints
+caught most of the changes the positions alone missed, in scenes its 10 positions don't cover. The pictures are also compared across the whole scene (intros, interviews and talking parts before and after the action), and a marker over 12 minutes gets a second look: the strongest change inside it is marked if it's nearly big enough, so a long scene in one room still gets split. A scene that still ends up with only one or two markers (one person talking, one long take) is also split at regular times, every 2 minutes under 10 minutes, every 3 up to 24, and up to every 6 for long scenes, each moved to the biggest change near it. Without
+the face helper it uses the positions alone. Each marker is named by its time and the scene's title
+(like **7:52 - Scene Title**), tagged **Scene Shift** (change it with the setting **Markers: tag for AI
+markers**) and runs until the next shift. Each one shows a picture of what it shifted to; tap it to watch from there, then **+ Add** (or **+ Add
+all**). The picture is saved as the marker's picture, so it shows straight away without running
+Generate (Generate still makes the moving previews). Shifts close to a marker you already have show as
+added. Once they're all added, the pictures are put away (**Show them** brings them back).
+
+**Adding a marker yourself:** **Create Marker** on a scene's page opens a quicker panel: the start is
+where the video is (−5s / +5s / **Use the video's time**), the end is one tap on a suggestion (where the
+next marker starts, the next big changes the AI saw, +1 min, or the end of the scene), and the name is
+filled in (time - scene title). The marker it falls inside can end where the new one starts, so they
+don't overlap. It's tagged like AI markers (Scene Shift), gets its picture straight away, and **Undo** takes it all
+back. **Use Stash's form instead** opens Stash's own form. Markers made or moved there get their picture straight away too (Stash would otherwise wait for Generate).
+
+It uses the first of your tags it finds for each position (by name or alias), and doesn't suggest a
+position a scene already has under any of its usual names. Scenes under a minute are skipped.
+
 ## Which models, and why
 
 Each job uses the smallest model that does it well, so it all runs on an ordinary computer.
@@ -318,6 +486,7 @@ Under **Settings → Plugins → Better Organizing AI Add-on (local AI)**:
 | Faces: likeness needed to add automatically (%) | Default 50 (images 5 more). |
 | Faces: likeness needed to suggest (%) | Default 36. |
 | Faces: helper address | Default `http://host.docker.internal:11535`. |
+| Markers: tag for AI markers | The tag markers added with **Markers → ✨ AI markers** get (Stash needs one). Default *Scene Shift*. |
 
 AI settings set in Better Organizing Tools before the AI had its own plugin still count until you
 change them here.

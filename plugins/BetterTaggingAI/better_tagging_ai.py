@@ -129,6 +129,62 @@ def main():
             print(json.dumps({"output": c.run_tag_review(stash, plugin_dir, args.get("tag"),
                                                          int(args.get("limit") or 40), args.get("skip") or [],
                                                          fresh=bool(args.get("fresh")))}))
+        elif mode == "video_scan":
+            c.run_video_scan(stash, plugin_dir)
+        elif mode == "video_markers":
+            print(json.dumps({"output": c.run_video_markers(stash, plugin_dir, args["id"], bool(args.get("fresh")))}))
+        elif mode == "marker_picture":
+            print(json.dumps({"output": c.run_marker_picture(stash, args["scene"], args["seconds"], args.get("picture"))}))
+        elif mode == "video_markers_preview":
+            c.run_video_markers_all(stash, plugin_dir, preview=True, limit=5)
+        elif mode == "video_markers_redo":
+            c.run_video_markers_redo(stash, plugin_dir)
+        elif mode == "video_markers_all":
+            c.run_video_markers_all(stash, plugin_dir)
+        elif mode == "add_markers":
+            print(json.dumps({"output": c.run_add_markers(stash, args["scene"], args.get("markers") or [])}))
+        elif mode == "marker_suggest":
+            print(json.dumps({"output": c.run_marker_suggest(stash, plugin_dir, args["scene"], args["start"])}))
+        elif mode == "marker_add_manual":
+            print(json.dumps({"output": c.run_marker_add_manual(stash, plugin_dir, args["scene"], args["start"], args.get("end"),
+                                                                args.get("title"), args.get("trim_prev", True) is not False)}))
+        elif mode == "marker_add_undo":
+            print(json.dumps({"output": c.run_marker_add_undo(stash, args.get("undo"))}))
+        elif mode == "marker_tag_review":
+            print(json.dumps({"output": c.run_marker_tag_review(stash, plugin_dir, args.get("tag"), int(args.get("limit") or 40),
+                                                                args.get("skip") or [], bool(args.get("fresh")))}))
+        elif mode == "pose_review":
+            print(json.dumps({"output": c.run_pose_review(stash, plugin_dir, args.get("tag"), int(args.get("limit") or 40),
+                                                          args.get("skip") or [], bool(args.get("fresh")))}))
+        elif mode == "capabilities":
+            print(json.dumps({"output": c.run_capabilities(stash, plugin_dir)}))
+        elif mode == "ai_search":
+            print(json.dumps({"output": c.run_ai_search(stash, plugin_dir, args.get("text"), args.get("kinds"),
+                                                        int(args.get("limit") or 60), args.get("min_aesthetic"))}))
+        elif mode == "picture_facts":
+            c.run_picture_facts(stash, plugin_dir)
+        elif mode == "body_looks":
+            c.run_body_looks(stash, plugin_dir)
+        elif mode == "body_looks_preview":
+            c.run_body_looks(stash, plugin_dir, preview=True)
+        elif mode == "screenshot_crop":
+            c.run_screenshot_crop(stash, plugin_dir)
+        elif mode == "screenshot_crop_preview":
+            c.run_screenshot_crop(stash, plugin_dir, preview=True)
+        elif mode == "screenshot_restore":
+            c.run_screenshot_restore(stash, plugin_dir)
+        elif mode == "better_pictures":
+            c.run_better_pictures(stash, plugin_dir)
+        elif mode == "better_tag_pictures":
+            c.run_better_pictures(stash, plugin_dir, what=("tags",))
+        elif mode == "better_marker_pictures":
+            c.run_better_pictures(stash, plugin_dir, what=("markers",))
+        elif mode == "better_pictures_preview":
+            c.run_better_pictures(stash, plugin_dir, preview=True, limit=40)
+        elif mode == "pose_scan":
+            c.run_pose_scan(stash, plugin_dir)
+        elif mode == "gallery_chapters":
+            print(json.dumps({"output": c.run_gallery_chapters(stash, plugin_dir, args["id"])}))
         elif mode == "tag_review_answer":
             print(json.dumps({"output": c.run_tag_review_answer(plugin_dir, args["key"], args["tag"], bool(args.get("no", True)))}))
         elif mode == "new_performers":

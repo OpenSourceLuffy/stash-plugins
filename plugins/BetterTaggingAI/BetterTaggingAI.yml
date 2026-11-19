@@ -1,6 +1,6 @@
 name: Better Organizing AI Add-on (local AI)
 description: Local AI for Stash - nothing leaves your computer. Tags scenes and images from your own tag list (checked against the items you've already tagged that look most alike), writes titles, recognises performers' faces, finds a scene's studio from the account in its watermark, adds body tags and hair / eye colour, and tidies up studios and galleries. A Review page to accept or undo suggestions with a swipe, "Ask AI" buttons while editing, and tasks for the whole library or new items. Runs on Ollama and a small local helper, on a Mac or any ordinary computer, with no NVIDIA graphics card or online service needed. An add-on for Better Organizing Tools that also works on its own.
-version: "1.5"
+version: "1.6"
 url: https://github.com/OpenSourceLuffy/stash-plugins/tree/main/plugins/BetterTaggingAI
 exec:
   - python
@@ -12,6 +12,8 @@ ui:
     - better-tagging-ai.js
   css:
     - better-tagging-ai.css
+  assets:
+    /tour: tour
 
 hooks:
   - name: New scenes and images
@@ -19,6 +21,11 @@ hooks:
     triggeredBy:
       - Scene.Create.Post
       - Image.Create.Post
+  - name: Marker pictures
+    description: A marker made or moved in Stash's own form gets its picture straight away (Stash deletes a marker's picture when its times change, and waits for Generate).
+    triggeredBy:
+      - SceneMarker.Create.Post
+      - SceneMarker.Update.Post
 
 tasks:
   - name: "Setup check: write a report to the log"
@@ -73,10 +80,66 @@ tasks:
     description: Adds body tags to every scene and image not done yet that has no body tag yet (only adds; a size is only added when that part is shown and the item has no size tag yet). Scenes take a few seconds (4 frames), images under one; cancel and run again to carry on. AI tagging (and new items after a scan) adds them too.
     defaultArgs:
       mode: body_all
+  - name: "Body tags: clothing from the look (quick)"
+    description: For every photo (not drawings), the clothing tags and Ass - clothed or not, when the picture is about a butt sticking out - from its look-alike fingerprint alone, no detector, so the whole library takes minutes. Ass only for women or no one named. Ones nearly there go to Review → Tags → Suggested. Needs "Look-alike tags - scan scenes and images" first.
+    defaultArgs:
+      mode: body_looks
+  - name: "Body tags: preview clothing from the look (no changes)"
+    description: The same for every photo, writing to the log what would be added (the first 40) and how many, without changing anything.
+    defaultArgs:
+      mode: body_looks_preview
   - name: "Body tags: check everything again"
     description: Checks EVERY scene and image again - organized ones too, and ones done before - e.g. after making a new body tag or tagging performers' sizes. Only adds, like the task above. Items without performers get the parts shown but no sizes. Takes a while; cancel and run it again to carry on where it stopped.
     defaultArgs:
       mode: body_redo
+  - name: "Positions in videos: look at scenes"
+    description: Uses the Auto Seek plugin's model (it must be installed, with its model downloaded) on 24 frames of every scene not looked at yet, a few seconds each, to see which positions are in it. Nothing is tagged; what it sees is suggested under Review, Tags, Suggested, for you to approve. Only the four positions it gets right most of the time are suggested. You can cancel and run it again to carry on.
+    defaultArgs:
+      mode: video_scan
+  - name: "AI markers: preview on 5 scenes (no changes)"
+    description: Picks 5 random scenes without markers and writes to the log the markers each would get (where the scene shifts), without changing anything. Needs the Auto Seek plugin. Try this first.
+    defaultArgs:
+      mode: video_markers_preview
+  - name: "AI markers: scenes without markers"
+    description: Gives every scene that has no markers yet a marker where the action starts and at each big shift, named by its time and the scene's title, with its picture (no Generate needed), under the tag from "Markers - tag for AI markers" (Scene Shift unless changed). Scenes with markers are never touched. Up to a minute per long scene, so a big library takes hours; cancel and run it again to carry on. Needs the Auto Seek plugin.
+    defaultArgs:
+      mode: video_markers_all
+  - name: "AI markers: redo with the newest method"
+    description: For every scene that has AI markers (tagged Scene Shift, or the tag in "Markers - tag for AI markers"), replaces those markers with new ones from the newest way of finding shifts. Other markers are kept. Changes you made to AI markers by hand are lost. A minute or two per scene; cancel and run it again to carry on.
+    defaultArgs:
+      mode: video_markers_redo
+  - name: "Poses: read body poses"
+    description: On a Mac, Apple's body pose for every photo (not drawings) and marker picture, for pose suggestions (Review → Tags → Suggested and Markers). Quick (well under a second each); done ones are skipped, so run it again after adding photos or markers.
+    defaultArgs:
+      mode: pose_scan
+  - name: "Pictures: preview better tag and marker pictures (no changes)"
+    description: On a Mac, scores 40 random tags' and markers' pictures with Apple's aesthetics score and writes to the log which low ones (blurry, dark, screenshots) would be replaced and how much better the new ones score, without changing anything.
+    defaultArgs:
+      mode: better_pictures_preview
+  - name: "Pictures: replace blurry or dark tag pictures"
+    description: On a Mac, every tag picture Apple's aesthetics score puts low (blurry, dark, a screenshot) is replaced by a clearly better one, picked the usual way (most typical first, never one another tag has). Others are left alone. Scores are remembered, so running it again only looks at new or changed pictures.
+    defaultArgs:
+      mode: better_tag_pictures
+  - name: "Pictures: replace blurry, dark or empty marker pictures"
+    description: On a Mac, every marker picture that's blurry, dark, a title card or logo, or has nobody in it (Apple's aesthetics score and person check, and the body-part detector for close-ups) is replaced by a clearly better frame from a few seconds into the marker or just before it. Others are left alone. Scores are remembered, so running it again only looks at new or changed pictures.
+    defaultArgs:
+      mode: better_marker_pictures
+  - name: "Pictures: aesthetic score and labels"
+    description: On a Mac, gives every photo an aesthetic score 0-100 (Apple's - sharp, well lit, well framed; a screenshot about 50, studio photos 85+) and what Apple sees in it (beach, bedroom, swimsuit...), saved as the image's custom fields "aesthetic" and "seen" so you can filter by them (Images → Filter → Custom fields). Review shows better-looking photos first. New images get them by themselves; done ones are skipped.
+    defaultArgs:
+      mode: picture_facts
+  - name: "Screenshots: preview cropping to the photo (no changes)"
+    description: Lists the images that are phone screenshots of a post (Instagram, OnlyFans, Reddit...) and the photo each would be cut down to, without changing anything. Needs the face helper.
+    defaultArgs:
+      mode: screenshot_crop_preview
+  - name: "Screenshots: crop to the photo"
+    description: Every image that's a phone screenshot of a post is cut down to the photo in it, so it looks right and tags better. The file is replaced at the same path (Stash keeps its performers and tags); the screenshot is kept in screenshot-originals in Stash's config folder. Images checked before are skipped.
+    defaultArgs:
+      mode: screenshot_crop
+  - name: "Screenshots: put back the originals"
+    description: Puts back every screenshot the crop task cut down, from the copies in screenshot-originals.
+    defaultArgs:
+      mode: screenshot_restore
   - name: "AI titles: preview on 10 items (no changes)"
     description: Picks 10 random scenes/images without a title and writes the title each would get to the log - from the file name when that makes a good one, else from the local AI model (Ollama) - without changing anything. Try this first.
     defaultArgs:
@@ -148,6 +211,18 @@ tasks:
       mode: perf_details
 
 settings:
+  welcomeOff:
+    displayName: "Welcome: don't show the welcome and tour"
+    description: On after you pick "Don't show again" (or finish the tour). Turn it off to see the welcome again; the tour is also on the setup page (Show the welcome tour).
+    type: BOOLEAN
+  aiMarkerTag:
+    displayName: "Markers: tag for AI markers"
+    description: The tag given to AI markers (Markers → AI markers on a scene's page, and the AI markers task); Stash needs every marker to have one. It's made the first time if you don't have it. Default Scene Shift.
+    type: STRING
+  poseTags:
+    displayName: "Poses: tags"
+    description: "The pose tags suggested from your examples (Review → Tags → Suggested and Markers), comma-separated; only ones you have are used. Tag at least 3 photos or markers with each. Default: Face Down Ass Up, All Fours, Frog Pose, Kneeling, Squatting, Spread Legs, Legs Up, Bent Over, Lying on Stomach."
+    type: STRING
   tagSynonyms:
     displayName: "Tags: synonyms"
     description: Words that mean the same in tag names, for Review → Tags → Similar (merge and sub-tag suggestions). Separate with ; or new lines. "Oral = Blowjob" makes them the same thing; "Blowjob < Oral" puts Blowjob under Oral. Common ones (Tits = Boobs = Breasts, Doggy Style = Doggystyle, Blowjob < Oral...) are built in, and every tag's aliases count too.

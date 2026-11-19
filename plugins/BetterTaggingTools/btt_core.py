@@ -470,8 +470,19 @@ def run_hook(stash, plugin_dir, hook):
     kind, _, action = (hook.get("type") or "").partition(".")
     action = action.split(".")[0]  # "Create" / "Update"
 
+    if PLUGIN_ID == AI_ID and kind == "SceneMarker":
+        # a marker made or moved in Stash's own form: Stash deletes its
+        # picture when its times change (and a new one has none) - make it,
+        # so it shows without running Generate
+        if action == "Create" or {"seconds", "end_seconds"} & set(fields):
+            with contextlib.suppress(Exception):
+                ensure_marker_picture(stash, plugin_dir, hook["id"], wait=3 if action == "Create" else 0)
+        return
+
     if PLUGIN_ID == AI_ID:
         # Better Organizing AI: new scenes and images for the AI
+        if action == "Create" and kind == "Image":
+            enqueue(stash, plugin_dir, facts_images=[str(hook["id"])])  # (its aesthetic score and labels)
         if action == "Create" and kind in ("Scene", "Image"):
             cfg = settings(stash, plugin_dir)
             if cfg["ai"]["auto"] or cfg["ai"]["new_all"] or cfg["ai"]["face_auto"] or \
@@ -555,13 +566,13 @@ MAX_WAIT_SECONDS = 600
 QUEUE_KEYS = ("performers", "galleries", "images", "tags", "ai_scenes", "ai_images",
               "autotag_performers", "autotag_studios", "autotag_tags",
               "dates_scene", "dates_image", "dates_gallery", "top_studios", "top_galleries",
-              "titles_scene", "titles_image", "titles_gallery")
+              "titles_scene", "titles_image", "titles_gallery", "facts_images")
 
 
 def enqueue(stash, plugin_dir, performers=(), galleries=(), images=(), tags=(), ai_scenes=(), ai_images=(),
             autotag_performers=(), autotag_studios=(), autotag_tags=(),
             dates_scene=(), dates_image=(), dates_gallery=(), top_studios=(), top_galleries=(),
-            titles_scene=(), titles_image=(), titles_gallery=()):
+            titles_scene=(), titles_image=(), titles_gallery=(), facts_images=()):
     """Add to the waiting list and make sure one background job is lined up.
 
     Stash runs hooks one after another and waits for each, so a batch edit
@@ -573,7 +584,7 @@ def enqueue(stash, plugin_dir, performers=(), galleries=(), images=(), tags=(), 
         for key, ids in zip(QUEUE_KEYS, (performers, galleries, images, tags, ai_scenes, ai_images,
                                          autotag_performers, autotag_studios, autotag_tags,
                                          dates_scene, dates_image, dates_gallery, top_studios, top_galleries,
-                                         titles_scene, titles_image, titles_gallery)):
+                                         titles_scene, titles_image, titles_gallery, facts_images)):
             if ids:
                 queue[key] = sorted(set(queue.get(key, [])) | set(ids), key=int)
         queue["touched"] = time.time()
@@ -650,6 +661,12 @@ def run_queued(stash, plugin_dir):
                 log("info", f"Gave {len(given)} new item(s) a title from their file names")
         except Exception as e:
             log("warning", f"Titles for new items skipped: {e}")
+
+    if todo.get("facts_images"):
+        try:
+            run_picture_facts(stash, plugin_dir, ids=todo["facts_images"], quiet=True)
+        except Exception as e:
+            log("debug", f"Aesthetic scores for new images skipped: {e}")
 
     if todo["ai_scenes"] or todo["ai_images"]:
         ai = cfg["ai"]
@@ -900,6 +917,7 @@ def tag_gallery(stash, g, record, parent_id):
         "galleries": {"value": [gid], "modifier": "INCLUDES"},
         "tags": {"value": [tag_id], "modifier": "EXCLUDES"},
     })
+    missing = keep_allowed("image", missing, tag_id)
     bulk_images(stash, missing, tag_id, "ADD")
     if missing:
         log("info", f'Tagged {len(missing)} image(s) in "{name}" with "{name}"')
@@ -986,6 +1004,8 @@ def run_gallery_tags_to_images(stash, plugin_dir, preview=False, gallery_ids=Non
         for what, field, oid, label, update in work:
             crit = {"modifier": "IS_NULL"} if oid is None else {"value": [oid], "modifier": "EXCLUDES"}
             missing = item_ids(stash, "images", {**in_gallery, field: crit})
+            if what == "tag":
+                missing = keep_allowed("image", missing, oid)
             if not missing:
                 continue
             if not preview:
@@ -1084,6 +1104,7 @@ def run_studio_tags_to_items(stash, plugin_dir, preview=False, studio_ids=None, 
         for t in tags:
             for k in kinds:
                 missing = item_ids(stash, k, {**base, "tags": {"value": [t["id"]], "modifier": "EXCLUDES"}})
+                missing = keep_allowed(k.rstrip("s"), missing, t["id"])
                 if not missing:
                     continue
                 if not preview:
@@ -1493,7 +1514,99 @@ def picture_hashes(stash, cache, tags):
     return out
 
 
-def give_picture(stash, tag, taken, cache, avoid=(), cands=None, keep=None, looks=None):
+# How good a picture is, by Apple's aesthetics score (on a Mac, through the
+# face helper): -1..1, sharp, well lit and framed scores high. On 700 of your
+# pictures: dark or blurry ones scored below 0, phone screenshots and comic
+# pages about 0-0.1, ordinary frames about 0.2, studio photos 0.75 and up.
+PICTURE_NICE = 0.3        # a picked picture needs this; else the next one is tried
+PICTURE_MORE_TRIES = 15   # after one under it, how many more are tried for a better one
+last_pick_quality = []    # the score of the picture give_picture picked last (None: not scored)
+PHOTO_GOOD_ENOUGH = 0.1   # a photo scoring this (not dark, blurry or a screenshot) is used before any scene picture
+_quality_url = []         # the face helper's address, once looked up ("" = no Apple scores)
+
+
+PICTURE_NOBODY = -0.9     # a marker picture with nobody in it (a title card, a logo, an empty room) counts as this
+
+
+def quality_ready(stash):
+    """Whether Apple's scores are there (the face helper on a Mac)."""
+    if not _quality_url:
+        url = ""
+        with contextlib.suppress(Exception):
+            url = settings(stash)["ai"]["face_url"]
+            with urllib.request.urlopen(url + "/health", timeout=4) as resp:
+                url = url if json.loads(resp.read()).get("apple") else ""
+        _quality_url.append(url)
+    return bool(_quality_url[0])
+
+
+def picture_quality(stash, data, people=False):
+    """Apple's aesthetics score for a picture (bytes), a screenshot or document
+    counting as -1 (and with people, one with nobody in it as PICTURE_NOBODY);
+    None without a Mac's face helper (then any picture does)."""
+    if not quality_ready(stash):
+        return None
+    body = json.dumps({"images": [base64.b64encode(data).decode()], "aesthetics_only": True, "people": people}).encode()
+    try:
+        req = urllib.request.Request(_quality_url[0] + "/apple", data=body, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            res = json.loads(resp.read())["results"][0]
+    except urllib.error.HTTPError:
+        _quality_url[0] = ""  # (a face helper from before the scores)
+        return None
+    except Exception:
+        return None
+    if not res:
+        return None
+    if people and res.get("person") is not None:
+        # (video frames with someone in them are often called "utility" -
+        # watermarks? - so for those it's only the score; nobody: a title
+        # card, a logo, an empty room)
+        return float(res["score"]) if res["person"] else min(-1.0 if res.get("utility") else float(res["score"]), PICTURE_NOBODY)
+    return -1.0 if res.get("utility") else float(res["score"])
+
+
+def jpeg_size(data):
+    """(width, height) of a JPEG (bytes), or None."""
+    i = 2
+    while i + 9 < len(data):
+        if data[i] != 0xFF:
+            return None
+        kind, size = data[i + 1], int.from_bytes(data[i + 2:i + 4], "big")
+        if kind in (0xC0, 0xC1, 0xC2):
+            return int.from_bytes(data[i + 7:i + 9], "big"), int.from_bytes(data[i + 5:i + 7], "big")
+        i += 2 + size
+    return None
+
+
+def card_picture(stash, data):
+    """A tall marker picture (a vertical video's) cut to a wide one around the
+    people in it (the face helper, on a Mac), so cards and the marker row don't
+    crop it in the middle; anything else as it is."""
+    size = jpeg_size(data)
+    if not size or size[1] <= size[0] * 1.05 or not quality_ready(stash):
+        return data
+    body = json.dumps({"images": [base64.b64encode(data).decode()], "card": True}).encode()
+    with contextlib.suppress(Exception):
+        req = urllib.request.Request(_quality_url[0] + "/apple", data=body, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            crop = (json.loads(resp.read())["results"][0] or {}).get("crop")
+        if crop:
+            return base64.b64decode(crop)
+    return data
+
+
+def saved_quality(where):
+    """A photo's saved aesthetic score (the picture facts task), as Apple's
+    -1..1 (a screenshot -1), when `where` is its thumbnail link; else None."""
+    m = re.search(r"/image/(\d+)/thumbnail", where) if isinstance(where, str) else None
+    f = _removed_file("picture_facts.json").get(m.group(1)) if m else None
+    if not f or f.get("a") is None:
+        return None
+    return -1.0 if f.get("u") else f["a"] / 50 - 1
+
+
+def give_picture(stash, tag, taken, cache, avoid=(), cands=None, keep=None, looks=None, better_than=None):
     """Give one tag a picture no other tag has (by file hash) - a picture is
     never used for two tags; if every candidate is another tag's, the tag
     gets nothing. `taken` maps hash -> tag id and is updated; pictures in
@@ -1502,10 +1615,32 @@ def give_picture(stash, tag, taken, cache, avoid=(), cands=None, keep=None, look
     picture - if that's the one picked, nothing is saved. looks (TagLooks,
     when the face helper is running): a picture that looks the same as
     another tag's (a variant of the same page, a near-identical shot)
-    counts as that tag's too. Returns (source, False) or None; source is
-    None when the tag already had that picture."""
+    counts as that tag's too. On a Mac, a picture Apple scores under
+    PICTURE_NICE (blurry, dark, a screenshot) is passed over for the next one;
+    if none of the next few is better, the best of them is used. better_than:
+    only a picture Apple scores above this is used (none: nothing). Returns
+    (source, False) or None; source is None when the tag already had that
+    picture."""
+    best, left = None, None  # the best low-scoring one so far: (score, data, ctype, h, fp, source)
+    photo = None             # the best low-scoring photo so far (photos beat scene screenshots)
+
+    def photo_ok():
+        return photo is not None and photo[0] >= PHOTO_GOOD_ENOUGH
+
+    def use(q, data, ctype, h, fp, source):
+        last_pick_quality[:] = [q]
+        if keep and h == keep:
+            taken[h] = tag["id"]
+            if looks and fp:
+                looks.claim(tag["id"], fp, cache)
+            return None, False
+        set_picture(stash, tag, data, ctype, h, taken, cache)
+        if looks and fp:
+            looks.claim(tag["id"], fp, cache)
+        return source, False
+
     for n, (where, source) in enumerate(cands if cands is not None else candidates(stash, tag["id"])):
-        if n >= MAX_TRIES:
+        if n >= MAX_TRIES or (left is not None and left <= 0 and (photo_ok() or photo is None)):
             break
         try:
             if isinstance(where, dict):
@@ -1526,16 +1661,33 @@ def give_picture(stash, tag, taken, cache, avoid=(), cands=None, keep=None, look
             fp = looks.fingerprint(data)
             if fp and looks.clash(fp, tag["id"]):
                 continue  # looks the same as another tag's picture
-        if keep and h == keep:
-            taken[h] = tag["id"]
-            if looks and fp:
-                looks.claim(tag["id"], fp, cache)
-            return None, False
-        set_picture(stash, tag, data, ctype, h, taken, cache)
-        if looks and fp:
-            looks.claim(tag["id"], fp, cache)
-        return source, False
+        q = saved_quality(where)
+        if q is None:
+            q = picture_quality(stash, data)
+        if better_than is not None and (q is None or q <= better_than):
+            continue
+        is_photo = is_photo_source(source)
+        if q is not None and q < PICTURE_NICE:
+            if best is None or q > best[0]:
+                best = (q, data, ctype, h, fp, source)
+            if is_photo and (photo is None or q > photo[0]):
+                photo = (q, data, ctype, h, fp, source)
+            left = PICTURE_MORE_TRIES if left is None else left - 1
+            continue
+        if not is_photo and photo_ok():
+            return use(*photo)  # a decent photo beats a scene screenshot
+        return use(q, data, ctype, h, fp, source)
+    if photo_ok():
+        return use(*photo)
+    if best:
+        return use(*best)
     return None
+
+
+def is_photo_source(source):
+    """A photo (or a gallery's page or cover) rather than a scene, marker or video frame."""
+    s = (source or "").lower()
+    return ("photo" in s or "galler" in s) and "scene" not in s
 
 
 SAME_LOOK = 0.96  # picture fingerprints this alike are the same picture
@@ -1818,6 +1970,654 @@ def run_new_pictures(stash, plugin_dir):
         log("info", f"{nothing} tag(s) still have no picture (not used on anything with one).")
 
 
+# --- better pictures: swap low-scoring tag and marker pictures --------------
+PICTURE_BETTER_BY = 0.1   # a replacement must score this much more than the picture it replaces
+MARKER_REPICK_AT = 2      # seconds into a marker its new picture is looked for (then +3, +6, then 2 and 4 before it)
+
+
+def _marker_picture_quality_file(plugin_dir):
+    return os.path.join(plugin_dir, "marker_picture_quality.json")
+
+
+def run_better_pictures(stash, plugin_dir, preview=False, limit=None, what=("tags", "markers")):
+    """Task (on a Mac): every tag picture and marker picture Apple's aesthetics
+    score puts under PICTURE_NICE (blurry, dark, a screenshot) is replaced by a
+    better one: for a tag, the next picture the usual way (most typical first,
+    never one another tag has); for a marker, a frame a few seconds into it.
+    Only a clearly better picture is used. Scores are remembered, so running it
+    again only looks at new or changed pictures. preview: report on `limit`
+    random tags and markers, saving nothing."""
+    import random  # noqa: PLC0415
+    if not quality_ready(stash):
+        raise RuntimeError("this needs the face helper on a Mac (Apple's aesthetics score): run face-helper/setup.sh there")
+    if "tags" in what:
+        _better_tag_pictures(stash, plugin_dir, preview, limit, 0.3 if "markers" in what else 1.0)
+    if "markers" in what:
+        _better_marker_pictures(stash, plugin_dir, preview, limit, 0.3 if "tags" in what else 0.0)
+    progress(1)
+
+
+def _better_tag_pictures(stash, plugin_dir, preview, limit, share):
+    import random  # noqa: PLC0415
+    tags = sorted(all_tags_for_pictures(stash), key=uses)
+    if limit:
+        tags = random.sample(tags, min(limit, len(tags)))
+    swapped, kept, low = [], 0, 0
+    with locked_picture_hashes(plugin_dir) as cache:
+        current = picture_hashes(stash, cache, tags)
+        taken = taken_map(current)
+        # (a preview doesn't compare looks: that would remember pictures it didn't set)
+        looks = None if preview else TagLooks.maybe(stash, plugin_dir, cache, tags)
+        typical = None
+        with contextlib.suppress(Exception):
+            typical = TypicalPictures(stash, plugin_dir)
+        with_pic = [t for t in tags if t["id"] in current]
+        log("info", f"{'Preview: ' if preview else ''}checking the pictures of {len(with_pic)} tag(s)...")
+        for n, t in enumerate(with_pic):
+            progress(share * n / max(len(with_pic), 1))
+            e = cache.get(t["id"]) or {}
+            if e.get("q_link") == e.get("link") and "q" in e:
+                q = e["q"]
+            else:
+                try:
+                    q = picture_quality(stash, stash.fetch(t["image_path"])[0])
+                except Exception:
+                    continue
+                if q is None:
+                    continue
+                e["q"], e["q_link"] = q, e.get("link")
+            if q >= PICTURE_NICE or e.get("q_tried") == e.get("link"):
+                continue
+            low += 1
+            old = current[t["id"]]
+            real_set = None
+            last_pick_quality[:] = []
+            if preview:
+                real_set = globals()["set_picture"]
+                globals()["set_picture"] = lambda *a: None
+            try:
+                result = give_picture(stash, t, taken, cache, keep=old, looks=looks, better_than=q + PICTURE_BETTER_BY,
+                                      cands=typical.candidates(t["id"]) if typical else None)
+            except Exception as ex:
+                log("warning", f'Tag "{t["name"]}": could not pick a picture: {ex}')
+                result = None
+            finally:
+                if real_set:
+                    globals()["set_picture"] = real_set
+            if result and result[0]:
+                new = cache.get(t["id"]) or {}
+                nq = (last_pick_quality or [None])[0]
+                if not preview:
+                    if taken.get(old) == t["id"]:
+                        del taken[old]
+                    if nq is not None:
+                        new["q"], new["q_link"] = nq, new.get("link")
+                swapped.append(t["name"])
+                log("info", f'Tag "{t["name"]}": {"would get" if preview else "new picture,"} '
+                    f'scored {q:.2f} -> {nq if nq is None else round(nq, 2)}, from {result[0]}')
+            else:
+                kept += 1
+                if not preview:
+                    e["q_tried"] = e.get("link")
+    log("info", f"Tags: {low} picture(s) scored under {PICTURE_NICE}; {len(swapped)} {'would be' if preview else ''} replaced, "
+        f"{kept} kept (nothing clearly better that no other tag has).")
+
+
+def _better_marker_pictures(stash, plugin_dir, preview, limit, start):
+    """Marker pictures: blurry, dark or with nobody in it (Apple and the
+    body-part detector) -> a better frame near the marker's start."""
+    import random  # noqa: PLC0415
+    gen = stash.call("{ configuration { general { generatedPath videoFileNamingAlgorithm } } }")["configuration"]["general"]
+    want = "md5" if gen.get("videoFileNamingAlgorithm") == "MD5" else "oshash"
+    markers = stash.call("{ findSceneMarkers(filter: {per_page: -1}) { scene_markers { id seconds end_seconds "
+                         "scene { id files { path duration width height fingerprints { type value } } } } } }")["findSceneMarkers"]["scene_markers"]
+    if limit:
+        markers = random.sample(markers, min(limit, len(markers)))
+    qpath = _marker_picture_quality_file(plugin_dir)
+    try:
+        with open(qpath) as f:
+            seen = json.load(f)
+    except (OSError, ValueError):
+        seen = {}
+    A = None
+    better = tried = missing = mlow = cropped = 0
+    log("info", f"{'Preview: ' if preview else ''}checking the pictures of {len(markers)} marker(s)...")
+    for n, m in enumerate(markers):
+        progress(start + (1 - start) * n / max(len(markers), 1))
+        f = ((m.get("scene") or {}).get("files") or [None])[0]
+        prints = {fp["type"]: fp["value"] for fp in (f or {}).get("fingerprints") or []}
+        if not f or not prints.get(want) or not gen.get("generatedPath"):
+            continue
+        sec = int(float(m["seconds"]))
+        path = os.path.join(gen["generatedPath"], "markers", prints[want], f"{sec}.jpg")
+        try:
+            st = os.stat(path)
+        except OSError:
+            missing += 1  # (not generated yet)
+            continue
+        if f.get("height") and f.get("width") and f["height"] > f["width"]:
+            # a vertical video's tall picture: cut to a wide one around the people
+            with open(path, "rb") as fh:
+                old = fh.read()
+            size = jpeg_size(old)
+            if size and size[1] > size[0] * 1.05:
+                new = card_picture(stash, old)
+                if new is not old:
+                    cropped += 1
+                    if not preview:
+                        tmp = path + ".bta.tmp"
+                        with open(tmp, "wb") as fh:
+                            fh.write(new)
+                        os.replace(tmp, path)
+                        st = os.stat(path)
+        sig = f"{sec}:{st.st_size}:{int(st.st_mtime)}"
+        ent = seen.get(m["id"]) or {}
+        if ent.get("v") != 2:
+            ent = {}  # (scored before people were looked for)
+        if ent.get("sig") == sig and (ent.get("q", -2) >= PICTURE_NICE or ent.get("tried")):
+            continue
+        if ent.get("sig") == sig:
+            q = ent["q"]
+        else:
+            with open(path, "rb") as fh:
+                q = picture_quality(stash, fh.read(), people=True)
+            if q is None:
+                continue
+            seen[m["id"]] = ent = {"sig": sig, "q": q, "v": 2}
+        if q >= PICTURE_NICE:
+            continue
+        mlow += 1
+        if A is None:
+            A = load_auto_seek(plugin_dir)
+        end = float(m["end_seconds"]) if m.get("end_seconds") else min(float(m["seconds"]) + 20, float(f.get("duration") or 1e9))
+        at = min(float(m["seconds"]) + MARKER_REPICK_AT, max(end - 7, float(m["seconds"])))
+        try:
+            pic = _marker_pictures(stash, A, f["path"], [at], [float(m["seconds"])])[0]
+        except Exception as ex:
+            log("debug", f"marker {m['id']}: no frame ({ex})")
+            pic = None
+        data = base64.b64decode(pic) if pic else None
+        nq = picture_quality(stash, data, people=True) if data else None
+        if nq is not None and nq > q + PICTURE_BETTER_BY:
+            better += 1
+            if preview:
+                log("info", f"marker {m['id']} (scene {m['scene']['id']} at {_marker_clock(sec)}): would get a picture scoring {q:.2f} -> {nq:.2f}")
+            else:
+                tmp = path + ".bta.tmp"
+                with open(tmp, "wb") as fh:
+                    fh.write(data)
+                os.replace(tmp, path)
+                st = os.stat(path)
+                seen[m["id"]] = {"sig": f"{sec}:{st.st_size}:{int(st.st_mtime)}", "q": nq, "v": 2}
+        else:
+            tried += 1
+            ent["tried"] = True
+        if not preview and n % 50 == 49:
+            with open(qpath, "w") as fh:
+                json.dump(seen, fh)
+    if not preview:
+        with open(qpath, "w") as fh:
+            json.dump(seen, fh)
+    log("info", f"Markers: {mlow} picture(s) scored under {PICTURE_NICE}; {better} {'would be' if preview else ''} replaced, "
+        f"{tried} kept (no clearly better frame)" + (f"; {cropped} vertical scenes' picture(s) {'would be ' if preview else ''}cut to the people" if cropped else "")
+        + (f"; {missing} have no picture yet (Generate makes them)" if missing else "")
+        + ("." if preview else ". Pages already open may show the old pictures until reloaded."))
+
+
+# --- screenshots of posts: cut down to the photo ---------------------------
+# A phone screenshot of an Instagram / OnlyFans / Reddit post is mostly the
+# app: the photo in it is small, so tags and pictures suffer. The face helper
+# finds the photo (see shot_box there) and the file is replaced by it, at the
+# same path so Stash keeps its performers and tags. The screenshot is kept in
+# <config>/screenshot-originals/<its path> and "Screenshots: put back the
+# originals" restores them all.
+SHOT_EXTS = {".jpg": "jpg", ".jpeg": "jpg", ".png": "png", ".webp": "webp"}
+# phone screen sizes (portrait): a screenshot is exactly one of these (a tall
+# comic page or art isn't; the first try without this took ~60 of those)
+PHONE_SCREENS = {(750, 1334), (1080, 1920), (1242, 2208), (828, 1792), (750, 1624), (1125, 2436), (1242, 2688),
+                 (1170, 2532), (1284, 2778), (1179, 2556), (1290, 2796), (1206, 2622), (1320, 2868), (1080, 2340),
+                 (1080, 2400), (720, 1600), (1440, 3200), (1440, 3120), (1080, 2316), (1080, 2408), (1440, 3088)}
+
+
+def _shot_record(plugin_dir):
+    return os.path.join(plugin_dir, "screenshot_crops.json")
+
+
+def _shot_backup_dir(stash):
+    return os.path.join(stash.config_dir or "/root/.stash", "screenshot-originals")
+
+
+def _shot_candidates(stash, checked):
+    """Images exactly a phone screen's size (and not drawn), as
+    files of their own (not in a zip), not checked before as they are now."""
+    out, page = [], 1
+    while True:
+        items = stash.call("query($f: FindFilterType) { findImages(filter: $f) { images { id title tags { name } "
+                           "visual_files { __typename ... on ImageFile { path width height } } } } }",
+                           {"f": {"page": page, "per_page": 1000, "sort": "id"}})["findImages"]["images"]
+        for i in items:
+            f = (i.get("visual_files") or [None])[0]
+            if not f or f["__typename"] != "ImageFile" or len(i["visual_files"]) != 1:
+                continue
+            p = f["path"]
+            ext = os.path.splitext(p)[1].lower()
+            if ext not in SHOT_EXTS or re.search(r"(?i)\.(zip|cbz)/", p):
+                continue
+            if (f.get("width"), f.get("height")) not in PHONE_SCREENS or is_drawn(i):
+                continue
+            with contextlib.suppress(OSError):
+                if checked.get(i["id"]) == int(os.stat(p).st_mtime):
+                    continue
+                out.append((i, p, ext))
+        if len(items) < 1000:
+            break
+        page += 1
+    return out
+
+
+def run_screenshot_crop(stash, plugin_dir, preview=False):
+    """Task: every image that's a phone screenshot of a post is cut down to the
+    photo in it (the screenshot is backed up first). preview: list them only."""
+    cfg = settings(stash, plugin_dir)
+    url = cfg["ai"]["face_url"]
+    try:
+        with urllib.request.urlopen(url + "/health", timeout=5) as resp:
+            if not json.loads(resp.read()).get("shotcrop"):
+                raise RuntimeError("the face helper is too old: copy face-helper/face_helper.py over the running one and restart it")
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"can't reach the face helper at {url} ({getattr(e, 'reason', e)})")
+    rec_path = _shot_record(plugin_dir)
+    try:
+        with open(rec_path) as fh:
+            rec = json.load(fh)
+    except (OSError, ValueError):
+        rec = {}
+    rec.setdefault("cropped", {})
+    rec.setdefault("checked", {})
+    todo = _shot_candidates(stash, rec["checked"])
+    log("info", f"{'Preview: ' if preview else ''}{len(todo)} phone-screenshot-shaped image(s) to look at...")
+    backups = _shot_backup_dir(stash)
+    done, changed = 0, []
+    for n, (img, path, ext) in enumerate(todo):
+        progress(n / max(len(todo), 1))
+        try:
+            with open(path, "rb") as fh:
+                data = fh.read()
+            body = json.dumps({"images": [base64.b64encode(data).decode()], "format": [SHOT_EXTS[ext]]}).encode()
+            req = urllib.request.Request(url + "/shotcrop", data=body, headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                res = json.loads(resp.read())["results"][0] or {}
+        except Exception as e:
+            log("warning", f"image {img['id']}: couldn't check it ({e})")
+            continue
+        label = f"image {img['id']}" + (f' "{img["title"]}"' if img.get("title") else "")
+        if not res.get("box"):
+            if not preview:
+                rec["checked"][img["id"]] = int(os.stat(path).st_mtime)
+            continue
+        done += 1
+        x0, y0, x1, y1 = res["box"]
+        if preview:
+            log("info", f"{label}: would keep the photo at {x1 - x0}x{y1 - y0} (from {x0},{y0})")
+            continue
+        backup = os.path.join(backups, path.lstrip("/"))
+        os.makedirs(os.path.dirname(backup), exist_ok=True)
+        if not os.path.exists(backup):
+            shutil.copy2(path, backup)
+        tmp = path + ".bta-crop.tmp"
+        with open(tmp, "wb") as fh:
+            fh.write(base64.b64decode(res["crop"]))
+        os.replace(tmp, path)
+        rec["cropped"][img["id"]] = {"path": path, "backup": backup, "box": res["box"], "at": time.strftime("%Y-%m-%d %H:%M")}
+        rec["checked"][img["id"]] = int(os.stat(path).st_mtime)
+        changed.append(path)
+        log("info", f"{label}: cut down to the photo ({x1 - x0}x{y1 - y0})")
+        if n % 20 == 19:
+            _shot_save(rec_path, rec)
+    if not preview:
+        _shot_save(rec_path, rec)
+        _shot_forget(plugin_dir, [iid for iid, r in rec["cropped"].items() if r["path"] in set(changed)])
+        _shot_rescan(stash, changed)
+    progress(1)
+    log("info", f"{'Preview done' if preview else 'Done'}: {done} screenshot(s) {'would be' if preview else ''} cut down to their photo"
+        + ("" if preview else f"; the originals are in {backups}. \"Screenshots: put back the originals\" undoes it."))
+
+
+def _shot_forget(plugin_dir, ids):
+    """Cropped (or put back) images: what was worked out from the old picture
+    (look-alike fingerprint, faces, body pose, body tags and AI tags done) is
+    dropped, so the next runs look at the new one."""
+    keys = {f"image:{i}" for i in ids}
+    if not keys:
+        return
+    for name in ("look_items.json", "face_items.json", "poses.json"):
+        path = os.path.join(plugin_dir, name)
+        with contextlib.suppress(OSError, ValueError):
+            with open(path) as fh:
+                d = json.load(fh)
+            if keys & set(d):
+                for k in keys:
+                    d.pop(k, None)
+                _shot_save(path, d)
+    with contextlib.suppress(OSError, ValueError):  # (picture_facts.json is keyed by the bare id)
+        path = os.path.join(plugin_dir, "picture_facts.json")
+        with open(path) as fh:
+            d = json.load(fh)
+        if {str(i) for i in ids} & set(d):
+            for i in ids:
+                d.pop(str(i), None)
+            _shot_save(path, d)
+    for name in ("body_done.json", "ai_done.json"):
+        with contextlib.suppress(OSError, ValueError), locked_json(os.path.join(plugin_dir, name)) as d:
+            for field in ("images", "redo_images"):
+                if isinstance(d.get(field), list):
+                    d[field] = [x for x in d[field] if str(x) not in set(map(str, ids))]
+
+
+def _shot_save(path, rec):
+    tmp = f"{path}.{os.getpid()}.tmp"
+    with open(tmp, "w") as fh:
+        json.dump(rec, fh)
+    os.replace(tmp, path)
+
+
+def _shot_rescan(stash, paths):
+    """Stash looks at the changed files again (new size, fingerprint and thumbnail)."""
+    if not paths:
+        return
+    with contextlib.suppress(Exception):
+        stash.call("mutation($i: ScanMetadataInput!) { metadataScan(input: $i) }",
+                   {"i": {"paths": paths, "scanGenerateThumbnails": True, "rescan": True}})
+        log("info", f"Asked Stash to scan the {len(paths)} changed file(s) again (a scan job in the queue).")
+
+
+def run_screenshot_restore(stash, plugin_dir):
+    """Task: every screenshot cut down by the crop task goes back to the original."""
+    rec_path = _shot_record(plugin_dir)
+    try:
+        with open(rec_path) as fh:
+            rec = json.load(fh)
+    except (OSError, ValueError):
+        rec = {}
+    cropped = rec.get("cropped") or {}
+    if not cropped:
+        log("info", "Nothing to put back: no screenshots have been cropped.")
+        return
+    back, restored, missing = [], [], 0
+    for iid, r in list(cropped.items()):
+        if not os.path.exists(r["backup"]):
+            missing += 1
+            continue
+        shutil.copy2(r["backup"], r["path"])
+        back.append(r["path"])
+        restored.append(iid)
+        cropped.pop(iid)
+        rec.get("checked", {})[iid] = int(os.stat(r["path"]).st_mtime)  # (not cropped again by itself)
+    _shot_save(rec_path, rec)
+    _shot_forget(plugin_dir, restored)
+    _shot_rescan(stash, back)
+    log("info", f"Put back {len(back)} original screenshot(s)" + (f"; {missing} backup(s) missing" if missing else "") + ".")
+
+
+# --- picture facts: an aesthetic score and what Apple sees, on each image ---
+# Saved on the image as custom fields Stash can filter by (Images → Filter →
+# Custom fields): "aesthetic" 0-100 (Apple's aesthetics score: sharp, well lit,
+# framed; a screenshot about 50, studio photos 85+) and "seen" (Apple's picture
+# labels, e.g. "beach, ocean, swimsuit": filter with "includes beach"). Kept in
+# picture_facts.json too, for Review (better-looking photos first) and the
+# picture picking.
+FACTS_BATCH = 16
+
+
+def _facts_cache(plugin_dir):
+    try:
+        with open(os.path.join(plugin_dir, "picture_facts.json")) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def picture_facts(plugin_dir):
+    """{image id: {"a": aesthetic 0-100 or None, "u": screenshot-like, "l": labels}}."""
+    return _facts_cache(plugin_dir)
+
+
+def run_picture_facts(stash, plugin_dir, ids=None, redo=False, quiet=False):
+    """Task: the aesthetic score and labels for every image not done yet (or
+    `ids`), saved as the image's custom fields "aesthetic" and "seen"."""
+    if not quality_ready(stash):
+        raise RuntimeError("this needs the face helper on a Mac (Apple's Vision): run face-helper/setup.sh there")
+    url = _quality_url[0]
+    cache = _facts_cache(plugin_dir)
+    fields = "id paths { thumbnail } visual_files { __typename ... on ImageFile { path } ... on VideoFile { path } }"
+    if ids:
+        items = find_by_ids(stash, "findImages", "images", list(ids), fields)
+    else:
+        items, page = [], 1
+        while True:
+            got = stash.call("query($f: FindFilterType) { findImages(filter: $f) { images { " + fields + " } } }",
+                             {"f": {"page": page, "per_page": 1000, "sort": "id"}})["findImages"]["images"]
+            items += got
+            if len(got) < 1000:
+                break
+            page += 1
+    todo = []
+    for it in items:
+        f = (it.get("visual_files") or [None])[0]
+        if not f or f["__typename"] != "ImageFile":
+            continue
+        if redo or (cache.get(it["id"]) or {}).get("s") != f["path"]:
+            todo.append((it, f["path"]))
+    if not quiet:
+        log("info", f"Aesthetic scores and labels for {len(todo)} image(s) ({len(items) - len(todo)} done before or not photos); "
+            "well under a second each, cancel and run again to carry on.")
+    done = 0
+    for at in range(0, len(todo), FACTS_BATCH):
+        if not quiet:
+            progress(at / max(len(todo), 1))
+        batch, pics = [], []
+        for it, path in todo[at:at + FACTS_BATCH]:
+            try:
+                data, ctype = stash.fetch(it["paths"]["thumbnail"])
+            except Exception as e:
+                log("debug", f"image {it['id']}: no picture ({e})")
+                continue
+            if ctype.startswith("image/"):
+                batch.append((it, path))
+                pics.append(base64.b64encode(data).decode())
+        if not pics:
+            continue
+        results = None
+        for attempt in range(4):  # (the face helper restarting for a moment)
+            try:
+                req = urllib.request.Request(url + "/apple", data=json.dumps({"images": pics, "facts": True}).encode(),
+                                             headers={"Content-Type": "application/json"})
+                with urllib.request.urlopen(req, timeout=300) as resp:
+                    results = json.loads(resp.read())["results"]
+                break
+            except (urllib.error.URLError, ConnectionError, TimeoutError, http.client.HTTPException) as e:
+                if attempt == 3:
+                    raise RuntimeError(f"the face helper stopped answering ({getattr(e, 'reason', e)})")
+                time.sleep(3 + attempt * 3)
+        for (it, path), r in zip(batch, results):
+            if not r:
+                continue
+            a = None if r.get("score") is None else max(0, min(100, round((r["score"] + 1) * 50)))
+            labels = [l.replace("_", " ") for l, _ in r.get("labels") or []]
+            if r.get("utility"):
+                labels = ["screenshot"] + labels
+            custom = {"seen": ", ".join(labels)}
+            if a is not None:
+                custom["aesthetic"] = a
+            with contextlib.suppress(Exception):
+                stash.call("mutation($i: ImageUpdateInput!) { imageUpdate(input: $i) { id } }",
+                           {"i": {"id": it["id"], "custom_fields": {"partial": custom}}})
+                cache[it["id"]] = {"s": path, "a": a, "u": bool(r.get("utility")), "l": labels}
+                done += 1
+        if (at // FACTS_BATCH) % 20 == 19:
+            _pose_save_named(plugin_dir, "picture_facts.json", cache)
+    _pose_save_named(plugin_dir, "picture_facts.json", cache)
+    if not quiet:
+        progress(1)
+        log("info", f"Done: {done} image(s) got an aesthetic score and labels (custom fields \"aesthetic\" and \"seen\": "
+            "Images → Filter → Custom fields).")
+
+
+def _pose_save_named(plugin_dir, name, data):
+    path = os.path.join(plugin_dir, name)
+    tmp = f"{path}.{os.getpid()}.tmp"
+    with open(tmp, "w") as fh:
+        json.dump(data, fh, separators=(",", ":"))
+    os.replace(tmp, path)
+
+
+# --- "Describe it" search: find pictures by words ----------------------------
+# The words are turned into a CLIP fingerprint (the face helper's text model)
+# and compared with the picture fingerprints the look-alike scan made for
+# every photo and scene (and the AI markers' frames). The face helper keeps
+# the fingerprints in memory, sent again only when they change.
+SEARCH_INDEX = "looks"
+
+
+SEARCH_PERSON = re.compile(r"(?i)\b(man|men|guy|guys|boy|boys|woman|women|girl|girls|lady|ladies|couple|people|person|"
+                           r"she|he|her|him|trans|femboy|someone|they)\b")
+SEARCH_WEAK = 0.275  # the best match under this: nothing looks like it ("spreadsheet of tax numbers" 0.268; real searches 0.30+; nonsense can still find look-alikes, so only clear misses are flagged)
+
+
+def search_wordings(text):
+    """CLIP finds more with a few wordings averaged: "a photo of …", and when
+    no person is named "a photo of a woman, …" (on 12 test searches, a plain
+    "kneeling" found building shots; "a photo of a woman kneeling" found kneeling)."""
+    if SEARCH_PERSON.search(text):
+        return [f"a photo of {text}", text]
+    return [f"a photo of {text}", f"a photo of a woman, {text}"]
+
+
+def _search_version(plugin_dir):
+    parts = ["v2"]
+    for name in ("look_items.json", "marker_looks.json"):
+        with contextlib.suppress(OSError):
+            parts.append(str(int(os.stat(os.path.join(plugin_dir, name)).st_mtime)))
+    return "-".join(parts) or "0"
+
+
+def _search_post(cfg, path, body):
+    req = urllib.request.Request(cfg["ai"]["face_url"] + path, data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=300) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            raise RuntimeError("the face helper is too old for search: copy face-helper/face_helper.py over the running one and restart it")
+        detail = ""
+        with contextlib.suppress(Exception):
+            detail = json.loads(e.read()).get("error", "")
+        raise RuntimeError(f"the face helper couldn't search ({detail or e.code})")
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"can't reach the face helper at {cfg['ai']['face_url']} ({getattr(e, 'reason', e)})")
+
+
+def _search_send_index(stash, cfg, plugin_dir, version):
+    keys, vectors, groups = [], [], []
+    for k, ent in LookCache(plugin_dir).data.items():
+        if ent.get("e") and k.split(":")[0] in ("image", "scene"):
+            keys.append(k)
+            vectors.append(ent["e"])
+            groups.append(k)
+    # a marker's group is its scene: a scene and its markers show at most twice
+    scene_of = {}
+    with contextlib.suppress(Exception):
+        for m in stash.call("{ findSceneMarkers(filter: {per_page: -1}) { scene_markers { id scene { id } } } }")["findSceneMarkers"]["scene_markers"]:
+            scene_of[m["id"]] = m["scene"]["id"]
+    with contextlib.suppress(OSError, ValueError):
+        with open(os.path.join(plugin_dir, "marker_looks.json")) as f:
+            for mid, ent in json.load(f).items():
+                if (ent or {}).get("e") and mid in scene_of:  # (deleted markers left out)
+                    keys.append(f"marker:{mid}")
+                    vectors.append(ent["e"])
+                    groups.append(f"scene:{scene_of[mid]}")
+    if not keys:
+        raise RuntimeError('nothing to search yet - run "Look-alike tags: scan scenes and images" first')
+    _search_post(cfg, "/index", {"name": SEARCH_INDEX, "version": version, "keys": keys, "vectors": vectors, "groups": groups})
+
+
+def find_markers_by_ids(stash, ids, fields):
+    """findSceneMarkers (ids: ...) that doesn't fail when some were deleted
+    since (Stash refuses the whole lookup then): the missing ones are left out."""
+    ids = [str(i) for i in ids]
+    for _ in range(len(ids) + 1):
+        if not ids:
+            return []
+        try:
+            return stash.call(f"query($ids: [ID!]) {{ findSceneMarkers(ids: $ids) {{ scene_markers {{ {fields} }} }} }}",
+                              {"ids": ids})["findSceneMarkers"]["scene_markers"]
+        except RuntimeError as e:
+            gone = set(re.findall(r"marker with id (\d+) not found", str(e)))
+            if not gone:
+                raise
+            ids = [i for i in ids if i not in gone]
+    return []
+
+
+def run_ai_search(stash, plugin_dir, text, kinds=None, limit=60, min_aesthetic=None):
+    """Pictures that match a description, best first:
+    {"items": [{kind, id, title, picture, link, score, aesthetic}]}."""
+    text = (text or "").strip()
+    if not text:
+        return {"items": []}
+    cfg = settings(stash, plugin_dir)
+    kinds = set(kinds or ("image", "scene", "marker"))
+    version = _search_version(plugin_dir)
+    ask = {"name": SEARCH_INDEX, "version": version, "texts": search_wordings(text),
+           "k": int(limit) * 2 if not min_aesthetic else max(400, int(limit) * 8), "kinds": sorted(kinds), "per_group": 2}
+    res = _search_post(cfg, "/search", ask)
+    if res.get("missing"):
+        _search_send_index(stash, cfg, plugin_dir, version)
+        res = _search_post(cfg, "/search", ask)
+    facts = picture_facts(plugin_dir)
+    hits = []
+    for key, score in res.get("results") or []:
+        kind, _, iid = key.partition(":")
+        if kind not in kinds:
+            continue
+        a = (facts.get(iid) or {}).get("a") if kind == "image" else None
+        if min_aesthetic and kind == "image" and (a is None or a < int(min_aesthetic)):
+            continue
+        hits.append((kind, iid, score, a))
+        if len(hits) >= int(limit) * 2:  # (some may have been deleted since the scan)
+            break
+    by_kind = defaultdict(list)
+    for kind, iid, _, _ in hits:
+        by_kind[kind].append(iid)
+    info = {}
+    if by_kind.get("image"):
+        for x in find_by_ids(stash, "findImages", "images", by_kind["image"], "id title paths { thumbnail } visual_files { ... on BaseFile { basename } }"):
+            info[f"image:{x['id']}"] = (x.get("title") or ((x.get("visual_files") or [{}])[0] or {}).get("basename") or "",
+                                        x["paths"]["thumbnail"], f"/images/{x['id']}")
+    if by_kind.get("scene"):
+        for x in find_by_ids(stash, "findScenes", "scenes", by_kind["scene"], "id title paths { screenshot } files { basename }"):
+            info[f"scene:{x['id']}"] = (x.get("title") or ((x.get("files") or [{}])[0] or {}).get("basename") or "",
+                                        x["paths"]["screenshot"], f"/scenes/{x['id']}")
+    if by_kind.get("marker"):
+        got = find_markers_by_ids(stash, by_kind["marker"], "id title seconds scene { id title }")
+        for m in got:
+            sid = m["scene"]["id"]
+            info[f"marker:{m['id']}"] = (m.get("title") or f"{m['scene'].get('title') or 'Scene'} at {_marker_clock(m['seconds'])}",
+                                         f"/scene/{sid}/scene_marker/{m['id']}/screenshot", f"/scenes/{sid}?t={int(float(m['seconds']))}")
+    items = []
+    for kind, iid, score, a in hits:
+        got = info.get(f"{kind}:{iid}")
+        if not got:
+            continue  # (deleted since)
+        title, picture, link = got
+        items.append({"kind": kind, "id": iid, "title": title, "picture": re.sub(r"^https?://[^/]+", "", picture or ""),
+                      "link": link, "score": round(score, 3), **({"aesthetic": a} if a is not None else {})})
+        if len(items) >= int(limit):
+            break
+    weak = bool(items) and items[0]["score"] < SEARCH_WEAK
+    return {"items": items, "weak": weak}
+
+
 # --- most typical tag pictures (AI add-on) ----------------------------------
 # A tag's "typical look" is the average picture fingerprint (look_items.json)
 # of the scenes and photos that carry it - leaving out ones where the add-on
@@ -1900,7 +2700,7 @@ class TypicalPictures:
         # always "closer to the middle" than a single photo: rank photos and
         # scenes apart, and try first the kind the tag is mostly on
         photos = sum(1 for k in keys if k.startswith("image:"))
-        first = "image:" if photos * 2 >= len(keys) else "scene:"
+        first = "image:" if photos else "scene:"  # (photos first whenever the tag has any)
         out.sort(key=lambda sk: (not sk[1].startswith(first), -sk[0]))
         return out
 
@@ -2735,6 +3535,7 @@ def autotag_item(stash, index, kind, item, apply):
     performers, studio, tags, names = autotag_match(index, path)
     performers -= {p["id"] for p in item.get("performers") or []}
     tags -= {t["id"] for t in item.get("tags") or []}
+    tags -= removed_tags(kind, item["id"], [t["id"] for t in item.get("tags") or []])
     if item.get("studio"):
         studio = None  # Auto Tag never replaces a studio
     day = None if item.get("date") else date_from_path(item_path(kind, item))
@@ -3054,6 +3855,8 @@ def ai_tag_item(stash, cfg, vocab, names, kind, item, apply, have_too=(), looks=
         except Exception as e:
             log("debug", f"{kind} {item['id']}: look-alikes skipped ({e})")
     full = combine_picks(picked, scores, have, looks, cfg["ai"]["max_tags"])
+    gone = removed_tags(kind, item["id"], [t["id"] for t in item.get("tags") or []])
+    full = [x for x in full if str(x[0]) not in gone]
     picked = [(t, n) for t, n, _ in full]
     if apply and picked:
         mutation = "bulkImageUpdate(input: $i) { id }" if kind == "image" else "bulkSceneUpdate(input: $i) { id }"
@@ -3490,6 +4293,56 @@ def locked_machine_tags(plugin_dir):
     return locked_json(os.path.join(plugin_dir, "machine_tags.json"))
 
 
+# --- tags you took off an item stay off -----------------------------------
+# A tag you remove from an item (in Review's Check, or anywhere in Stash when
+# the add-on had added it), or say No to in Review's suggestions, is never
+# put back on that item by any task: AI tags, look-alikes, body tags,
+# gallery / studio tags, file names. (Before, only tags you'd removed almost
+# everywhere were left out, so a task could add one back to the same item.)
+_removed_cache = {}
+
+
+def _ai_data_dir():
+    """Where the AI add-on keeps its records (also when Better Organizing
+    Tools runs this): its plugin folder next to this one."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    ai = os.path.join(os.path.dirname(here), AI_ID)
+    return ai if os.path.isdir(ai) else here
+
+
+def _removed_file(name):
+    path = os.path.join(_ai_data_dir(), name)
+    try:
+        mtime = os.stat(path).st_mtime
+    except OSError:
+        return {}
+    hit = _removed_cache.get(name)
+    if not hit or hit[0] != mtime:
+        try:
+            with open(path) as f:
+                hit = (mtime, json.load(f))
+        except (OSError, ValueError):
+            hit = (mtime, {})
+        _removed_cache[name] = hit
+    return hit[1]
+
+
+def removed_tags(kind, item_id, have=()):
+    """Tag ids not to add to this item again: the ones you said No to in
+    Review, and the ones the add-on added that it no longer has (`have`: its
+    tags now; for an item known not to have a tag, leave it empty)."""
+    key = f"{kind}:{item_id}"
+    out = {str(t) for t in _removed_file("tag_review_not.json").get(key, [])}
+    have = {str(t) for t in have}
+    out |= {str(t) for t in _removed_file("machine_tags.json").get(key, [])} - have
+    return out
+
+
+def keep_allowed(kind, ids, tag_id):
+    """Of these items (none has the tag yet), the ones it may be added to."""
+    return [i for i in ids if str(tag_id) not in removed_tags(kind, i)]
+
+
 def record_machine_tags(plugin_dir, kind, item_id, tag_ids):
     if tag_ids:
         with locked_machine_tags(plugin_dir) as rec:
@@ -3699,6 +4552,8 @@ def run_looks(stash, plugin_dir, preview=False, limit=None):
         if not scores:
             continue
         picks = look_picks(scores, set(), names, cfg["ai"]["max_tags"])
+        gone = removed_tags(kind, item["id"], [t["id"] for t in item.get("tags") or []] if "tags" in item else picks)
+        picks = [t for t in picks if str(t) not in gone]
         maybe = sorted(((s, t) for t, s in scores.items() if LOOK_SUGGEST <= s < LOOK_SURE and t in names), reverse=True)[:4]
         if picks and not preview:
             stash.call(f"mutation($i: {'BulkSceneUpdateInput' if kind == 'scene' else 'BulkImageUpdateInput'}!) "
@@ -3787,6 +4642,77 @@ BODY_SHOWN = {  # tag -> (detector part, likeness needed: in two pictures, or 0.
     "Cock": ("MALE_GENITALIA_EXPOSED", 0.55),  # the detector's weakest part
 }
 BODY_BELLY = ("BELLY_EXPOSED", 0.5)
+# what's worn, and bare feet: tag names (the first you have is added) -> the
+# detector part and how sure; a bra or panties also need a bare belly (so a
+# shirt or jeans don't count) and nothing bare in the same place
+BODY_WORN = {
+    "Feet": (("Feet", "Barefoot"), "FEET_EXPOSED", 0.55, None),
+    "Bra": (("Bra", "Bras"), "FEMALE_BREAST_COVERED", 0.6, "FEMALE_BREAST_EXPOSED"),
+    "Panties": (("Panties", "Underwear"), "FEMALE_GENITALIA_COVERED", 0.55, "FEMALE_GENITALIA_EXPOSED"),
+    "Shoes": (("Shoes",), "FEET_COVERED", 0.7, None),
+}
+
+
+# Clothing in photos, from their CLIP picture fingerprints (clothing.json:
+# each item's descriptions, worked out once with CLIP's text model, scored
+# against plain ones). Only items that held up when checked by eye, only on
+# photos (drawings and comics fool it: it reads the word "bra" in a speech
+# bubble), and at a high bar.
+_clothing = None
+
+
+_clothing_extra = {}  # first tag name -> {"near": level, "women": True}
+
+
+def clothing_items():
+    global _clothing
+    if _clothing is None:
+        _clothing = []
+        with contextlib.suppress(OSError, ValueError, KeyError):
+            with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "clothing.json")) as f:
+                data = json.load(f)
+            unpack = lambda b: [x / 127 for x in _ints(b)]  # noqa: E731
+            neutral = [unpack(v) for v in data["neutral"]]
+            for it in data["items"]:
+                # (an item can bring its own neutral descriptions, a near-miss
+                # level for Review, and "women": only with women or nobody named)
+                _clothing.append((it["tags"], it["bar"], [unpack(v) for v in it["vectors"]],
+                                  [unpack(v) for v in it["neutral"]] if it.get("neutral") else neutral))
+                _clothing_extra[it["tags"][0]] = {k: it[k] for k in ("near", "women") if k in it}
+    return _clothing
+
+
+def clothing_scores(vec):
+    """{first tag name: (tag names, likeness 0-1, bar)} for every clothing item."""
+    if not vec:
+        return {}
+    n = math.sqrt(sum(x * x for x in vec)) or 1
+    v = [x / n for x in vec]
+    dot = lambda a, b: sum(x * y for x, y in zip(a, b))  # noqa: E731
+    out = {}
+    for names, bar, vecs, neutral in clothing_items():
+        d = max(dot(v, t) for t in vecs) - max(dot(v, t) for t in neutral)
+        out[names[0]] = (names, 1 / (1 + math.exp(-100 * d)), bar)
+    return out
+
+
+BIKINI_OVER_UNDERWEAR = 0.9  # covered + bare belly that looks this much like a bikini (more than lingerie): Bikini, not Bra / Panties
+
+
+def is_drawn(item, tag_name=None):
+    """A page of a comic (from a zip / cbz) or an item tagged as drawn."""
+    path = ((item.get("visual_files") or item.get("files") or [{}])[0] or {}).get("path") or ""
+    if re.search(r"(?i)\.(zip|cbz)/", path):
+        return True
+    return any((t.get("name") or (tag_name or {}).get(t["id"], "")).strip().lower() in NEW_PERF_DRAWN_TAGS for t in item.get("tags") or [])
+# nothing on: bare breasts and bare genitals or bottom, and nothing seen covered
+BODY_NUDE = (("Nude", "Naked", "Fully Nude"), "FEMALE_BREAST_EXPOSED",
+             ("FEMALE_GENITALIA_EXPOSED", "BUTTOCKS_EXPOSED"),
+             ("FEMALE_BREAST_COVERED", "FEMALE_GENITALIA_COVERED", "BUTTOCKS_COVERED"))
+# topless: bare breasts, and covered below (panties, bikini bottoms)
+BODY_TOPLESS = (("Topless",), "FEMALE_BREAST_EXPOSED", ("FEMALE_GENITALIA_COVERED", "BUTTOCKS_COVERED"))
+BODY_COVERED_SEEN = 0.5  # how sure the detector is of a covered part before it rules out "nude"
+BODY_ONE_PICTURE = 0.05  # one picture (a photo): this much over the bar, as there's no second to agree
 # size groups: tag names (yours) -> what they mean; the first of each kind is
 # the one added
 BODY_SIZES = {
@@ -3840,6 +4766,67 @@ def body_helper(cfg, pictures):
             raise RuntimeError(f"can't reach the face helper at {cfg['ai']['face_url']} ({reason}).")
 
 
+# Apple's Vision (the face helper on a Mac): its picture classifier's labels
+# for clothing it knows well (better than CLIP for shoes and jeans), and
+# hands - fingers over a breast the body-part detector found, in a picture of
+# one person (from its body pose), is a hand bra. Without a Mac, these are left out.
+APPLE_LABELS = {  # Apple's label -> (tag names, the first you have is added; likeness needed)
+    "high_heel": (("Woman's Heels", "Heels", "High Heels"), 0.6),
+    "boot": (("Boots",), 0.6),
+    "sneaker": (("Sneakers",), 0.6),
+    "sock": (("Socks",), 0.6),
+    "shoes": (("Shoes",), 0.6),
+    "jeans": (("Jeans",), 0.7),
+    "eyeglasses": (("Glasses",), 0.6),
+    "mask": (("Mask",), 0.7),
+    "glove": (("Gloves",), 0.7),
+    "costume": (("Costume",), 0.7),
+    "hat": (("Hat", "Hats"), 0.6),
+    "swimsuit": (("Swimsuit", "Bikini"), 0.6),  # (a bikini when the picture looks like one)
+}
+HAND_BRA = (("Hand Bra", "Handbra"), 8)  # tag names; finger points on a breast the body-part detector found
+
+
+def apple_helper(cfg, pictures):
+    """Apple's labels, hands and chest areas for each picture, or None (no Mac)."""
+    if not pictures:
+        return None
+    body = json.dumps({"images": [base64.b64encode(p).decode() for p in pictures]}).encode()
+    with contextlib.suppress(Exception):
+        req = urllib.request.Request(cfg["ai"]["face_url"] + "/apple", data=body, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            return json.loads(resp.read())["results"]
+    return None
+
+
+def hand_over_breasts(found, apple):
+    """In one picture: fingers on a breast (or on the chest), with skin showing."""
+    if not apple or not apple.get("hands"):
+        return False
+    if len(apple.get("chests") or []) > 1:
+        return False  # more than one person: their hands could be anyone's
+    faces = {d["part"]: d["score"] for d in found or [] if d["part"].startswith("FACE_")}
+    if faces.get("FACE_MALE", 0) >= 0.5 and faces.get("FACE_FEMALE", 0) < 0.5:
+        return False  # a man's chest
+    w, h = apple["size"]
+    # bare breasts (or nothing on below): a hand holding a phone in front of a
+    # bra doesn't count
+    skin = any((d["part"] == "FEMALE_BREAST_EXPOSED" and d["score"] >= 0.3)
+               or (d["part"] == "FEMALE_GENITALIA_EXPOSED" and d["score"] >= 0.4) for d in found or [])
+    if not skin:
+        return False
+    boxes = [(d["box"][0] / w, d["box"][1] / h, (d["box"][0] + d["box"][2]) / w, (d["box"][1] + d["box"][3]) / h)
+             for d in found or [] if "BREAST" in d["part"] and d["score"] >= 0.25]
+
+    def inside(p, b, pad):
+        dx, dy = (b[2] - b[0]) * pad, (b[3] - b[1]) * pad
+        return b[0] - dx <= p[0] <= b[2] + dx and b[1] - dy <= p[1] <= b[3] + dy
+    for hand in apple["hands"]:
+        if any(sum(inside(p, b, 0.15) for p in hand) >= HAND_BRA[1] for b in boxes):
+            return True
+    return False
+
+
 def body_pictures(stash, kind, item):
     if kind == "image":
         if not all(f["__typename"] == "ImageFile" for f in item.get("visual_files") or []):
@@ -3864,24 +4851,32 @@ def body_pictures(stash, kind, item):
     return out
 
 
-def parts_shown(cfg, pictures):
-    """{part: best score} for parts seen: in one picture clearly (0.1 over
-    what's needed), or in two."""
+BODY_NEAR = 0.08          # this far under what's needed: kept as a near-miss, suggested in Review
+BODY_NEAR_MAX_TAGS = 3    # near-misses are suggested for items with this many tags or fewer
+
+
+def parts_shown(cfg, pictures, found_all=None, slack=0.0):
+    """{part: best score} for parts seen: in one picture clearly (a little
+    over what's needed), or in two. slack: that much less is needed (for
+    near-misses)."""
     seen = defaultdict(list)
-    for found in body_helper(cfg, pictures) if pictures else []:
+    for found in (found_all if found_all is not None else body_helper(cfg, pictures) if pictures else []):
         best = {}
         for d in found:
             best[d["part"]] = max(best.get(d["part"], 0), d["score"])
         for part, sc in best.items():
             seen[part].append(sc)
     need = {p: th for p, th in list(BODY_SHOWN.values()) + [BODY_BELLY]}
+    need.update({part: th for _, part, th, _ in BODY_WORN.values()})
+    need.update({part: BODY_COVERED_SEEN - BODY_ONE_PICTURE for part in BODY_NUDE[3] if part not in need})
     out = {}
     for part, scores in seen.items():
         th = need.get(part)
         if th is None:
             continue
+        th -= slack
         scores.sort(reverse=True)
-        if scores[0] >= th + 0.1 or (len(scores) >= 2 and scores[1] >= th):
+        if scores[0] >= th + BODY_ONE_PICTURE or (len(scores) >= 2 and scores[1] >= th):
             out[part] = scores[0]
     return out
 
@@ -3998,6 +4993,31 @@ class BodyIndex:
                 if not any(self.tag(n) in have for n in (nat,) + fakes):
                     add(next((self.tag(n) for n in fakes if self.tag(n)), None) if fake else self.tag(nat),
                         f"{p['name']}'s details")
+        # what's worn (a bra, panties) and bare feet
+        for _, (names, part, _, bare) in BODY_WORN.items():
+            if part not in shown or (bare and bare in shown):
+                continue
+            if bare and BODY_BELLY[0] not in shown:
+                continue  # covered, but not underwear: a shirt, jeans...
+            if part == "FEMALE_BREAST_COVERED" and "FEMALE_GENITALIA_EXPOSED" in shown:
+                continue  # bare below: hands over the breasts (a hand bra), not a bra
+            if bare and perfs and not women:
+                continue
+            tid = next((self.tag(n) for n in names if self.tag(n)), None)
+            add(tid, f"{part.lower().replace('_', ' ')} {round(shown[part] * 100)}%"
+                + (" with a bare belly" if bare else ""))
+        # nude: bare breasts and below, and nothing covered
+        names, top, below, covered = BODY_NUDE
+        if top in shown and any(b in shown for b in below) and not any(c in shown for c in covered) \
+                and (not perfs or women):
+            add(next((self.tag(n) for n in names if self.tag(n)), None),
+                "bare " + " and ".join(p.split("_")[1].lower().replace("genitalia", "genitals").replace("buttocks", "bottom")
+                                         for p in [top] + [b for b in below if b in shown]) + ", nothing covered")
+        # topless: bare breasts, covered below
+        tnames, ttop, tbelow = BODY_TOPLESS
+        if ttop in shown and any(b in shown for b in tbelow) and "FEMALE_GENITALIA_EXPOSED" not in shown \
+                and (not perfs or women):
+            add(next((self.tag(n) for n in tnames if self.tag(n)), None), "bare breasts, covered below")
         if BODY_BELLY[0] in shown and len(perfs) == 1 and perfs[0]["id"] in self.abs:
             add(self.abs[perfs[0]["id"]], f"belly shown; {perfs[0]['name']} is usually tagged so")
         return out
@@ -4018,14 +5038,163 @@ def body_ready(cfg):
         return False
 
 
+def clothing_picks(stash, cfg, body, kind, item, have, rejected, plugin_dir):
+    """Clothing (and a butt the picture is about) from the photo's look:
+    (tags to add, near-misses for Review, every item's score)."""
+    worn, near, looks_like = [], [], {}
+    if kind != "image" or not plugin_dir or is_drawn(item, body.tag_name):
+        return worn, near, looks_like
+    if getattr(body, "looks", None) is None:
+        body.looks = LookCache(plugin_dir)
+    looks_like = clothing_scores(body.looks.vector(stash, cfg, "image", item, compute=False))
+    women = not item.get("performers") or any(
+        (body.perfs.get(p["id"]) or {}).get("gender") in FEMALE for p in item.get("performers") or [])
+    gone = removed_tags(kind, item["id"], have)
+    for names, p, bar in looks_like.values():
+        extra = _clothing_extra.get(names[0], {})
+        if extra.get("women") and not women:
+            continue
+        tid = next((body.tag(n) for n in names if body.tag(n)), None)
+        if not tid or tid in have or tid in rejected or str(tid) in gone:
+            continue
+        what = "a butt out" if names[0] == "Ass" else names[0].lower()
+        if p >= bar:
+            worn.append((tid, f"looks like {what} ({round(p * 100, 1)}%)"))
+        elif extra.get("near") and p >= extra["near"]:
+            near.append((tid, f"looks like {what} ({round(p * 100, 1)}%)"))
+    return worn, near, looks_like
+
+
+def run_body_looks(stash, plugin_dir, preview=False):
+    """Task: clothing tags (and Ass, clothed or not) for every photo from its
+    picture fingerprint alone - no detector, so the whole library takes
+    minutes. What's nearly there goes to Review as a near-miss."""
+    cfg = settings(stash, plugin_dir)
+    body = BodyIndex(stash, plugin_dir, body_excluded(stash, cfg))
+    try:
+        with open(os.path.join(plugin_dir, "machine_tags.json")) as f:
+            rejected = rejected_tags(all_item_tags(stash), json.load(f))
+    except (OSError, ValueError):
+        rejected = {}
+    items, page = [], 1
+    while True:
+        got = stash.call("query($f: FindFilterType) { findImages(filter: $f) { images { " + BODY_ITEM_FIELDS["image"] + " } } }",
+                         {"f": {"page": page, "per_page": 1000, "sort": "id"}})["findImages"]["images"]
+        items += got
+        if len(got) < 1000:
+            break
+        page += 1
+    log("info", f"{'Preview: ' if preview else ''}clothing from the look for {len(items)} image(s)...")
+    added, tagged, nears = Counter(), 0, 0
+    near_new = {}
+    for n, it in enumerate(items):
+        if n % 200 == 0:
+            progress(n / max(len(items), 1))
+        have = {t["id"] for t in it.get("tags") or []}
+        worn, near, _ = clothing_picks(stash, cfg, body, "image", it, have, rejected, plugin_dir)
+        if near:
+            near_new[f"image:{it['id']}"] = near
+            nears += 1
+        if not worn:
+            continue
+        tagged += 1
+        for t, why in worn:
+            added[body.tag_name.get(t, t)] += 1
+        if preview:
+            if tagged <= 40:
+                log("info", f"image {it['id']}: would add " + ", ".join(f"{body.tag_name.get(t, t)} ({why})" for t, why in worn))
+            continue
+        stash.call("mutation($i: BulkImageUpdateInput!) { bulkImageUpdate(input: $i) { id } }",
+                   {"i": {"ids": [it["id"]], "tag_ids": {"ids": [t for t, _ in worn], "mode": "ADD"}}})
+        record_machine_tags(plugin_dir, "image", it["id"], [t for t, _ in worn])
+    if not preview and near_new:
+        with locked_json(os.path.join(plugin_dir, "body_near.json")) as nd:
+            for key, near in near_new.items():
+                old = [e for e in nd.get(key, []) if e[0] not in {t for t, _ in near}]
+                nd[key] = old + [[t, why] for t, why in near]
+    progress(1)
+    log("info", f"{'Preview done' if preview else 'Done'}: {tagged} image(s) {'would get' if preview else 'got'} "
+        + (", ".join(f"{n} {name}" for name, n in added.most_common()) or "nothing")
+        + f"; {nears} near-miss(es) {'would go' if preview else 'went'} to Review → Tags → Suggested.")
+
+
 def body_item(stash, cfg, body, kind, item, apply, plugin_dir=None, rejected=(), skip_tagged=False):
     """Body tags for one item: [(tag id, name, why)] (added when apply).
     skip_tagged: nothing (and no frames looked at) when it already has a
     body tag."""
+    have = {t["id"] for t in item.get("tags") or []}
+    # clothing (photos only): from the picture fingerprint, so no detector needed
+    worn, near, looks_like = clothing_picks(stash, cfg, body, kind, item, have, rejected, plugin_dir)
     if skip_tagged and has_body_tags(item):
-        return []
-    shown = parts_shown(cfg, body_pictures(stash, kind, item))
-    picks = [(t, why) for t, why in body.picks(item, shown) if t not in rejected]
+        picks = worn
+    else:
+        pictures = body_pictures(stash, kind, item)
+        found_all = body_helper(cfg, pictures) if pictures else []
+        shown = parts_shown(cfg, pictures, found_all)
+        picks = [(t, why) for t, why in body.picks(item, shown) if t not in rejected]
+        picks += [(t, why) for t, why in worn if t not in [x for x, _ in picks]]
+        # near-misses: what a little less sure detector would add, kept for
+        # Review (never added by itself)
+        near_shown = parts_shown(cfg, pictures, found_all, slack=BODY_NEAR)
+        near += [(t, why) for t, why in body.picks(item, near_shown)
+                 if t not in rejected and t not in have and t not in {x for x, _ in picks} and t not in {x for x, _ in near}]
+        near = [(t, why) for t, why in near if t not in {x for x, _ in picks}]
+        # Apple's tools (on a Mac): clothing labels and hands over the breasts
+        apple = apple_helper(cfg, pictures)
+        women_ok = not item.get("performers") or any(
+            (body.perfs.get(p["id"]) or {}).get("gender") in FEMALE for p in item.get("performers") or [])
+        if apple:
+            one = len(pictures) == 1
+            for label, (names, bar) in APPLE_LABELS.items():
+                conf = sorted(((a or {}).get("labels", {}).get(label, 0) for a in apple), reverse=True)
+                if not (conf and (conf[0] >= bar + BODY_ONE_PICTURE or (len(conf) > 1 and conf[1] >= bar))):
+                    continue
+                if label == "swimsuit":
+                    bik = looks_like.get("Bikini")
+                    names = ("Bikini", "Swimsuit") if bik and bik[1] >= 0.5 else names
+                    looks_like.setdefault("_apple_swimsuit", (("Swimsuit",), conf[0], 0))
+                tid = next((body.tag(n) for n in names if body.tag(n)), None)
+                if tid and tid not in have and tid not in rejected and tid not in [t for t, _ in picks]:
+                    picks.append((tid, f"Apple sees {label.replace('_', ' ')} ({round(conf[0] * 100)}%)"))
+            hits = sum(hand_over_breasts(f, a) for f, a in zip(found_all, apple))
+            if women_ok and (hits >= 1 if one else hits >= 2):
+                tid = next((body.tag(n) for n in HAND_BRA[0] if body.tag(n)), None)
+                bra = next((body.tag(n) for n in BODY_WORN["Bra"][0] if body.tag(n)), None)
+                if tid and tid not in have and tid not in rejected:
+                    picks = [(t, why) for t, why in picks if t != bra]  # (hands over the breasts, not a bra)
+                    if tid not in [t for t, _ in picks]:
+                        picks.append((tid, "hands over the breasts"))
+        # nude: drop clothing from the picture that would cover what's bare
+        nude_tag = next((body.tag(n) for n in BODY_NUDE[0] if body.tag(n)), None)
+        if nude_tag and nude_tag in [t for t, _ in picks]:
+            covering = {next((body.tag(n) for n in names if body.tag(n)), None)
+                        for names, _, _ in looks_like.values()
+                        if names[0] in ("Lingerie", "Panties", "Thong", "Bikini", "Latex", "Crop Top", "Skirt")} - {None}
+            covering |= {next((body.tag(n) for n in names if body.tag(n)), None)
+                         for names in (("Swimsuit",), ("Bikini",), ("Jeans",))} - {None}
+            picks = [(t, why) for t, why in picks if t not in covering]
+        # a bikini, not underwear: the detector sees the same covered parts
+        bik = looks_like.get("Bikini")
+        lin = looks_like.get("Lingerie")
+        underwear = {next((body.tag(n) for n in BODY_WORN[k][0] if body.tag(n)), None) for k in ("Bra", "Panties")} - {None}
+        bikini_tag = next((body.tag(n) for n in ("Bikini", "String Bikini") if body.tag(n)), None)
+        apple_swim = "_apple_swimsuit" in looks_like
+        if ((bik and bik[1] >= BIKINI_OVER_UNDERWEAR and bik[1] > (lin[1] if lin else 0)) or apple_swim) and bikini_tag \
+                and any(t in underwear for t, _ in picks):
+            picks = [(t, why) for t, why in picks if t not in underwear]
+            if bikini_tag not in have and bikini_tag not in rejected and bikini_tag not in [t for t, _ in picks]:
+                picks.append((bikini_tag, f"covered with a bare belly, and looks like a bikini ({round(bik[1] * 100)}%)"))
+    gone = removed_tags(kind, item["id"], have)
+    picks = [(t, why) for t, why in picks if str(t) not in gone]
+    near = [(t, why) for t, why in near if str(t) not in gone]
+    if apply and plugin_dir and not (skip_tagged and has_body_tags(item)):
+        near = [(t, why) for t, why in near if t not in {x for x, _ in picks}]
+        with contextlib.suppress(Exception), locked_json(os.path.join(plugin_dir, "body_near.json")) as nd:
+            key = f"{kind}:{item['id']}"
+            if near:
+                nd[key] = [[t, why] for t, why in near]
+            else:
+                nd.pop(key, None)
     if apply and picks:
         stash.call(f"mutation($i: {'BulkSceneUpdateInput' if kind == 'scene' else 'BulkImageUpdateInput'}!) "
                    f"{{ {'bulkSceneUpdate' if kind == 'scene' else 'bulkImageUpdate'}(input: $i) {{ id }} }}",
@@ -4076,6 +5245,14 @@ def run_body(stash, plugin_dir, preview=False, limit=None, redo=False):
     if redo and not preview:
         log("info", "Checking every scene and image again (organized ones too, and ones done before). "
             "Items without performers get what's shown but no sizes.")
+    if not targets and not preview:
+        # nothing left: say why, so a run that ends straight away isn't a mystery
+        org = "" if (redo or cfg["ai"]["include_organized"]) else " that isn't marked organized"
+        log("info", f"Nothing to do: every scene and image{org} has had body tags already "
+            f"({len(done.get('scenes', ()))} scene(s), {len(done.get('images', ()))} image(s) done). New items get them after a scan. "
+            + ("" if org == "" else "Organized items are left out unless \"AI - include organized items\" is on; ")
+            + "\"Body tags: check everything again\" goes through everything, organized ones too.")
+        return
     log("info", f"{'Preview: ' if preview else ''}body tags for {len(targets)} item(s); sizes known for "
         f"{len(body.traits)} performer(s) from your tags" + (" (nothing is saved)" if preview else
                                                                ". Scenes take a few seconds, images under one; cancel and run again to carry on."))
@@ -4166,6 +5343,8 @@ def run_quick_new(stash, plugin_dir, cfg, new):
                 own = {t["id"] for t in item.get("tags") or []} | set(have)
                 picks = look_picks(scores, own, looks.names, ai["max_tags"])
                 picks = [t for t in picks if t not in looks.rejected]
+                gone = removed_tags(kind, item["id"], own)
+                picks = [t for t in picks if str(t) not in gone]
                 if picks:
                     stash.call(f"mutation($i: {'BulkSceneUpdateInput' if kind == 'scene' else 'BulkImageUpdateInput'}!) "
                                f"{{ {'bulkSceneUpdate' if kind == 'scene' else 'bulkImageUpdate'}(input: $i) {{ id }} }}",
@@ -5656,6 +6835,9 @@ def _tag_review_candidates(stash, cfg, plugin_dir, excluded, fresh=False):
     return found, names
 
 
+REVIEW_LOOKS_WEIGHT = 0.3  # how much a photo's aesthetic score moves it up or down Review's suggestions
+
+
 TAG_REVIEW_FIELDS = {
     "scene": "id title tags { id } files { basename } paths { screenshot }",
     "image": "id title tags { id } visual_files { ... on BaseFile { basename } } paths { image }",
@@ -5684,18 +6866,92 @@ def run_tag_review(stash, plugin_dir, tag=None, limit=40, skip=(), fresh=False):
             continue
         if t in have.get(key, ()) or t in nots.get(key, ()) or f"{key}:{t}" in skip:
             continue
+        if str(t) in removed_tags(*key.split(":"), have.get(key, ())):
+            continue  # (you took it off this item)
         picks.append((sc, n, key, t))
-    picks.sort(key=lambda x: (-x[0], -x[1]))
+    # positions seen in the video (Auto Seek's model), when that scan was run:
+    # one card when look-alikes suggest the same tag, else a card of their own
+    video = {}
+    try:
+        for key, t, vinfo in _video_picks(stash, plugin_dir, have, nots, skip, want):
+            if t["id"] in excluded:
+                continue
+            names.setdefault(t["id"], t["name"])
+            video[(key, t["id"])] = vinfo
+    except Exception as e:  # (no Auto Seek, or its model isn't there: look-alikes only)
+        log("debug", f"positions in videos left out: {e}")
+    # order: both agree first, then look-alikes with every 5th card from the
+    # video (look-alike scores run higher, so sorting them together would
+    # bury the video ones)
+    both, looks_only = [], []
+    for sc, n, key, t in picks:
+        v = video.pop((key, t), None)
+        (both if v else looks_only).append((sc, n, key, t, v))
+    # better-looking photos first (their aesthetic score, when known), within
+    # how sure the suggestion is; screenshot-like ones last
+    facts = picture_facts(plugin_dir)
+
+    def looks(key):
+        kind, _, iid = key.partition(":")
+        f = facts.get(iid) if kind == "image" else None
+        if not f:
+            return 0.0
+        return -0.5 if f.get("u") else REVIEW_LOOKS_WEIGHT * ((f.get("a") if f.get("a") is not None else 50) / 100 - 0.5)
+    both.sort(key=lambda x: (-(x[0] + looks(x[2])), -x[1]))
+    looks_only.sort(key=lambda x: (-(x[0] + looks(x[2])), -x[1]))
+    video_only = sorted(((v["rank"], 0, key, t, v) for (key, t), v in video.items()), key=lambda x: -x[0])
+    # body tags just under what the body detector needs, for items with few
+    # tags (kept by the body tags task): fewest tags first
+    near_only = []
+    with contextlib.suppress(OSError, ValueError):
+        with open(os.path.join(plugin_dir, "body_near.json")) as fh:
+            near_saved = json.load(fh)
+        taken = {(k, t) for _, _, k, t, _ in both + looks_only + video_only}
+        for key, entries in near_saved.items():
+            tags_now = have.get(key, set())
+            if len(tags_now) > BODY_NEAR_MAX_TAGS:
+                continue
+            for t, why in entries:
+                if (want and t != want) or t in excluded or t in tags_now or t in nots.get(key, ()) \
+                        or f"{key}:{t}" in skip or (key, t) in taken:
+                    continue
+                near_only.append((0.0, -len(tags_now), key, t, {"body": f"just under the body detector's bar: {why}"}))
+        near_only.sort(key=lambda x: (-x[1], -looks(x[2])))
+        missing = {t for _, _, _, t, _ in near_only if t not in names}
+        if missing:
+            for tg in stash.call("query($i: [ID!]) { findTags(ids: $i, filter: {per_page: -1}) { tags { id name } } }", {"i": sorted(missing)})["findTags"]["tags"]:
+                names[tg["id"]] = tg["name"]
+    # poses learnt from the photos you've tagged with one (see "poses" below)
+    taken = {(k, t) for _, _, k, t, _ in both + looks_only + video_only + near_only}
+    pose_only = []
+    pose_found = pose_suggestions(stash, cfg, plugin_dir, excluded, fresh, kind="image")
+    pose_names = pose_tags(stash) if pose_found else {}
+    for key, t, sc, why in pose_found:
+        if (want and t != want) or t in have.get(key, ()) or t in nots.get(key, ()) or f"{key}:{t}" in skip or (key, t) in taken:
+            continue
+        names.setdefault(t, pose_names.get(t, t))
+        pose_only.append((sc, 0, key, t, {"body": why}))
+    pose_only.sort(key=lambda x: -(x[0] + looks(x[2])))
+    picks = list(both)
+    while looks_only or video_only or near_only or pose_only:
+        picks += looks_only[:4]
+        del looks_only[:4]
+        picks += video_only[:1]
+        del video_only[:1]
+        picks += near_only[:1]
+        del near_only[:1]
+        picks += pose_only[:1]
+        del pose_only[:1]
     out = []
     for at in range(0, len(picks), 150):
         chunk = picks[at:at + 150]
         items = {}
         for kind, query, field in (("scene", "findScenes", "scenes"), ("image", "findImages", "images")):
-            ids = sorted({k.split(":")[1] for _, _, k, _ in chunk if k.startswith(kind + ":")}, key=int)
+            ids = sorted({k.split(":")[1] for _, _, k, _, _ in chunk if k.startswith(kind + ":")}, key=int)
             if ids:
                 got = find_by_ids(stash, query, field, ids, f"{TAG_REVIEW_FIELDS[kind]}")
                 items.update({f"{kind}:{x['id']}": x for x in got})
-        for sc, n, key, t in chunk:
+        for sc, n, key, t, v in chunk:
             it = items.get(key)
             if not it or t in {x["id"] for x in it.get("tags") or []}:
                 continue
@@ -5707,13 +6963,16 @@ def run_tag_review(stash, plugin_dir, tag=None, limit=40, skip=(), fresh=False):
                 "title": it.get("title") or (files[0] or {}).get("basename") or "",
                 # the page is opened from the phone too: no localhost address
                 "picture": re.sub(r"^https?://[^/]+", "", link), "tags": len(it.get("tags") or []),
+                **({"frames": v["frames"], "looked": v["looked"], "times": v["times"]} if v and "frames" in v else {}),
+                **({"why": v["body"]} if v and "body" in v else {}),
+                **({"aesthetic": facts[iid]["a"]} if kind == "image" and (facts.get(iid) or {}).get("a") is not None else {}),
             })
             if len(out) >= limit:
                 break
         if len(out) >= limit:
             break
     # the Batch view: how many there are for each tag, biggest first
-    per = Counter(t for _, _, _, t in picks)
+    per = Counter(t for _, _, _, t, _ in picks)
     groups = [{"id": t, "name": names.get(t, t), "count": c} for t, c in per.most_common()]
     return {"items": out, "total": len(picks), "groups": groups}
 
@@ -8286,6 +9545,35 @@ def _get_json(url, timeout=6, body=None):
         return json.loads(resp.read())
 
 
+def run_capabilities(stash, plugin_dir):
+    """What's installed, for the page to show only the features that work:
+    the face helper and its models, Apple's Vision, CLIP's text model, the
+    AI model in Ollama, Auto Seek's model, and whether look-alikes are scanned."""
+    cfg = settings(stash, plugin_dir)
+    ai = cfg["ai"]
+    out = {k: False for k in ("helper", "faces", "embed", "body", "apple", "ocr", "text", "ollama", "auto_seek", "looks")}
+    with contextlib.suppress(Exception):
+        h = _get_json(ai["face_url"] + "/health", timeout=3)
+        out["helper"] = bool(h.get("ok"))
+        out["faces"] = out["helper"]
+        for k in ("embed", "body", "apple", "ocr", "text"):
+            out[k] = bool(h.get(k))
+    with contextlib.suppress(Exception):
+        names = [m.get("name") for m in _get_json(ai["url"] + "/api/tags", timeout=3).get("models", [])]
+        want = ai["model"] if ":" in ai["model"] else ai["model"] + ":latest"
+        out["ollama"] = want in names
+    with contextlib.suppress(Exception):
+        where = auto_seek_dir(plugin_dir) or os.path.join(os.path.abspath(plugin_dir), AUTO_SEEK_COPY)
+        out["auto_seek"] = os.path.isfile(os.path.join(where, "auto_seek.py")) and any(
+            f.endswith(".onnx") for _, _, fs in os.walk(os.path.join(where, "data")) for f in fs)
+    with contextlib.suppress(OSError):
+        out["looks"] = os.path.getsize(os.path.join(plugin_dir, "look_items.json")) > 1000
+    # for the setup guide: where things are looked for
+    out["docker"] = os.path.exists("/.dockerenv")
+    out["face_url"], out["ollama_url"], out["model"] = ai["face_url"], ai["url"], ai["model"]
+    return out
+
+
 def run_diagnose(stash, plugin_dir):
     out = []
     cfg = settings(stash, plugin_dir)
@@ -8606,3 +9894,1746 @@ def run_find_ollama(stash, plugin_dir):
         advice = ("Stash runs directly on the computer: Ollama on the same computer is at http://localhost:11434. "
                   "Make sure it's running (Mac: brew services start ollama; Linux: systemctl start ollama).")
     return {"env": env, "tried": tried, "advice": advice, "setting": cfg["ai"]["url"]}
+
+
+# --- positions seen in the video (Auto Seek's model) ----------------------
+# The Auto Seek plugin's model (CLIP ViT-B/32, MIT) scores each frame for
+# "has it started" and for 10 positions. Tried on 60 well-tagged scenes, it
+# was right often enough only for these four (the others were right 25-60% of
+# the time), so only these are suggested. Each: the tag names it can be in
+# your library (the first one you have is suggested; having any of them
+# counts), and when a scene counts as showing it: that position's share of a
+# frame at least `share`, in at least `frames` of the 24 frames looked at.
+VIDEO_ACTS = {
+    "cowgirl": {"names": ["Cowgirl", "Riding", "Reverse Cowgirl"], "share": 0.5, "frames": 2},
+    "oral on him": {"names": ["Blowjob", "Blow Job", "Deepthroat", "Oral"], "share": 0.5, "frames": 2},
+    "from behind": {"names": ["Doggy Style", "Doggystyle", "Doggy"], "share": 0.6, "frames": 2},
+    "missionary": {"names": ["Missionary"], "share": 0.6, "frames": 1},
+}
+VIDEO_FRAMES = 24
+VIDEO_STARTED = 0.5   # frames the model thinks are before the action are left out
+VIDEO_MIN_SECONDS = 60
+
+
+AUTO_SEEK_COPY = "auto-seek-copy"  # in this plugin's folder
+
+
+def auto_seek_dir(plugin_dir):
+    """The Auto Seek plugin's folder next to this one, or None."""
+    root = os.path.dirname(os.path.abspath(plugin_dir))
+    for name in ["auto-seek"] + sorted(os.listdir(root)):
+        if os.path.isfile(os.path.join(root, name, "auto_seek.py")):
+            return os.path.join(root, name)
+    return None
+
+
+def keep_auto_seek_copy(plugin_dir, src):
+    """A copy of what's needed from Auto Seek (its code, model and runtime,
+    and the record that they were checked), kept in this plugin's folder so
+    positions and AI markers keep working if Auto Seek is removed. Made once,
+    and again when Auto Seek gets a new model or runtime."""
+    import shutil  # noqa: PLC0415
+    dst = os.path.join(os.path.abspath(plugin_dir), AUTO_SEEK_COPY)
+    try:
+        with open(os.path.join(src, "data", "verified.json")) as f:
+            theirs = f.read()
+    except OSError:
+        return  # not downloaded yet
+    with contextlib.suppress(OSError):
+        with open(os.path.join(dst, "data", "verified.json")) as f:
+            if f.read() == theirs and os.path.isfile(os.path.join(dst, "auto_seek.py")):
+                return
+    tmp = dst + f".{os.getpid()}.tmp"
+    shutil.rmtree(tmp, ignore_errors=True)
+    os.makedirs(os.path.join(tmp, "data"))
+    for name in ("auto_seek.py", "ort_api.py", "LICENSE"):
+        if os.path.isfile(os.path.join(src, name)):
+            shutil.copy2(os.path.join(src, name), tmp)
+    for sub in ("models", "runtime"):
+        if os.path.isdir(os.path.join(src, "data", "files", sub)):
+            shutil.copytree(os.path.join(src, "data", "files", sub), os.path.join(tmp, "data", "files", sub), symlinks=True)
+    with open(os.path.join(tmp, "data", "verified.json"), "w") as f:
+        f.write(theirs)
+    with open(os.path.join(tmp, "README.txt"), "w") as f:
+        f.write("A copy of the Auto Seek plugin's model, runtime and code, made by Better Organizing AI so its\n"
+                "positions in videos and AI markers keep working if Auto Seek is removed. The model is MIT\n"
+                "(huggingface.co/mrx-31415/auto-seek); Auto Seek's code is AGPL-3.0 (LICENSE); ONNX Runtime is MIT.\n"
+                "Safe to delete: it's made again from Auto Seek when that's installed.\n")
+    shutil.rmtree(dst, ignore_errors=True)
+    os.replace(tmp, dst)
+
+
+def load_auto_seek(plugin_dir):
+    """Auto Seek's code, to use its model and its frame grabbing: from the
+    Auto Seek plugin (refreshing this plugin's copy), else from the copy."""
+    where = auto_seek_dir(plugin_dir)
+    if where:
+        try:
+            keep_auto_seek_copy(plugin_dir, where)
+        except Exception as e:
+            log("debug", f"couldn't copy Auto Seek's model: {e}")
+    else:
+        copy = os.path.join(os.path.abspath(plugin_dir), AUTO_SEEK_COPY)
+        if os.path.isfile(os.path.join(copy, "auto_seek.py")):
+            where = copy
+    if not where:
+        raise RuntimeError("the Auto Seek plugin isn't installed - positions in videos use its model "
+                           "(install Auto Seek from its plugin source, then let it download its model once)")
+    if where not in sys.path:
+        sys.path.insert(0, where)
+    argv = sys.argv
+    sys.argv = [argv[0], where]  # (Auto Seek finds its folder from its arguments)
+    try:
+        import auto_seek  # noqa: PLC0415
+    finally:
+        sys.argv = argv
+    return auto_seek
+
+
+def video_acts_path(plugin_dir):
+    return os.path.join(plugin_dir, "video_acts.json")
+
+
+def load_video_acts(plugin_dir):
+    """{"scene id": {"d": duration, "s": file size, "f": [[time, started, [10 shares]]]}}"""
+    try:
+        with open(video_acts_path(plugin_dir)) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_video_acts(plugin_dir, data):
+    path = video_acts_path(plugin_dir)
+    tmp = f"{path}.{os.getpid()}.tmp"
+    with open(tmp, "w") as f:
+        json.dump(data, f, separators=(",", ":"))
+    os.replace(tmp, path)
+
+
+def run_video_scan(stash, plugin_dir, limit=None):
+    """Task: Auto Seek's model on 24 frames of every scene not done yet
+    (a few seconds each). Only saves what it sees; nothing is tagged."""
+    A = load_auto_seek(plugin_dir)
+    try:
+        sess = A.scorer(4)
+    except Exception as e:
+        raise RuntimeError(f"Auto Seek's model isn't ready: {e}")
+    general = stash.call("{ configuration { general { ffmpegPath } } }")["configuration"]["general"]
+    ff = A.find_ffmpeg(general.get("ffmpegPath") or "", {"Dir": stash.config_dir})
+    data = load_video_acts(plugin_dir)
+    scenes = stash.call("{ findScenes(filter: {per_page: -1}) { scenes { id files { path size duration } } } }")["findScenes"]["scenes"]
+    todo = []
+    for s in scenes:
+        f = (s.get("files") or [None])[0]
+        if not f or (f.get("duration") or 0) < VIDEO_MIN_SECONDS:
+            continue
+        old = data.get(s["id"])
+        if old and old.get("s") == f.get("size"):
+            continue
+        todo.append((s["id"], f))
+    if limit:
+        todo = todo[:limit]
+    log("info", f"Looking at {len(todo)} scene(s) with Auto Seek's model ({len(data)} done before). "
+        "A few seconds each; you can cancel and run it again to carry on.")
+    started = time.time()
+    done = 0
+    for n, (sid, f) in enumerate(todo):
+        progress(n / max(len(todo), 1))
+        dur = float(f["duration"])
+        times = [dur * (0.04 + 0.92 * k / (VIDEO_FRAMES - 1)) for k in range(VIDEO_FRAMES)]
+        try:
+            frames = []
+            for g in range(0, VIDEO_FRAMES, 3):
+                frames += A.grab_frames(ff, f["path"], times[g:g + 3])
+            rows = []
+            for t, px in zip(times, frames):
+                if px is None or A.blank(px):
+                    continue
+                st, acts = sess.score(px, [t / dur, t / 60, dur / 3600])
+                rows.append([round(t, 1), round(st, 2), [round(a, 2) for a in acts]])
+        except Exception as e:
+            log("debug", f"scene {sid}: {e}")
+            continue
+        data[sid] = {"d": round(dur, 1), "s": f.get("size"), "f": rows}
+        done += 1
+        if done % 25 == 0:
+            save_video_acts(plugin_dir, data)
+    save_video_acts(plugin_dir, data)
+    progress(1)
+    log("info", f"Done: {done} scene(s) in {time.time() - started:.0f}s. Suggestions are under Review → Tags → Suggested.")
+
+
+def _video_tag_ids(stash):
+    """For each position: (the tag to suggest, {every tag that counts as having it})."""
+    tags = stash.call("{ allTags { id name aliases } }")["allTags"]
+    by_name = {}
+    for t in tags:
+        for n in [t["name"]] + (t.get("aliases") or []):
+            by_name.setdefault(n.strip().lower(), t)
+    out = {}
+    for act, rule in VIDEO_ACTS.items():
+        found = [by_name[n.lower()] for n in rule["names"] if n.lower() in by_name]
+        if found:
+            out[act] = (found[0], {t["id"] for t in found})
+    return out
+
+
+def video_seen(entry, acts_order, act):
+    """(frames that show the position, their mean share) for one scene."""
+    rule = VIDEO_ACTS[act]
+    ai = acts_order.index(act)
+    hits = [(t, ac[ai]) for t, st, ac in entry.get("f", []) if st >= VIDEO_STARTED and ac[ai] >= rule["share"]]
+    if len(hits) < rule["frames"]:
+        return None
+    return hits
+
+
+def _video_picks(stash, plugin_dir, have, nots, skip, want=None):
+    """Positions seen in videos that the scene isn't tagged with and you
+    haven't turned down: [(item key, tag, {frames, looked, times, rank})].
+    rank: how sure, on the same 0-1 scale as look-alike scores (all 24
+    frames = 1)."""
+    data = load_video_acts(plugin_dir)
+    if not data:
+        return []
+    acts_order = list(load_auto_seek(plugin_dir).ACTS)
+    out = []
+    for act, (t, counts) in _video_tag_ids(stash).items():
+        if want and t["id"] != want:
+            continue
+        for sid, entry in data.items():
+            key = f"scene:{sid}"
+            if have.get(key, set()) & counts or t["id"] in nots.get(key, ()) or f"{key}:{t['id']}" in skip:
+                continue
+            hits = video_seen(entry, acts_order, act)
+            if not hits:
+                continue
+            looked = sum(1 for _, st, _ in entry["f"] if st >= VIDEO_STARTED) or 1
+            out.append((key, t, {"frames": len(hits), "looked": looked, "times": [round(x) for x, _ in hits[:6]],
+                                 "rank": round(0.5 + 0.5 * len(hits) / looked, 3)}))
+    return out
+
+
+# --- AI markers for one scene (scene page → Markers → AI markers) ---------
+# A closer look than the library scan: a frame every MARKER_STEP seconds (at
+# most MARKER_MAX_FRAMES), scored by Auto Seek's model and given a CLIP picture
+# fingerprint by the face helper. A shift is either
+#  - a big change in the positions Auto Seek's model sees (the 3 frames after
+#    a point against the 3 before), unless the pictures barely change; or
+#  - frames after a point that look like none of the frames just before it
+#    (and the other way round): a new setting, activity or people. Comparing
+#    each frame with its closest match, not the average look, keeps a camera
+#    cutting between a close-up and a wide shot from counting as a shift.
+# Checked by eye on 30 scenes: this kept every real shift the positions alone
+# found and caught 3 of 4 changes they missed (lesbian, bondage, intros), for
+# about as many camera-angle mistakes. The pictures are also compared over the
+# whole scene, not just the action (with a higher bar), for intros, interviews
+# and talking parts before and after it. A marker over 12 minutes gets a
+# second look: the strongest change inside it becomes a shift if it's nearly
+# big enough (scenes in one place, like bondage in the same room, change less).
+# A marker starts at the start of the scene, where the action starts, and at
+# each shift, and runs until the next.
+MARKER_STEP = 8
+MARKER_MAX_FRAMES = 360
+MARKER_WINDOW = 3
+MARKER_SHIFT = 0.55   # how different the positions (0-1: share of the scores that moved)
+MARKER_NEW_LOOK = 0.25  # how unlike the frames just before the frames after are (1 - closest CLIP match)
+MARKER_LOOK_FLOOR = 0.06  # a change in positions only counts if the pictures change at least this much
+MARKER_NEW_LOOK_WHOLE = 0.30  # the same, over the whole scene (before and after the action too: intros,
+                              # interviews...), where it takes a bigger change
+MARKER_MIN_GAP = 40   # seconds between shifts
+MARKER_LONG = 720     # a marker this long gets another look: the strongest change inside it
+MARKER_LONG_BAR = 0.8  # ...if it's at least this share of the usual bar
+MARKER_FEW = 2        # a scene that gets this many markers or fewer is split at regular times too
+
+
+def marker_interval(dur):
+    """How far apart the regular markers of a scene with few shifts are."""
+    if dur < 600:
+        return 120
+    if dur < 1440:
+        return 180
+    return min(360, max(180, dur / 8))
+
+
+def _marker_frames(stash, plugin_dir, A, f):
+    """[[time, started, [10 shares]]] every few seconds through the file, and
+    each frame's CLIP fingerprint (base64 int8; [] if the face helper can't be
+    reached - the shifts then come from the positions alone)."""
+    from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
+    dur = float(f["duration"])
+    step = max(MARKER_STEP, dur / MARKER_MAX_FRAMES)
+    times = [t for t in (step / 2 + i * step for i in range(int(dur / step) + 1)) if t < dur - 1]
+    general = stash.call("{ configuration { general { ffmpegPath } } }")["configuration"]["general"]
+    ff = A.find_ffmpeg(general.get("ffmpegPath") or "", {"Dir": stash.config_dir})
+    sess = A.scorer(4)
+    groups = [times[i:i + 3] for i in range(0, len(times), 3)]
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        grabbed = list(pool.map(lambda ts: A.grab_frames(ff, f["path"], ts), groups))
+    rows, pics = [], []
+    for ts, frames in zip(groups, grabbed):
+        for t, px in zip(ts, frames):
+            if px is None or A.blank(px):
+                continue
+            st, acts = sess.score(px, [t / dur, t / 60, dur / 3600])
+            rows.append([round(t, 1), round(st, 2), [round(a, 2) for a in acts]])
+            pics.append(b"P6\n224 224\n255\n" + px)  # (a PPM: the helper reads it as it is)
+    clips = []
+    try:
+        cfg = settings(stash, plugin_dir)
+        for i in range(0, len(pics), 48):
+            for e in picture_helper(cfg, pics[i:i + 48]):
+                n = math.sqrt(sum(x * x for x in e)) or 1
+                clips.append(base64.b64encode(bytes((round(x / n * 127) & 0xFF) for x in e)).decode())
+    except Exception as e:
+        log("debug", f"no picture fingerprints for the markers ({e}): positions only")
+        clips = []
+    return rows, step, clips
+
+
+def _unclip(b64):
+    v = [x - 256 if x > 127 else x for x in base64.b64decode(b64)]
+    n = math.sqrt(sum(x * x for x in v)) or 1
+    return [x / n for x in v]
+
+
+def video_shifts(rows, step, dur, clips=None, scores_out=None):
+    """Where the scene shifts: [{start, end, change}] (change: how big, 1+ is
+    a shift; None for the start of the action). `clips`: the frames' CLIP
+    fingerprints (see _marker_frames); without them, positions alone."""
+    keep = [k for k, x in enumerate(rows) if x[1] >= VIDEO_STARTED]
+    if not keep:
+        return []
+    r = [rows[k] for k in keep]
+    vec = [_unclip(clips[k]) for k in keep] if clips and len(clips) == len(rows) else None
+    out = [{"start": max(0.0, r[0][0] - step / 2), "change": None}]
+    w = MARKER_WINDOW
+    dot = lambda a, b: sum(x * y for x, y in zip(a, b))  # noqa: E731
+    scores = []
+    for i in range(w, len(r) - w + 1):
+        before = [sum(x[2][k] for x in r[i - w:i]) / w for k in range(10)]
+        after = [sum(x[2][k] for x in r[i:i + w]) / w for k in range(10)]
+        act = 0.5 * sum(abs(a - b) for a, b in zip(before, after))
+        if vec is None:
+            scores.append((i, act / MARKER_SHIFT))
+            continue
+        bv, av = vec[i - w:i], vec[i:i + w]
+        sims = [[dot(a, b) for b in bv] for a in av]
+        new_after = sum(1 - max(row) for row in sims) / len(av)
+        new_before = sum(1 - max(sims[a][b] for a in range(len(av))) for b in range(len(bv))) / len(bv)
+        look = 0.5 * (new_after + new_before)
+        scores.append((i, max(act / MARKER_SHIFT if look >= MARKER_LOOK_FLOOR else 0, look / MARKER_NEW_LOOK)))
+    near_miss = {}  # time -> how big a change (1 = the bar), for long markers' second look
+    for i, d in scores:
+        near_miss[r[i][0] - step / 2] = d
+    for j, (i, d) in enumerate(scores):
+        if d < 1 or any(d < x[1] for x in scores[max(0, j - 3):j + 4]):
+            continue  # not big enough, or a bigger one is right next to it
+        t = r[i][0] - step / 2
+        if t - out[-1]["start"] >= MARKER_MIN_GAP:
+            out.append({"start": t, "change": round(d, 2)})
+    last = r[-1][0] + step
+    if clips and len(clips) == len(rows):
+        # the whole scene, before and after the action too: new looks only
+        allv = [_unclip(x) for x in clips]
+        extra = []
+        for i in range(w, len(rows) - w + 1):
+            bv, av = allv[i - w:i], allv[i:i + w]
+            sims = [[dot(a, b) for b in bv] for a in av]
+            look = 0.5 * (sum(1 - max(row) for row in sims) / len(av)
+                          + sum(1 - max(sims[a][b] for a in range(len(av))) for b in range(len(bv))) / len(bv))
+            extra.append((i, look / MARKER_NEW_LOOK_WHOLE))
+            k = rows[i][0] - step / 2
+            near_miss[k] = max(near_miss.get(k, 0), look / MARKER_NEW_LOOK_WHOLE)
+        for j, (i, d) in enumerate(extra):
+            if d < 1 or any(d < x[1] for x in extra[max(0, j - 3):j + 4]):
+                continue
+            t = rows[i][0] - step / 2
+            if all(abs(t - m["start"]) >= MARKER_MIN_GAP for m in out):
+                out.append({"start": t, "change": round(d, 2)})
+        # the scene's own start, when the action starts later
+        first = min(m["start"] for m in out)
+        if first >= MARKER_MIN_GAP:
+            out.append({"start": 0.0, "change": None})
+        elif first > 0:  # (a shift right at the beginning: just start that marker at 0:00)
+            min(out, key=lambda m: m["start"])["start"] = 0.0
+        out.sort(key=lambda m: m["start"])
+        last = rows[-1][0] + step
+    # long markers: the strongest change inside, if it's nearly big enough
+    while True:
+        edges = [m["start"] for m in out] + [last]
+        best = None
+        for a, b in zip(edges, edges[1:]):
+            if b - a <= MARKER_LONG:
+                continue
+            inside = [(d, t) for t, d in near_miss.items()
+                      if a + MARKER_MIN_GAP <= t <= b - MARKER_MIN_GAP and d >= MARKER_LONG_BAR]
+            if inside:
+                best = max(inside)
+                break
+        if not best:
+            break
+        out.append({"start": best[1], "change": round(best[0], 2)})
+        out.sort(key=lambda m: m["start"])
+    # few shifts (one person talking, one long take...): markers at regular
+    # times too, each moved to the biggest change near it
+    if len(out) <= MARKER_FEW and dur >= 300:
+        every = marker_interval(dur)
+        edges = [m["start"] for m in out] + [last]
+        for a, b in zip(edges, edges[1:]):
+            parts = round((b - a) / every)
+            for k in range(1, parts):
+                t = a + (b - a) * k / parts
+                near = [(d, x) for x, d in near_miss.items() if abs(x - t) <= every / 4 and d >= 0.4]
+                if near:
+                    t = max(near)[1]
+                if all(abs(t - m["start"]) >= MARKER_MIN_GAP for m in out) and last - t >= MARKER_MIN_GAP:
+                    out.append({"start": t, "change": 0.0})
+        out.sort(key=lambda m: m["start"])
+    if scores_out is not None:
+        scores_out.update(near_miss)
+    for m, nxt in zip(out, out[1:]):
+        m["end"] = nxt["start"]
+    out[-1]["end"] = min(dur, last)
+    for m in out:
+        m["start"], m["end"] = int(round(m["start"])), int(round(m["end"]))
+    return [m for m in out if m["end"] > m["start"]]
+
+
+MARKER_PICTURE_TRIES = (0, 3, 6)  # seconds after the picture's time tried for a good-looking frame
+MARKER_PICTURE_BEFORE = (2, 4)    # then seconds before the marker's start (when it's given)
+
+
+def _marker_pictures(stash, A, path, times, starts=None):
+    """A small JPEG (base64) of the video at each time. On a Mac, a frame
+    Apple scores low is swapped for a better one: a few seconds on, then
+    (with `starts`, each marker's start) a few seconds before the marker."""
+    import base64  # noqa: PLC0415
+    import subprocess  # noqa: PLC0415
+    import tempfile  # noqa: PLC0415
+    from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
+    general = stash.call("{ configuration { general { ffmpegPath } } }")["configuration"]["general"]
+    ff = A.find_ffmpeg(general.get("ffmpegPath") or "", {"Dir": stash.config_dir})
+
+    def grab(t):
+        with tempfile.TemporaryDirectory(prefix="bta-marker-") as folder:
+            out = os.path.join(folder, "f.jpg")
+            cmd = [ff, "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-threads", "1", "-ss", f"{max(t, 0):.2f}",
+                   "-i", path, "-frames:v", "1", "-an", "-sn", "-vf", "scale=640:-2", "-q:v", "4", out]
+            with A.ffmpeg_slot(), contextlib.suppress(subprocess.TimeoutExpired):
+                subprocess.run(cmd, capture_output=True, timeout=30, check=False)
+            try:
+                with open(out, "rb") as f:
+                    return f.read() or None
+            except OSError:
+                return None
+
+    def one(t, start=None):
+        # on a Mac, a frame Apple scores low (blurry, dark, mid-move) is
+        # swapped for one a few seconds on (or just before the marker), the
+        # best of them if none is good
+        best = None
+        at = [t + off for off in MARKER_PICTURE_TRIES]
+        if start is not None:
+            at += [start - b for b in MARKER_PICTURE_BEFORE if start - b >= 0]
+        for when in at:
+            data = grab(when)
+            if not data:
+                continue
+            q = picture_quality(stash, data, people=True)
+            if q is None or q >= PICTURE_NICE:
+                return base64.b64encode(card_picture(stash, data)).decode()
+            if best is None or q > best[0]:
+                best = (q, data)
+        return base64.b64encode(card_picture(stash, best[1])).decode() if best else None
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        return list(pool.map(one, times, starts if starts is not None else [None] * len(times)))
+
+
+def run_video_markers(stash, plugin_dir, scene_id, fresh=False, pictures=True):
+    """Scene page → Markers → AI markers: where the scene shifts, with a
+    picture of each, as markers to add (nothing is saved to the scene). Its frames are kept, so asking again is
+    instant."""
+    scene_id = str(scene_id)
+    sc = stash.call("query($id: ID!) { findScene(id: $id) { id files { path size duration } } }", {"id": scene_id})["findScene"]
+    f = ((sc or {}).get("files") or [None])[0]
+    if not f:
+        raise RuntimeError("this scene has no video file")
+    A = load_auto_seek(plugin_dir)
+    # each scene's frames in a file of its own (the fingerprints make them big)
+    folder = os.path.join(plugin_dir, "video_frames")
+    path = os.path.join(folder, f"{scene_id}.json")
+    old = None
+    with contextlib.suppress(OSError, ValueError):
+        with open(path) as fh:
+            old = json.load(fh)
+    if old and old.get("s") == f.get("size") and old.get("c") and not fresh:
+        rows, step, clips = old["f"], old["step"], old["c"]
+    else:
+        try:
+            rows, step, clips = _marker_frames(stash, plugin_dir, A, f)
+        except getattr(A, "FilesMissing", ()) as e:
+            raise RuntimeError(f"Auto Seek's model isn't ready: {e}")
+        os.makedirs(folder, exist_ok=True)
+        tmp = f"{path}.{os.getpid()}.tmp"
+        with open(tmp, "w") as fh:
+            json.dump({"s": f.get("size"), "step": step, "f": rows, "c": clips}, fh, separators=(",", ":"))
+        os.replace(tmp, path)
+    dur = float(f["duration"])
+    shifts = video_shifts(rows, step, dur, clips)
+    # the picture: a moment into the new part, so it shows what it shifted to
+    pics = (_marker_pictures(stash, A, f["path"], [min(m["end"] - 1, m["start"] + step * 1.5) for m in shifts],
+                             [m["start"] for m in shifts])
+            if pictures else [None] * len(shifts))
+    return {"markers": [{**m, "picture": p} for m, p in zip(shifts, pics)], "looked": len(rows), "step": round(step, 1)}
+
+
+def _marker_picture_path(stash, scene_id, seconds):
+    """Where Stash keeps a marker's picture: generated/markers/<the scene's file
+    hash>/<whole seconds>.jpg (None if that can't be worked out)."""
+    cfg = stash.call("{ configuration { general { generatedPath videoFileNamingAlgorithm } } }")["configuration"]["general"]
+    sc = stash.call("query($id: ID!) { findScene(id: $id) { files { fingerprints { type value } } } }", {"id": str(scene_id)})["findScene"]
+    prints = {fp["type"]: fp["value"] for fp in ((sc or {}).get("files") or [{}])[0].get("fingerprints") or []}
+    h = prints.get("md5" if cfg.get("videoFileNamingAlgorithm") == "MD5" else "oshash")
+    if not h or not cfg.get("generatedPath"):
+        return None
+    return os.path.join(cfg["generatedPath"], "markers", h, f"{int(float(seconds))}.jpg")
+
+
+@contextlib.contextmanager
+def keeping_marker_picture(stash, scene_id, seconds):
+    """Stash deletes a marker's picture when its times change (so Generate
+    makes a new one): the picture is kept and put back afterwards."""
+    path = None
+    data = None
+    with contextlib.suppress(Exception):
+        path = _marker_picture_path(stash, scene_id, seconds)
+        with open(path, "rb") as f:
+            data = f.read()
+    yield
+    if path and data and not os.path.exists(path):
+        with contextlib.suppress(OSError):
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "wb") as f:
+                f.write(data)
+
+
+def ensure_marker_picture(stash, plugin_dir, marker_id, wait=0):
+    """Gives a marker a picture if it has none: the frame AI markers would
+    use (a moment into the marker), cut from the video."""
+    if wait:
+        time.sleep(wait)  # (the add-on saves its own picture right after making a marker)
+    got = stash.call("query($ids: [ID!]) { findSceneMarkers(ids: $ids) { scene_markers { id seconds end_seconds scene { id files { path } } } } }",
+                     {"ids": [str(marker_id)]})["findSceneMarkers"]["scene_markers"]
+    if not got:
+        return False
+    m = got[0]
+    sid = m["scene"]["id"]
+    path = _marker_picture_path(stash, sid, m["seconds"])
+    if not path or os.path.exists(path):
+        return False
+    at = m["seconds"] + 2
+    with contextlib.suppress(OSError, ValueError, KeyError):
+        with open(os.path.join(plugin_dir, "video_frames", f"{sid}.json")) as f:
+            step = json.load(f)["step"]
+        at = m["seconds"] + step * 1.5  # (where AI markers take theirs)
+    if m.get("end_seconds"):
+        at = min(at, max(m["seconds"], m["end_seconds"] - 1))
+    A = load_auto_seek(plugin_dir)
+    pic = _marker_pictures(stash, A, m["scene"]["files"][0]["path"], [at], [float(m["seconds"])])[0]
+    return run_marker_picture(stash, sid, m["seconds"], pic)
+
+
+def run_marker_picture(stash, scene_id, seconds, picture):
+    """Save a marker's picture where Stash looks for it (generated/markers/
+    <the scene's file hash>/<whole seconds>.jpg), so it shows without running
+    Generate. A picture already there is kept."""
+    import base64  # noqa: PLC0415
+    cfg = stash.call("{ configuration { general { generatedPath videoFileNamingAlgorithm } } }")["configuration"]["general"]
+    sc = stash.call("query($id: ID!) { findScene(id: $id) { files { fingerprints { type value } } } }", {"id": str(scene_id)})["findScene"]
+    prints = {fp["type"]: fp["value"] for fp in ((sc or {}).get("files") or [{}])[0].get("fingerprints") or []}
+    want = "md5" if cfg.get("videoFileNamingAlgorithm") == "MD5" else "oshash"
+    h = prints.get(want)
+    if not h or not cfg.get("generatedPath") or not picture:
+        return False
+    folder = os.path.join(cfg["generatedPath"], "markers", h)
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, f"{int(float(seconds))}.jpg")
+    if os.path.exists(path):
+        return False
+    with open(path, "wb") as f:
+        f.write(base64.b64decode(picture))
+    return True
+
+
+def _marker_clock(sec):
+    sec = max(0, int(round(sec)))
+    h, m, s_ = sec // 3600, sec % 3600 // 60, sec % 60
+    return f"{h}:{m:02d}:{s_:02d}" if h else f"{m}:{s_:02d}"
+
+
+def ai_marker_tag(stash, create=True):
+    """The tag AI markers get (the setting "Markers: tag for AI markers",
+    Scene Shift unless changed): (id, name). Made if missing and `create`."""
+    name = (plugin_settings(stash, None, AI_ID).get("aiMarkerTag") or "").strip() or "Scene Shift"
+    for field in ("name", "aliases"):
+        got = stash.call("query($f: TagFilterType) { findTags(tag_filter: $f) { tags { id name } } }",
+                         {"f": {field: {"value": name, "modifier": "EQUALS"}}})["findTags"]["tags"]
+        if got:
+            return got[0]["id"], got[0]["name"]
+    if not create:
+        return None, name
+    made = stash.call("mutation($i: TagCreateInput!) { tagCreate(input: $i) { id } }",
+                      {"i": {"name": name, "description": "Markers where a scene shifts, added with Better Organizing AI's AI markers."}})
+    return made["tagCreate"]["id"], name
+
+
+def scene_marker_name(scene):
+    """The scene's title, else its file name: what AI markers are named after."""
+    name = (scene.get("title") or "").strip()
+    if not name:
+        path = ((scene.get("files") or [{}])[0] or {}).get("path") or f"Scene {scene['id']}"
+        name = os.path.splitext(os.path.basename(path))[0]
+    return " ".join(name.split())
+
+
+def run_add_markers(stash, scene_id, markers, tag=None):
+    """Adds AI markers to a scene: named "time - scene title", tagged Scene
+    Shift (or the setting's tag), each with its picture.
+    markers: [{start, end, picture}]. Returns how many were added."""
+    scene = stash.call("query($id: ID!) { findScene(id: $id) { id title files { path } tags { id } } }", {"id": str(scene_id)})["findScene"]
+    if not scene or not markers:
+        return 0
+    tag_id = tag or ai_marker_tag(stash)[0]
+    name = scene_marker_name(scene)
+    extra = []  # (markers start without the scene's tags: you tag each one)
+    for m in markers:
+        stash.call("mutation($i: SceneMarkerCreateInput!) { sceneMarkerCreate(input: $i) { id } }",
+                   {"i": {"scene_id": str(scene_id), "title": f"{_marker_clock(m['start'])} - {name}", "seconds": m["start"],
+                          "end_seconds": m["end"], "primary_tag_id": tag_id, "tag_ids": extra}})
+        with contextlib.suppress(Exception):
+            run_marker_picture(stash, scene_id, m["start"], m.get("picture"))
+    return len(markers)
+
+
+def run_video_markers_all(stash, plugin_dir, preview=False, limit=None):
+    """Task: AI markers (where the scene shifts, each with its picture) for
+    every scene that has no markers yet. Scenes you've given markers are
+    never touched. The frames looked at are kept, so cancelling and running
+    it again carries on quickly."""
+    load_auto_seek(plugin_dir)  # fails early if Auto Seek isn't there
+    tag_id, tag_name = ai_marker_tag(stash, create=not preview)
+    scenes = stash.call('{ findScenes(scene_filter: {has_markers: "false"}, filter: {per_page: -1}) '
+                        '{ scenes { id title files { duration } } } }')["findScenes"]["scenes"]
+    scenes = [x for x in scenes if x["files"] and (x["files"][0].get("duration") or 0) >= VIDEO_MIN_SECONDS]
+    if preview:
+        import random  # noqa: PLC0415
+        scenes = random.sample(scenes, min(limit or 5, len(scenes)))
+    elif limit:
+        scenes = scenes[:limit]
+    log("info", f"{'Preview: ' if preview else ''}AI markers for {len(scenes)} scene(s) without markers, tagged {tag_name}"
+        + (" (nothing is saved)" if preview else ". Up to a minute each for a long scene; you can cancel and run it again to carry on."))
+    started, done, made = time.time(), 0, 0
+    for n, x in enumerate(scenes):
+        progress(n / max(len(scenes), 1))
+        label = f'scene {x["id"]}' + (f' "{x["title"]}"' if x.get("title") else "")
+        try:
+            out = run_video_markers(stash, plugin_dir, x["id"], pictures=not preview)
+        except Exception as e:
+            log("debug", f"{label}: {e}")
+            continue
+        ms = out["markers"]
+        if preview:
+            log("info", f"{label}: " + (", ".join(f'{_marker_clock(m["start"])}-{_marker_clock(m["end"])}' for m in ms) or "no shifts found"))
+            continue
+        # (you may have added markers since the list was made)
+        have = stash.call("query($id: ID!) { findScene(id: $id) { scene_markers { id } } }", {"id": x["id"]})["findScene"]
+        if (have or {}).get("scene_markers"):
+            continue
+        if ms:
+            run_add_markers(stash, x["id"], ms, tag_id)
+        done += 1
+        made += len(ms)
+        log("debug", f"{label}: {len(ms)} marker(s)")
+    progress(1)
+    if not preview:
+        log("info", f"Done: {made} marker(s) on {done} scene(s) in {time.time() - started:.0f}s.")
+
+
+def run_video_markers_redo(stash, plugin_dir, only=None):
+    """Task: AI markers made with an older method, made again: for every scene
+    with markers under the AI marker tag (Scene Shift), those markers are
+    replaced with new ones. Other markers are kept, and no new one is added
+    within a few seconds of one of them. Scenes are done one at a time, so
+    cancelling leaves each scene either as it was or redone."""
+    load_auto_seek(plugin_dir)
+    tag_id, tag_name = ai_marker_tag(stash, create=False)
+    if not tag_id:
+        log("info", f"No markers tagged {tag_name}: nothing to redo.")
+        return
+    got = stash.call("query($t: [ID!]) { findSceneMarkers(scene_marker_filter: {tags: {value: $t, modifier: INCLUDES}}, "
+                     "filter: {per_page: -1}) { scene_markers { scene { id } } } }", {"t": [tag_id]})["findSceneMarkers"]["scene_markers"]
+    scenes = sorted({m["scene"]["id"] for m in got}, key=int)
+    if only:
+        scenes = [x for x in scenes if x in {str(o) for o in only}]
+    log("info", f"Redoing the {tag_name} markers of {len(scenes)} scene(s) with the newest method. "
+        "Up to a minute or two each; you can cancel and run it again (scenes already redone are done again).")
+    started, before_n, after_n, done = time.time(), 0, 0, 0
+    failed = {}
+    # (a scene that fails - the video or the face helper busy - is tried again at the end)
+    for n, sid in enumerate(scenes + [None]):
+        if sid is None:
+            if not failed:
+                break
+            log("info", f"Trying {len(failed)} scene(s) again that couldn't be looked at the first time.")
+            retry, failed = list(failed), {}
+            for sid2 in retry:
+                totals = {}
+                failed.update(_redo_one(stash, plugin_dir, sid2, tag_id, totals))
+                before_n += totals.get("before", 0)
+                after_n += totals.get("after", 0)
+                done += totals.get("done", 0)
+            break
+        progress(n / max(len(scenes), 1))
+        totals = {}
+        failed.update(_redo_one(stash, plugin_dir, sid, tag_id, totals))
+        before_n += totals.get("before", 0)
+        after_n += totals.get("after", 0)
+        done += totals.get("done", 0)
+    progress(1)
+    if failed:
+        log("warning", f"{len(failed)} scene(s) kept their old markers (couldn't be looked at): "
+            + "; ".join(f"scene {k}: {v}" for k, v in list(failed.items())[:10]) + ". Run the task again to retry them.")
+    log("info", f"Done: {done} scene(s) redone, {before_n} marker(s) replaced by {after_n}, in {time.time() - started:.0f}s.")
+
+
+def _redo_one(stash, plugin_dir, sid, tag_id, totals):
+    """One scene of run_video_markers_redo; {scene: reason} if it couldn't be looked at."""
+    try:
+        out = run_video_markers(stash, plugin_dir, sid, fresh=False)
+    except Exception as e:
+        log("debug", f"scene {sid}: {e}")
+        return {sid: str(e)[:120]}
+    have = stash.call("query($id: ID!) { findScene(id: $id) { scene_markers { id seconds primary_tag { id } } } }",
+                      {"id": sid})["findScene"]["scene_markers"]
+    mine = [m for m in have if m["primary_tag"]["id"] == tag_id]
+    others = [m["seconds"] for m in have if m["primary_tag"]["id"] != tag_id]
+    new = [m for m in out["markers"] if all(abs(m["start"] - s) > 16 for s in others)]
+    # an old marker at the same second is updated, not deleted and made again:
+    # deleting it also deletes its picture file, which is the new one's too
+    by_second = {int(m["seconds"]): m for m in mine}
+    reuse = {m["start"]: by_second[m["start"]] for m in new if m["start"] in by_second}
+    for m in mine:
+        if all(m is not o for o in reuse.values()):
+            stash.call("mutation($id: ID!) { sceneMarkerDestroy(id: $id) }", {"id": m["id"]})
+    if reuse:
+        scene = stash.call("query($id: ID!) { findScene(id: $id) { id title files { path } tags { id } } }", {"id": sid})["findScene"]
+        name = scene_marker_name(scene)
+        for m in new:
+            old = reuse.get(m["start"])
+            if old:
+                # (its tags stay: you may have tagged it; so does its picture)
+                with keeping_marker_picture(stash, sid, m["start"]):
+                    stash.call("mutation($i: SceneMarkerUpdateInput!) { sceneMarkerUpdate(input: $i) { id } }",
+                               {"i": {"id": old["id"], "title": f"{_marker_clock(m['start'])} - {name}", "seconds": m["start"],
+                                      "end_seconds": m["end"], "primary_tag_id": tag_id}})
+                with contextlib.suppress(Exception):  # (puts its picture back if it went missing)
+                    run_marker_picture(stash, sid, m["start"], m.get("picture"))
+    fresh_new = [m for m in new if m["start"] not in reuse]
+    if fresh_new:
+        run_add_markers(stash, sid, fresh_new, tag_id)
+    totals.update(before=len(mine), after=len(new), done=1)
+    log("debug", f"scene {sid}: {len(mine)} marker(s) -> {len(new)}")
+    return {}
+
+
+# --- adding a marker by hand (scene page → Create Marker) -----------------
+def run_marker_suggest(stash, plugin_dir, scene_id, start):
+    """For a new marker starting at `start`: the marker it falls inside (to
+    end it there), where the next one starts, the next big changes the AI saw
+    after it (from the frames AI markers looked at, if any), and the name."""
+    scene_id, start = str(scene_id), float(start)
+    sc = stash.call("query($id: ID!) { findScene(id: $id) { id title files { path size duration } "
+                    "scene_markers { id seconds end_seconds title primary_tag { id name } } } }", {"id": scene_id})["findScene"]
+    f = (sc.get("files") or [{}])[0]
+    dur = float(f.get("duration") or 0)
+    marks = sorted(sc.get("scene_markers") or [], key=lambda m: m["seconds"])
+    before = [m for m in marks if m["seconds"] < start - 1]
+    prev = before[-1] if before else None
+    if prev and prev.get("end_seconds") is not None and prev["end_seconds"] <= start:
+        prev = None  # it ends before the new one starts: nothing to change
+    nxt = next((m for m in marks if m["seconds"] > start + 1), None)
+    changes = []
+    with contextlib.suppress(OSError, ValueError, KeyError):
+        with open(os.path.join(plugin_dir, "video_frames", f"{scene_id}.json")) as fh:
+            saved = json.load(fh)
+        scores = {}
+        video_shifts(saved["f"], saved["step"], dur, saved.get("c"), scores_out=scores)
+        # the strongest changes from 30 s after the start, a minute apart, up to the next marker
+        limit = nxt["seconds"] if nxt else dur
+        cand = sorted(((d, t) for t, d in scores.items() if start + 30 <= t < limit - 10 and d >= 0.6), reverse=True)
+        for d, t in cand:
+            if all(abs(t - c["at"]) >= 60 for c in changes):
+                changes.append({"at": int(round(t)), "strength": round(d, 2)})
+            if len(changes) >= 3:
+                break
+        changes.sort(key=lambda c: c["at"])
+    return {
+        "name": f"{_marker_clock(start)} - {scene_marker_name(sc)}",
+        "title": scene_marker_name(sc),
+        "duration": dur,
+        "prev": {"id": prev["id"], "seconds": prev["seconds"], "end": prev.get("end_seconds"),
+                 "title": prev.get("title") or prev["primary_tag"]["name"]} if prev else None,
+        "next": {"seconds": nxt["seconds"], "title": nxt.get("title") or nxt["primary_tag"]["name"]} if nxt else None,
+        "changes": changes,
+        "tag": ai_marker_tag(stash, create=False)[1],
+    }
+
+
+def run_marker_add_manual(stash, plugin_dir, scene_id, start, end=None, title=None, trim_prev=True):
+    """Adds a marker by hand: tagged like AI markers (Scene Shift), with its
+    picture, and (trim_prev) the marker it falls
+    inside ends where it starts. Returns what Undo needs."""
+    scene_id, start = str(scene_id), int(round(float(start)))
+    end = int(round(float(end))) if end not in (None, "") else None
+    if end is not None and end <= start:
+        raise RuntimeError("the end has to be after the start")
+    info = run_marker_suggest(stash, plugin_dir, scene_id, start)
+    tag_id, _ = ai_marker_tag(stash)
+    scene = stash.call("query($id: ID!) { findScene(id: $id) { id title files { path } tags { id } } }", {"id": scene_id})["findScene"]
+    extra = []  # (markers start without the scene's tags: you tag each one)
+    name = (title or "").strip() or info["name"]
+    made = stash.call("mutation($i: SceneMarkerCreateInput!) { sceneMarkerCreate(input: $i) { id } }",
+                      {"i": {"scene_id": scene_id, "title": name, "seconds": start, "end_seconds": end,
+                             "primary_tag_id": tag_id, "tag_ids": extra}})["sceneMarkerCreate"]["id"]
+    undo = {"id": made}
+    prev = info["prev"]
+    if trim_prev and prev:
+        with keeping_marker_picture(stash, scene_id, prev["seconds"]):
+            stash.call("mutation($i: SceneMarkerUpdateInput!) { sceneMarkerUpdate(input: $i) { id } }",
+                       {"i": {"id": prev["id"], "end_seconds": start}})
+        undo["prev"] = {"id": prev["id"], "end": prev["end"], "scene": scene_id, "seconds": prev["seconds"]}
+    with contextlib.suppress(Exception):  # its picture (the slow part: reading the video)
+        A = load_auto_seek(plugin_dir)
+        pic = _marker_pictures(stash, A, scene["files"][0]["path"], [start + 2], [start])[0]
+        run_marker_picture(stash, scene_id, start, pic)
+    return undo
+
+
+def run_marker_add_undo(stash, undo):
+    """Takes back run_marker_add_manual."""
+    undo = undo or {}
+    if undo.get("id"):
+        with contextlib.suppress(Exception):
+            stash.call("mutation($id: ID!) { sceneMarkerDestroy(id: $id) }", {"id": undo["id"]})
+    p = undo.get("prev")
+    if p:
+        with keeping_marker_picture(stash, p.get("scene"), p.get("seconds", 0)) if p.get("scene") else contextlib.nullcontext():
+            stash.call("mutation($i: SceneMarkerUpdateInput!) { sceneMarkerUpdate(input: $i) { id } }",
+                       {"i": {"id": p["id"], "end_seconds": p.get("end")}})
+    return True
+
+
+# --- tags for markers (Review → Tags → Markers) ----------------------------
+# Each marker is one part of a scene, so its look-alikes say more about it than
+# the whole scene's do. A marker's picture fingerprint is the average of the
+# fingerprints of the frames AI markers looked at inside it (video_frames/);
+# its look-alikes are the tagged scenes and photos and the markers you've
+# tagged - never its own scene, which would only hand back the scene's tags.
+# Markers you tag teach the next suggestions. Positions come from Auto Seek's
+# model's readings of the same frames.
+MARKER_POS_SHARE = 0.5  # a position is suggested when it's in at least half the marker's frames
+# tags about the people rather than what's happening (that's the scene's job,
+# and a moment's look-alikes get them wrong): not suggested for markers
+MARKER_SKIP_TAGS = re.compile(
+    r"(?i)\b(hair|haired|hairy|hairless|shaved|trimmed|bald|blonde?|brunette|redhead|ginger|eyes?|"
+    r"skin|tan|tanned|pale|freckles?|asian|latina|latino|ebony|caucasian|white|black|native|indian|arab|"
+    r"tattoo(s|ed)?|pierc\w*|petite|curvy|thick|skinny|slim|chubby|bbw|athletic|muscular|fit|average|"
+    r"short|tall|milf|teen|mature|granny|cougar|young|old|natural|fake)\b")
+
+
+def marker_looks(stash, plugin_dir, markers):
+    """{marker id: {"e": q8 fingerprint or None, "looked": frames, "acts": {position: frames}}},
+    from the frames saved for AI markers; kept in marker_looks.json."""
+    path = os.path.join(plugin_dir, "marker_looks.json")
+    try:
+        with open(path) as f:
+            cache = json.load(f)
+    except (OSError, ValueError):
+        cache = {}
+    by_scene = defaultdict(list)
+    for m in markers:
+        by_scene[m["scene"]["id"]].append(m)
+    out, changed, order = {}, False, None
+    for sid, ms in by_scene.items():
+        ms.sort(key=lambda m: m["seconds"])
+        saved = None
+        fpath = os.path.join(plugin_dir, "video_frames", f"{sid}.json")
+        size = None
+        with contextlib.suppress(OSError):
+            size = os.path.getsize(fpath)
+        for k, m in enumerate(ms):
+            end = m.get("end_seconds") or (ms[k + 1]["seconds"] if k + 1 < len(ms) else m["seconds"] + 60)
+            key = f"{m['seconds']}|{end}|{size}"
+            hit = cache.get(m["id"])
+            if hit and hit.get("k") == key:
+                out[m["id"]] = hit
+                continue
+            if size is None:
+                continue  # no frames saved for this scene (yet)
+            if saved is None:
+                try:
+                    with open(fpath) as f:
+                        saved = json.load(f)
+                except (OSError, ValueError):
+                    saved = {}
+                if order is None:
+                    order = list(load_auto_seek(plugin_dir).ACTS)
+            rows, clips = saved.get("f") or [], saved.get("c") or []
+            inside = [n for n, r in enumerate(rows) if m["seconds"] <= r[0] < end]
+            e = None
+            if clips and len(clips) == len(rows) and inside:
+                vecs = [_unclip(clips[n]) for n in inside]
+                mean = [sum(col) / len(vecs) for col in zip(*vecs)]
+                norm = math.sqrt(sum(x * x for x in mean)) or 1
+                e = q8([x / norm for x in mean])
+            started = [rows[n] for n in inside if rows[n][1] >= VIDEO_STARTED]
+            acts = {}
+            for act, rule in VIDEO_ACTS.items():
+                i = order.index(act)
+                acts[act] = sum(1 for r in started if r[2][i] >= rule["share"])
+            ent = {"k": key, "e": e, "looked": len(started), "acts": acts}
+            cache[m["id"]] = ent
+            out[m["id"]] = ent
+            changed = True
+    if changed:
+        tmp = f"{path}.{os.getpid()}.tmp"
+        with open(tmp, "w") as f:
+            json.dump(cache, f, separators=(",", ":"))
+        os.replace(tmp, path)
+    return out
+
+
+MARKER_REVIEW_FIELDS = "id title seconds end_seconds scene { id } primary_tag { id } tags { id }"
+
+
+def _marker_tag_candidates(stash, cfg, plugin_dir, excluded, markers, ai_tag, fresh=False):
+    """[[marker id, tag, score 0-1, look-alikes with it, frames, looked]] and tag names, kept 15 minutes."""
+    path = os.path.join(plugin_dir, "marker_review_cache.json")
+    if not fresh:
+        with contextlib.suppress(OSError, ValueError, KeyError):
+            with open(path) as f:
+                saved = json.load(f)
+            if time.time() - saved.get("at", 0) < TAG_REVIEW_CACHE_SECONDS:
+                return saved["found"], saved["names"]
+    looks = LookIndex(stash, cfg, plugin_dir, excluded)
+    if not looks.ready():
+        raise RuntimeError('not enough look-alikes yet - run "Look-alike tags: scan scenes and images" first')
+    ml = marker_looks(stash, plugin_dir, markers)
+    scene_of = {m["id"]: m["scene"]["id"] for m in markers}
+    # what to learn from: your tagged scenes and photos, and your tagged markers
+    train = [(r[0], looks.cache.data[r[0]]["e"], r[2]) for r in looks.rows]
+    for m in markers:
+        t = {x["id"] for x in m.get("tags") or []} - {ai_tag} - set(excluded)
+        e = (ml.get(m["id"]) or {}).get("e")
+        if t and e:
+            train.append((f"marker:{m['id']}", e, frozenset(t)))
+    queries = [m for m in markers if (ml.get(m["id"]) or {}).get("e")]
+    found, names = [], dict(looks.names)
+    if queries and train:
+        vectors = [x[1] for x in train] + [ml[m["id"]]["e"] for m in queries]
+        nn = look_knn(cfg, vectors, list(range(len(train))), LOOK_K + 15)[len(train):]
+
+        def same_scene(key, sid):
+            kind, _, xid = key.partition(":")
+            return (kind == "scene" and xid == sid) or (kind == "marker" and scene_of.get(xid) == sid)
+
+        for m, near in zip(queries, nn):
+            sid = m["scene"]["id"]
+            near = [(j, d) for j, d in near if not same_scene(train[j][0], sid)][:LOOK_K]
+            if not near:
+                continue
+            top = near[0][1] / 16129
+            votes, total, count = defaultdict(float), 0.0, Counter()
+            for j, dot in near:
+                w = math.exp((dot / 16129 - top) / LOOK_TEMP)
+                total += w
+                for t in train[j][2]:
+                    votes[t] += w
+                    count[t] += 1
+            for t, w in votes.items():
+                sc = w / total
+                if sc >= LOOK_SURE and t in looks.names and t not in looks.rejected:
+                    found.append([m["id"], t, round(sc, 3), count[t], 0, 0])
+    # positions the video model saw in the marker
+    with contextlib.suppress(Exception):
+        for act, (t, _) in _video_tag_ids(stash).items():
+            names.setdefault(t["id"], t["name"])
+            for m in markers:
+                ent = ml.get(m["id"]) or {}
+                looked, n = ent.get("looked") or 0, (ent.get("acts") or {}).get(act, 0)
+                if looked >= 2 and n >= max(2, looked * MARKER_POS_SHARE):
+                    found.append([m["id"], t["id"], round(0.5 + 0.5 * n / looked, 3), 0, n, looked])
+    tmp = f"{path}.{os.getpid()}.tmp"
+    with open(tmp, "w") as f:
+        json.dump({"at": time.time(), "found": found, "names": names}, f)
+    os.replace(tmp, path)
+    return found, names
+
+
+def run_marker_tag_review(stash, plugin_dir, tag=None, limit=40, skip=(), fresh=False):
+    """Review page, Tags → Markers: tags for markers, from the marker's own
+    look-alikes and the positions seen in it. Same answers as Tags →
+    Suggested (No is remembered). Best first; one card per marker and tag."""
+    cfg = settings(stash, plugin_dir)
+    _, excluded = tag_lookup(stash, cfg, plugin_dir)
+    ai_tag = ai_marker_tag(stash, create=False)[0]
+    markers = stash.call(f"{{ findSceneMarkers(filter: {{per_page: -1}}) {{ scene_markers {{ {MARKER_REVIEW_FIELDS} }} }} }}")["findSceneMarkers"]["scene_markers"]
+    if not markers:
+        raise RuntimeError('no markers yet - add some with "AI markers" on a scene, or the AI markers task')
+    found, names = _marker_tag_candidates(stash, cfg, plugin_dir, excluded, markers, ai_tag, fresh)
+    by_id = {m["id"]: m for m in markers}
+    position_kin = {}  # a position tag -> every tag that counts as having it
+    with contextlib.suppress(Exception):
+        for t, counts in _video_tag_ids(stash).values():
+            position_kin[t["id"]] = counts
+    with locked_tag_review_not(plugin_dir) as nots:
+        nots = {k: set(v) for k, v in nots.items()}
+    skip, want = set(skip or ()), (str(tag) if tag else None)
+    merged = {}
+    for mid, t, sc, n, frames, looked in found:
+        m = by_id.get(mid)
+        if not m or (want and t != want):
+            continue
+        key = f"marker:{mid}"
+        have = {x["id"] for x in m.get("tags") or []} | {m["primary_tag"]["id"]}
+        tname = names.get(t, "").strip()
+        if t in excluded or t == ai_tag or tname.lower() in BODY_TAG_NAMES or MARKER_SKIP_TAGS.search(tname):
+            continue
+        if t in have or have & position_kin.get(t, set()) or t in nots.get(key, ()) or f"{key}:{t}" in skip:
+            continue
+        cur = merged.setdefault((mid, t), {"sc": 0.0, "n": 0, "frames": 0, "looked": 0})
+        cur["sc"] = max(cur["sc"], sc)
+        cur["n"] = max(cur["n"], n)
+        if frames:
+            cur["frames"], cur["looked"] = frames, looked
+    # poses learnt from the markers and photos you've tagged with one
+    pose_found = pose_suggestions(stash, cfg, plugin_dir, excluded, fresh, kind="marker")
+    pose_names = pose_tags(stash) if pose_found else {}
+    for key, t, sc, why in pose_found:
+        mid = key.split(":")[1]
+        m = by_id.get(mid)
+        if not m or (want and t != want) or (mid, t) in merged:
+            continue
+        have = {x["id"] for x in m.get("tags") or []} | {m["primary_tag"]["id"]}
+        if t in have or t in nots.get(key, ()) or f"{key}:{t}" in skip:
+            continue
+        names.setdefault(t, pose_names.get(t, t))
+        merged[(mid, t)] = {"sc": sc, "n": 0, "frames": 0, "looked": 0, "why": why}
+    # both the look-alikes and the video agree: first
+    picks = sorted(merged.items(), key=lambda x: (-(x[1]["n"] > 0 and x[1]["frames"] > 0), -x[1]["sc"], -x[1]["n"]))
+    out = []
+    for (mid, t), v in picks[:limit]:
+        m = by_id[mid]
+        sid = m["scene"]["id"]
+        out.append({
+            "kind": "marker", "id": mid, "scene": sid, "start": m["seconds"], "tag": t, "name": names.get(t, ""),
+            "score": round(v["sc"] * 100), "near": v["n"], "times": [round(m["seconds"])],
+            **({"frames": v["frames"], "looked": v["looked"]} if v["frames"] else {}),
+            **({"why": v["why"]} if v.get("why") else {}),
+            "title": m.get("title") or f"Marker at {_marker_clock(m['seconds'])}",
+            "picture": f"/scene/{sid}/scene_marker/{mid}/screenshot",
+            "tags": len([x for x in m.get("tags") or [] if x["id"] != ai_tag]),
+        })
+    per = Counter(t for (_, t) in merged)
+    groups = [{"id": t, "name": names.get(t, t), "count": c} for t, c in per.most_common()]
+    return {"items": out, "total": len(merged), "groups": groups}
+
+
+# --- poses (Review → Tags → Suggested / Markers): learnt from the pictures you tag
+# Neither Apple's body pose nor CLIP's descriptions can tell "face down, ass
+# up" or "frog pose" on their own (checked on 700 of your pictures: Apple
+# finds a whole body in about 1 in 6, CLIP's descriptions mostly find
+# bottoms). So poses are suggested from examples you tag: photos and markers
+# whose body shape (Apple's joints, on a Mac) or look (picture fingerprints)
+# is closest to ones with the pose. Suggestions only, never added by a task;
+# Yes adds an example, No is remembered and counts against it.
+POSE_TAGS_DEFAULT = ("Face Down Ass Up, All Fours, Frog Pose, Kneeling, Squatting, Spread Legs, Legs Up, "
+                     "Bent Over, Lying on Stomach")
+POSE_MIN_EXAMPLES = 3      # tagged examples needed before a pose is suggested
+POSE_JOINTS = ("head", "neck", "left_shoulder", "right_shoulder", "left_forearm", "right_forearm", "left_hand",
+               "right_hand", "left_upLeg", "right_upLeg", "left_leg", "right_leg", "left_foot", "right_foot")
+POSE_JOINT_SURE = 0.3
+POSE_MIN_TORSO = 0.1       # a person smaller than this (torso / longer side) is in the background
+POSE_SHARED = 8            # joints both bodies need, a knee among them
+POSE_K = 10                # closest bodies that vote
+POSE_TEMP = 0.1            # how fast a vote fades with distance (torso lengths)
+POSE_BACKGROUND = 500      # bodies without the pose they're compared with
+POSE_SUGGEST = 0.3         # shown when the body shape or the look-alikes give this much
+POSE_SCAN_BATCH = 16
+
+
+def pose_tag_names(stash):
+    raw = plugin_settings(stash, None, AI_ID).get("poseTags")
+    raw = raw if isinstance(raw, str) and raw.strip() else POSE_TAGS_DEFAULT
+    return [n.strip() for n in raw.split(",") if n.strip()]
+
+
+def pose_tags(stash):
+    """{tag id: name} for the pose tags you have (by name or alias)."""
+    want = {n.lower() for n in pose_tag_names(stash)}
+    tags = stash.call("{ findTags(filter: {per_page: -1}) { tags { id name aliases } } }")["findTags"]["tags"]
+    return {t["id"]: t["name"] for t in tags
+            if t["name"].strip().lower() in want or any(a.strip().lower() in want for a in t.get("aliases") or [])}
+
+
+def pose_vector(person):
+    """One person's joints around the hips, in torso lengths (None if the
+    torso isn't seen or the person is small, i.e. in the background)."""
+    def g(n):
+        v = person.get(n)
+        return (v[0], v[1]) if v and v[2] >= POSE_JOINT_SURE else None
+
+    hips = (g("left_upLeg"), g("right_upLeg"))
+    hip = ((hips[0][0] + hips[1][0]) / 2, (hips[0][1] + hips[1][1]) / 2) if all(hips) else g("root")
+    sh = (g("left_shoulder"), g("right_shoulder"))
+    top = g("neck") or (((sh[0][0] + sh[1][0]) / 2, (sh[0][1] + sh[1][1]) / 2) if all(sh) else None)
+    if not hip or not top:
+        return None
+    size = math.hypot(top[0] - hip[0], top[1] - hip[1])
+    if size < POSE_MIN_TORSO:
+        return None
+    return {n: [round((v[0] - hip[0]) / size, 3), round((v[1] - hip[1]) / size, 3)] for n in POSE_JOINTS if (v := g(n))}
+
+
+def _pose_mirror(v):
+    swap = lambda n: "right_" + n[5:] if n.startswith("left_") else "left_" + n[6:] if n.startswith("right_") else n
+    return {swap(n): (-x, y) for n, (x, y) in v.items()}
+
+
+def pose_distance(a, b, b_mirror=None):
+    """How far apart two bodies are (torso lengths, either way round), or None
+    when too few joints are seen in both."""
+    best = None
+    for bb in (b, b_mirror if b_mirror is not None else _pose_mirror(b)):
+        shared = [n for n in a if n in bb]
+        if len(shared) < POSE_SHARED or not ("left_leg" in shared or "right_leg" in shared):
+            continue
+        d = sum(math.hypot(a[n][0] - bb[n][0], a[n][1] - bb[n][1]) for n in shared) / len(shared)
+        best = d if best is None else min(best, d)
+    return best
+
+
+def _pose_cache(plugin_dir):
+    try:
+        with open(os.path.join(plugin_dir, "poses.json")) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def _pose_save(plugin_dir, cache):
+    path = os.path.join(plugin_dir, "poses.json")
+    tmp = f"{path}.{os.getpid()}.tmp"
+    with open(tmp, "w") as f:
+        json.dump(cache, f, separators=(",", ":"))
+    os.replace(tmp, path)
+
+
+def apple_poses(cfg, pictures):
+    """Everyone's body joints in each picture (Apple's Vision via the face helper)."""
+    body = json.dumps({"images": [base64.b64encode(p).decode() for p in pictures], "pose_only": True}).encode()
+    req = urllib.request.Request(cfg["ai"]["face_url"] + "/apple", data=body, headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=300) as resp:
+            return json.loads(resp.read())["results"]
+    except urllib.error.HTTPError as e:
+        if e.code in (404, 501):
+            raise RuntimeError("the face helper can't read body poses: poses need Apple's Vision on a Mac "
+                               "(run face-helper/setup.sh again there)")
+        raise
+
+
+def _pose_targets(stash):
+    """[(key, signature, picture url)] for every photo (not drawn) and marker."""
+    out = []
+    page = 1
+    while True:
+        items = stash.call("query($f: FindFilterType) { findImages(filter: $f) { images { id tags { id name } "
+                           "paths { thumbnail } visual_files { __typename ... on ImageFile { path } ... on VideoFile { path } } } } }",
+                           {"f": {"page": page, "per_page": 1000, "sort": "id"}})["findImages"]["images"]
+        for i in items:
+            files = i.get("visual_files") or []
+            if files and all(f["__typename"] == "ImageFile" for f in files) and not is_drawn(i):
+                out.append((f"image:{i['id']}", files[0]["path"], i["paths"]["thumbnail"]))
+        if len(items) < 1000:
+            break
+        page += 1
+    markers = stash.call("{ findSceneMarkers(filter: {per_page: -1}) { scene_markers { id seconds screenshot scene { id } } } }")
+    for m in markers["findSceneMarkers"]["scene_markers"]:
+        out.append((f"marker:{m['id']}", f"{m['scene']['id']}@{int(float(m['seconds']))}", m["screenshot"]))
+    return out
+
+
+def run_pose_scan(stash, plugin_dir):
+    """Task: Apple's body pose for every photo and marker not done yet (kept in
+    poses.json; a picture that changes is done again)."""
+    cfg = settings(stash, plugin_dir)
+    cache = _pose_cache(plugin_dir)
+    targets = _pose_targets(stash)
+    keys = {k for k, _, _ in targets}
+    for k in [k for k in cache if k not in keys]:
+        del cache[k]  # (deleted since)
+    todo = [t for t in targets if (cache.get(t[0]) or {}).get("s") != t[1]]
+    if not todo:
+        _pose_save(plugin_dir, cache)
+        log("info", f"Nothing to do: all {len(targets)} photos and markers have their body poses.")
+        return
+    log("info", f"Body poses for {len(todo)} photo(s) and marker(s) ({len(targets) - len(todo)} done before); "
+        "cancel and run again to carry on.")
+    found = failed = 0
+    for at in range(0, len(todo), POSE_SCAN_BATCH):
+        progress(at / len(todo))
+        batch, pictures = [], []
+        for key, sig, url in todo[at:at + POSE_SCAN_BATCH]:
+            try:
+                data, ctype = stash.fetch(url)
+            except Exception as e:
+                failed += 1
+                log("debug", f"{key}: no picture ({e})")
+                continue
+            if ctype == "text/html":
+                raise RuntimeError("Stash sent a web page instead of the picture (signed out?)")
+            if ctype.startswith("image/"):
+                batch.append((key, sig))
+                pictures.append(data)
+        if not pictures:
+            continue
+        for (key, sig), res in zip(batch, apple_poses(cfg, pictures)):
+            vecs = [v for p in (res or {}).get("people") or [] if (v := pose_vector(p))]
+            cache[key] = {"s": sig, "v": vecs}
+            found += bool(vecs)
+        if (at // POSE_SCAN_BATCH) % 20 == 19:
+            _pose_save(plugin_dir, cache)
+    _pose_save(plugin_dir, cache)
+    progress(1)
+    log("info", f"Body poses done: a whole enough body in {found} of {len(todo)} picture(s)"
+        + (f"; {failed} couldn't be fetched" if failed else "") + ". Tag a few with each pose to get suggestions "
+        "(Review → Tags → Suggested, and Markers).")
+
+
+def _pose_candidates(stash, cfg, plugin_dir, excluded, fresh=False):
+    """[[key, tag, score, body share, look share, examples]] for every photo and
+    marker, kept 15 minutes. key: image:ID / marker:ID."""
+    path = os.path.join(plugin_dir, "pose_review_cache.json")
+    if not fresh:
+        with contextlib.suppress(OSError, ValueError, KeyError):
+            with open(path) as f:
+                saved = json.load(f)
+            if time.time() - saved.get("at", 0) < TAG_REVIEW_CACHE_SECONDS:
+                return saved["found"], saved["names"], saved["few"]
+    names = {t: n for t, n in pose_tags(stash).items() if t not in excluded}
+    if not names:
+        raise RuntimeError("no pose tags yet: make tags named " + ", ".join(pose_tag_names(stash)[:5])
+                           + "… (or set your own in the add-on's settings, \"Poses: tags\"), then tag a few pictures with each")
+    markers = stash.call(f"{{ findSceneMarkers(filter: {{per_page: -1}}) {{ scene_markers {{ {MARKER_REVIEW_FIELDS} }} }} }}")[
+        "findSceneMarkers"]["scene_markers"]
+    scene_of = {f"marker:{m['id']}": m["scene"]["id"] for m in markers}
+    have = {k: v for k, v in all_item_tags(stash).items() if k.startswith("image:")}
+    for m in markers:
+        have[f"marker:{m['id']}"] = {x["id"] for x in m.get("tags") or []} | {m["primary_tag"]["id"]}
+    with locked_tag_review_not(plugin_dir) as nots:
+        nots = {k: set(v) for k, v in nots.items()}
+    examples = {t: {k for k, ts in have.items() if t in ts} for t in names}
+    against = {t: {k for k, ts in nots.items() if t in ts} for t in names}
+    few = {names[t]: len(ex) for t, ex in examples.items() if len(ex) < POSE_MIN_EXAMPLES}
+    ready = [t for t in names if len(examples[t]) >= POSE_MIN_EXAMPLES]
+    found = []
+    if ready:
+        # body shape: each body's closest among the examples, the ones turned
+        # down and a sample of everyone else
+        poses = _pose_cache(plugin_dir)
+        bodies = [(k, v) for k, ent in poses.items() for v in ent.get("v") or []]
+        import random
+        rnd = random.Random(7)
+        body_score = defaultdict(float)
+        if bodies:
+            labelled = {k for t in ready for k in examples[t] | against[t]}
+            sample = rnd.sample(bodies, min(POSE_BACKGROUND, len(bodies)))
+            base = [(k, v, _pose_mirror(v)) for k, v in bodies if k in labelled]
+            base += [(k, v, _pose_mirror(v)) for k, v in sample if k not in labelled]
+            for key, v in bodies:
+                near = sorted((d, k) for k, b, bm in base if k != key and (d := pose_distance(v, b, bm)) is not None)[:POSE_K]
+                if not near:
+                    continue
+                w = [math.exp(-(d - near[0][0]) / POSE_TEMP) for d, _ in near]
+                total = sum(w)
+                for t in ready:
+                    yes = sum(wi for wi, (_, k) in zip(w, near) if k in examples[t])
+                    no = sum(wi for wi, (_, k) in zip(w, near) if k in against[t])
+                    sc = max(0.0, yes - no) / total
+                    if sc > body_score[(key, t)]:
+                        body_score[(key, t)] = sc
+        # look-alikes: the photo / marker's closest picture fingerprints
+        look_score = {}
+        cache = LookCache(plugin_dir)
+        ml = marker_looks(stash, plugin_dir, markers)
+        vec_keys, vectors = [], []
+        for k, ent in cache.data.items():
+            if k.startswith("image:") and ent.get("e"):
+                vec_keys.append(k)
+                vectors.append(ent["e"])
+        for m in markers:
+            e = (ml.get(m["id"]) or {}).get("e")
+            if e:
+                vec_keys.append(f"marker:{m['id']}")
+                vectors.append(e)
+        if vectors:
+            nn = look_knn(cfg, vectors, list(range(len(vectors))), LOOK_K + 10)
+            for key, near in zip(vec_keys, nn):
+                sid = scene_of.get(key)
+                near = [(j, d) for j, d in near if vec_keys[j] != key and not (sid and scene_of.get(vec_keys[j]) == sid)][:LOOK_K]
+                if not near:
+                    continue
+                top = near[0][1] / 16129
+                w = [math.exp((d / 16129 - top) / LOOK_TEMP) for _, d in near]
+                total = sum(w)
+                for t in ready:
+                    yes = sum(wi for wi, (j, _) in zip(w, near) if vec_keys[j] in examples[t])
+                    no = sum(wi for wi, (j, _) in zip(w, near) if vec_keys[j] in against[t])
+                    sc = max(0.0, yes - no) / total
+                    if sc > 0:
+                        look_score[(key, t)] = (sc, sum(1 for j, _ in near if vec_keys[j] in examples[t]))
+        for (key, t) in set(body_score) | set(look_score):
+            b = body_score.get((key, t), 0.0)
+            lk, n = look_score.get((key, t), (0.0, 0))
+            sc = 1 - (1 - b) * (1 - lk)
+            if sc >= POSE_SUGGEST and (key in scene_of or key.startswith("image:")):
+                found.append([key, t, round(sc, 3), round(b, 2), round(lk, 2), n])
+    tmp = f"{path}.{os.getpid()}.tmp"
+    with open(tmp, "w") as f:
+        json.dump({"at": time.time(), "found": found, "names": names, "few": few}, f)
+    os.replace(tmp, path)
+    return found, names, few
+
+
+def pose_suggestions(stash, cfg, plugin_dir, excluded, fresh=False, kind=None):
+    """[(key, tag, score 0-1, why)] pose suggestions for photos and/or markers,
+    for Review → Tags → Suggested (photos) and → Markers (markers); [] when
+    there are no pose tags or examples yet."""
+    try:
+        found, _, _ = _pose_candidates(stash, cfg, plugin_dir, excluded, fresh)
+    except Exception as e:
+        log("debug", f"poses left out: {e}")
+        return []
+    out = []
+    for key, t, sc, b, lk, n in found:
+        if kind and not key.startswith(kind + ":"):
+            continue
+        why = " · ".join(x for x in (f"pose: body shape {round(b * 100)}% like the ones you tagged" if b else "",
+                                     f"{n} of its 20 closest look-alikes have the pose" if n else "") if x) or "pose"
+        out.append((key, t, sc, why))
+    return out
+
+
+def run_pose_review(stash, plugin_dir, tag=None, limit=40, skip=(), fresh=False):
+    """Review page, Tags → Poses: poses for photos and markers, from the body
+    shapes and looks of the ones you've tagged. Same answers as Tags →
+    Suggested (No is remembered, and counts against the pose next time)."""
+    cfg = settings(stash, plugin_dir)
+    _, excluded = tag_lookup(stash, cfg, plugin_dir)
+    found, names, few = _pose_candidates(stash, cfg, plugin_dir, excluded, fresh)
+    with locked_tag_review_not(plugin_dir) as nots:
+        nots = {k: set(v) for k, v in nots.items()}
+    skip, want = set(skip or ()), (str(tag) if tag else None)
+    picks = sorted((x for x in found if (not want or x[1] == want) and x[1] not in nots.get(x[0], ())
+                    and f"{x[0]}:{x[1]}" not in skip), key=lambda x: (-x[2], -x[5]))
+    out = []
+    for at in range(0, len(picks), 150):
+        chunk = picks[at:at + 150]
+        ids = {kind: sorted({k.split(":")[1] for k, *_ in chunk if k.startswith(kind + ":")}, key=int) for kind in ("image", "marker")}
+        images = {x["id"]: x for x in find_by_ids(stash, "findImages", "images", ids["image"], TAG_REVIEW_FIELDS["image"])} if ids["image"] else {}
+        markers = {}
+        if ids["marker"]:
+            got = stash.call(f"query($f: SceneMarkerFilterType) {{ findSceneMarkers(scene_marker_filter: $f, filter: {{per_page: -1}}) "
+                             f"{{ scene_markers {{ {MARKER_REVIEW_FIELDS} }} }} }}", {"f": {}})["findSceneMarkers"]["scene_markers"]
+            markers = {m["id"]: m for m in got if m["id"] in set(ids["marker"])}
+        for key, t, sc, b, lk, n in chunk:
+            kind, iid = key.split(":")
+            why = " · ".join(x for x in (f"body shape {round(b * 100)}% like your examples" if b else "",
+                                         f"{n} of its 20 closest look-alikes have it" if n else "") if x)
+            if kind == "image":
+                it = images.get(iid)
+                if not it or t in {x["id"] for x in it.get("tags") or []}:
+                    continue
+                files = it.get("visual_files") or [{}]
+                card = {"title": it.get("title") or (files[0] or {}).get("basename") or "",
+                        "picture": re.sub(r"^https?://[^/]+", "", (it.get("paths") or {}).get("image") or ""),
+                        "tags": len(it.get("tags") or [])}
+            else:
+                m = markers.get(iid)
+                if not m or t in {x["id"] for x in m.get("tags") or []} | {m["primary_tag"]["id"]}:
+                    continue
+                sid = m["scene"]["id"]
+                card = {"scene": sid, "start": m["seconds"], "times": [round(m["seconds"])],
+                        "title": m.get("title") or f"Marker at {_marker_clock(m['seconds'])}",
+                        "picture": f"/scene/{sid}/scene_marker/{iid}/screenshot", "tags": len(m.get("tags") or [])}
+            out.append({"kind": kind, "id": iid, "tag": t, "name": names.get(t, ""), "score": round(sc * 100),
+                        "pose": True, "why": why, **card})
+            if len(out) >= limit:
+                break
+        if len(out) >= limit:
+            break
+    per = Counter(x[1] for x in picks)
+    groups = [{"id": t, "name": names.get(t, t), "count": c} for t, c in per.most_common()]
+    note = ""
+    if few:
+        note = "Tag at least " + str(POSE_MIN_EXAMPLES) + " pictures or markers with a pose to get suggestions for it - still needed: " + \
+            ", ".join(f"{n} ({c} so far)" for n, c in sorted(few.items()))
+    have_names = {n.strip().lower() for n in names.values()}
+    missing = [n for n in pose_tag_names(stash) if n.lower() not in have_names]
+    if missing:
+        note += (". " if note else "") + "Make a tag to use these too: " + ", ".join(missing)
+    return {"items": out, "total": len(picks), "groups": groups, "note": note}
+
+
+# --- chapters for galleries (a gallery's Chapters tab → Suggest chapters) ---
+# Stash's chapters point at an image's place in the gallery sorted by file
+# path (checked: chapter 5 opens the 5th image by path). Between each pair of
+# neighbouring images, these say a new chapter starts: a different folder,
+# file names that change ("beach_" to "pool_") or start counting again, a
+# different look (the picture fingerprints: images after it like none just
+# before it, so mixed close-ups don't count), different performers or studio,
+# much changed tags, or a day or more between their dates.
+CHAPTER_WINDOW = 3
+CHAPTER_NEW_LOOK = 0.30
+CHAPTER_GENERIC = re.compile(r"(?i)^(img|image|dsc|dscn|dcim|photo|pic|pict|screenshot|screen shot|scan|page|p|_?macosx|"
+                             r"locked( folder)?( \d+)?|\d+_locked folder( \d+)?|untitled|new folder|folder|copy|ok|edit(ed)?|"
+                             r"img_e|full|large|original|hd|uhd|\W*)$")
+
+
+def _name_stem(path):
+    """A file name without its numbers and punctuation: "Beach_012 (2).jpg" -> "beach"."""
+    base = os.path.splitext(os.path.basename(path))[0]
+    stem = re.sub(r"[\d_\-.()\[\]\s]+", " ", base).strip().lower()
+    return re.sub(r"\s+", " ", stem)
+
+
+def _name_number(path):
+    nums = re.findall(r"\d+", os.path.splitext(os.path.basename(path))[0])
+    return int(nums[-1]) if nums else None
+
+
+def _folder_label(folder):
+    last = os.path.basename(folder.rstrip("/")) or folder
+    last = re.sub(r"\.(zip|cbz|rar|7z)$", "", last, flags=re.I).strip()
+    # camera rolls, phone exports, dates and the like say nothing about what's in it
+    if CHAPTER_GENERIC.match(last) or re.search(r"(?i)locked|dcim|camera|export|__macosx|^\d{4}[\W_]|^\d+$|^[\W\d_]+$", last):
+        return None
+    return re.sub(r"[_]+", " ", last).strip()
+
+
+# Comics (a zip / cbz of pages): their chapters say so on the page ("CHAPTER
+# 2: FED UP"). The face helper reads the text (Apple's text reader, on a Mac:
+# about 0.2 s a page); a heading counts when its number follows the last one,
+# so "chapter" in a speech bubble doesn't start one. What was read is kept
+# (comic_text.json), a few hundred pages per request.
+COMIC_HEADING = re.compile(r"(?i)^\W*(chapter|chap\.?|ch\.|episode|ep\.|act|part)\s*(\d{1,3})\b\s*[:.\-–—]?\s*(.*)$")
+COMIC_CREDITS = re.compile(r"(?i)\b(tl:|ts:|pr:|translat\w*|scanlat\w*|support the artist|typeset\w*|proofread\w*|raws?:|redraw\w*)")
+COMIC_PAGES_PER_CALL = 200
+
+
+def _comic_reader(cfg):
+    """True when the face helper can read text."""
+    with contextlib.suppress(Exception):
+        with urllib.request.urlopen(cfg["ai"]["face_url"] + "/health", timeout=5) as resp:
+            return bool(json.loads(resp.read()).get("ocr"))
+    return False
+
+
+def _read_pages(cfg, pictures):
+    body = json.dumps({"images": [base64.b64encode(p).decode() for p in pictures]}).encode()
+    req = urllib.request.Request(cfg["ai"]["face_url"] + "/ocr", data=body, headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=300) as resp:
+        return json.loads(resp.read())["results"]
+
+
+def _page_heading(lines):
+    """(chapter number, title or "") from a page's text, or None; and whether it's a credits page."""
+    found = None
+    for k, (h, x, y, text) in enumerate(lines):
+        m = COMIC_HEADING.match(text.strip())
+        if not m:
+            continue
+        title = m.group(3).strip(" :.-–—")
+        # the rest of the title on the lines below (as big, close under it)
+        at, parts = y, [title] if title else []
+        for _ in range(3 - len(parts)):
+            below = sorted((y2, t2) for h2, x2, y2, t2 in lines
+                           if at < y2 <= at + h * 1.8 and h2 >= h * 0.75 and t2.strip() and not COMIC_HEADING.match(t2.strip()))
+            if not below:
+                break
+            at = below[0][0]
+            parts.append(below[0][1].strip())
+        title = " ".join(parts).strip(" :.-–—")
+        cand = (h, int(m.group(2)), title)
+        if not found or cand[0] > found[0]:
+            found = cand  # the biggest heading on the page
+    credits = any(COMIC_CREDITS.search(t) for _, _, _, t in lines)
+    return ((found[1], found[2]) if found else None), credits
+
+
+def comic_headings(stash, cfg, plugin_dir, imgs, paths, budget=COMIC_PAGES_PER_CALL):
+    """{page index: (number, title)} and how many pages are still unread."""
+    import zipfile  # noqa: PLC0415
+    path = os.path.join(plugin_dir, "comic_text.json")
+    try:
+        with open(path) as f:
+            seen = json.load(f)
+    except (OSError, ValueError):
+        seen = {}
+    todo = [k for k, i in enumerate(imgs) if i["id"] not in seen or "t" not in seen[i["id"]]]
+    if todo and budget:
+        archives = {}
+        batch, keys = [], []
+
+        def flush():
+            if not batch:
+                return
+            for key, lines in zip(keys, _read_pages(cfg, batch)):
+                head, credits = _page_heading(lines)
+                # (the page's bigger text is kept, so a better reading of it needs no new look)
+                seen[key] = {"h": list(head) if head else None, "c": credits,
+                             "t": [ln for ln in lines if ln[0] >= 0.015][:40]}
+            batch.clear()
+            keys.clear()
+
+        for k in todo[:budget]:
+            p = paths[k]
+            m = re.match(r"(?i)^(.*?\.(?:zip|cbz))/(.+)$", p)
+            data = None
+            with contextlib.suppress(Exception):
+                if m:
+                    z = archives.get(m.group(1)) or archives.setdefault(m.group(1), zipfile.ZipFile(m.group(1)))
+                    data = z.read(m.group(2))
+                else:
+                    with open(p, "rb") as f:
+                        data = f.read()
+            if not data:
+                seen[imgs[k]["id"]] = {"h": None, "c": False}
+                continue
+            batch.append(data)
+            keys.append(imgs[k]["id"])
+            if len(batch) >= 8:
+                flush()
+        flush()
+        tmp = f"{path}.{os.getpid()}.tmp"
+        with open(tmp, "w") as f:
+            json.dump(seen, f, separators=(",", ":"))
+        os.replace(tmp, path)
+    heads, last = {}, 0
+    for k, i in enumerate(imgs):
+        ent = seen.get(i["id"]) or {}
+        h = (_page_heading(ent["t"])[0] if ent.get("t") else None) or (tuple(ent["h"]) if ent.get("h") else None)
+        if h and h[0] > last and h[0] <= last + 3:  # (the next chapter, maybe one skipped)
+            heads[k] = (h[0], h[1])
+            last = h[0]
+    # a chapter whose heading couldn't be read: where the numbers skip one
+    # (or at the end), it starts after the translator's credits page inside
+    credit = [bool((seen.get(i["id"]) or {}).get("c")) for i in imgs]
+    starts = sorted(heads)
+    sizes = sorted(b - a for a, b in zip(starts, starts[1:])) or [0]
+    usual = sizes[len(sizes) // 2]
+    for a, b in zip(starts, starts[1:] + [len(imgs)]):
+        gap = heads[b][0] - heads[a][0] - 1 if b in heads else (1 if usual and b - a >= usual * 1.6 else 0)
+        if gap < 1:
+            continue
+        cuts = [k + 1 for k in range(a + 3, b - 3) if credit[k] and not credit[k + 1]]
+        for n, k in enumerate(cuts[:gap]):
+            heads[k] = (heads[a][0] + 1 + n, "")
+    if len(heads) < 2:
+        # no chapter headings: a compilation's stories end with the translator's
+        # credits, so a new one starts after each credits page
+        heads = {}
+        for k in range(1, len(imgs) - 3):
+            if credit[k - 1] and not credit[k] and k >= 3 and all(abs(k - x) >= 4 for x in heads):
+                big = sorted(((ln[0], ln[3].strip()) for ln in (seen.get(imgs[k]["id"]) or {}).get("t") or []), reverse=True)
+                # (big text that reads like a title: two words or more)
+                title = next((t for h, t in big[:2] if h >= 0.04 and 6 <= len(t) <= 40 and len(re.findall(r"[A-Za-z]{2,}", t)) >= 2), "")
+                heads[k] = (None, title)
+    return heads, sum(1 for i in imgs if i["id"] not in seen or "t" not in seen[i["id"]])
+
+
+def run_gallery_chapters(stash, plugin_dir, gallery_id, read=True):
+    """Suggested chapters for a gallery: [{index (1 = first image), title,
+    why: [...], image (id), count}], best place for each, plus its chapters."""
+    gid = str(gallery_id)
+    g = stash.call("query($id: ID!) { findGallery(id: $id) { id title chapters { id title image_index } } }", {"id": gid})["findGallery"]
+    if not g:
+        raise RuntimeError("no such gallery")
+    imgs = stash.call("query($g: [ID!]) { findImages(image_filter: {galleries: {value: $g, modifier: INCLUDES}}, "
+                      "filter: {per_page: -1, sort: \"path\", direction: ASC}) { images { id date "
+                      "tags { id name } performers { id name } studio { id name } visual_files { ... on BaseFile { path } } } } }",
+                      {"g": [gid]})["findImages"]["images"]
+    n = len(imgs)
+    if n < 6:
+        return {"chapters": [], "have": g["chapters"], "count": n, "images": [i["id"] for i in imgs]}
+    paths = [((i.get("visual_files") or [{}])[0] or {}).get("path") or "" for i in imgs]
+    folders = [os.path.dirname(p) for p in paths]
+    stems = [_name_stem(p) for p in paths]
+    numbers = [_name_number(p) for p in paths]
+    cache = LookCache(plugin_dir).data
+    vecs = []
+    for i in imgs:
+        e = (cache.get(f"image:{i['id']}") or {}).get("e")
+        if e:
+            v = _ints(e)
+            nrm = math.sqrt(sum(x * x for x in v)) or 1
+            vecs.append([x / nrm for x in v])
+        else:
+            vecs.append(None)
+    perf = [frozenset(p["id"] for p in i.get("performers") or []) for i in imgs]
+    studio = [(i.get("studio") or {}).get("id") for i in imgs]
+    tags = [frozenset(t["id"] for t in i.get("tags") or []) for i in imgs]
+    names = {}
+    for i in imgs:
+        for x in (i.get("tags") or []) + (i.get("performers") or []):
+            names[x["id"]] = x["name"]
+        if i.get("studio"):
+            names["s" + i["studio"]["id"]] = i["studio"]["name"]
+    # a comic: its chapter headings, when the face helper can read them
+    is_comic = any(re.search(r"(?i)\.(zip|cbz)/", p) for p in paths[:3])
+    reader = None
+    if is_comic and read:
+        cfg = settings(stash, plugin_dir)
+        reader = _comic_reader(cfg)
+        # (pages read before count even when the reader isn't there now)
+        heads, unread = comic_headings(stash, cfg, plugin_dir, imgs, paths, budget=COMIC_PAGES_PER_CALL if reader else 0)
+        if not unread:
+            reader = True
+        if reader:
+            if unread:
+                return {"chapters": [], "have": g["chapters"], "count": n, "images": [i["id"] for i in imgs], "reading": n - unread, "unread": unread}
+            if len(heads) >= 2:
+                import string  # noqa: PLC0415
+                out = []
+                starts = sorted(set([0] + list(heads)))
+                by_credits = all(v[0] is None for v in heads.values())
+                for k, (a, b) in enumerate(zip(starts, starts[1:] + [n])):
+                    num, title = heads.get(a, (None, ""))
+                    if num:
+                        t = f"Chapter {num}" + (f": {string.capwords(title.strip())}" if title else "")
+                        why = ["chapter heading on the page"]
+                    elif a in heads:
+                        t = string.capwords(title) if title else f"Part {k + 1}"
+                        why = ["after the translator's credits page"]
+                    else:
+                        t = "Part 1" if by_credits else "Opening pages"
+                        why = ["the start"]
+                    out.append({"index": a + 1, "title": t[:120], "why": why, "image": imgs[a]["id"], "count": b - a})
+                return {"chapters": out, "have": g["chapters"], "count": n, "images": [i["id"] for i in imgs], "comic": True}
+    w = CHAPTER_WINDOW
+
+    def common(sets, lo, hi, share=0.5):
+        c = Counter(x for s in sets[lo:hi] for x in s)
+        k = max(1, hi - lo)
+        return {x for x, m in c.items() if m / k >= share}
+
+    def mode(vals, lo, hi):
+        c = Counter(v for v in vals[lo:hi] if v)
+        return c.most_common(1)[0][0] if c else None
+
+    dot = lambda a, b: sum(x * y for x, y in zip(a, b))  # noqa: E731
+    scores = []  # (i: the first image of the new chapter, score, reasons)
+    for i in range(1, n):
+        why, sc = [], 0.0
+        lo, hi = max(0, i - w), min(n, i + w)
+        if folders[i] != folders[i - 1] and folders[i] in folders[i:hi] and folders[i] not in folders[lo:i]:
+            sc = max(sc, 2.0)
+            why.append("new folder")
+        if stems[i] != stems[i - 1] and stems[i] and (i + 1 >= n or stems[i + 1] == stems[i]) and stems[i] not in stems[lo:i]:
+            sc = max(sc, 1.5)
+            why.append("file names change")
+        elif stems[i] == stems[i - 1] and numbers[i] is not None and numbers[i - 1] is not None and numbers[i] < numbers[i - 1] - 3:
+            sc = max(sc, 1.2)
+            why.append("numbering starts again")
+        bv = [v for v in vecs[lo:i] if v]
+        av = [v for v in vecs[i:hi] if v]
+        if bv and av:
+            sims = [[dot(a, b) for b in bv] for a in av]
+            look = 0.5 * (sum(1 - max(r) for r in sims) / len(av) + sum(1 - max(sims[a][b] for a in range(len(av))) for b in range(len(bv))) / len(bv))
+            if look / CHAPTER_NEW_LOOK >= 1:
+                why.append("different look")
+            sc = max(sc, look / CHAPTER_NEW_LOOK)
+        pb, pa = common(perf, lo, i), common(perf, i, hi)
+        if pa and pb != pa and not (pa <= pb):
+            sc = max(sc, 1.2)
+            why.append("new performers")
+        sb, sa = mode(studio, lo, i), mode(studio, i, hi)
+        if sa and sb and sa != sb:
+            sc = max(sc, 1.2)
+            why.append("new studio")
+        tb, ta = set().union(*tags[lo:i]), set().union(*tags[i:hi])
+        if tb and ta and len(tb & ta) / len(tb | ta) < 0.25:
+            sc = max(sc, 0.9 if sc < 0.9 else sc)
+            why.append("different tags")
+        d0, d1 = imgs[i - 1].get("date"), imgs[i].get("date")
+        if d0 and d1 and d0 != d1:
+            sc = max(sc, 1.2)
+            why.append("a different day")
+        scores.append((i, sc, why))
+    # the strongest changes, at least a few images apart
+    gap = max(3, n // 60)
+    starts = [0]
+    for j, (i, sc, why) in enumerate(scores):
+        if sc < 1 or any(sc < x[1] for x in scores[max(0, j - gap):j + gap + 1]):
+            continue
+        if all(abs(i - s) >= gap for s in starts):
+            starts.append(i)
+    starts.sort()
+    # a few pages at the very end (credits, extras) aren't a chapter of their own
+    if len(starts) > 1 and n - starts[-1] < max(6, gap * 2):
+        starts.pop()
+    reasons = {i: why for i, sc, why in scores}
+    # titles: what the chapter has that the others don't
+    bounds = list(zip(starts, starts[1:] + [n]))
+    every_perf = set.intersection(*[common(perf, a, b) for a, b in bounds]) if bounds else set()
+    gallery_tags = Counter(t for s in tags for t in s)
+    # tags that group other tags ("Categories") don't describe anything
+    with contextlib.suppress(Exception):
+        for t in stash.call("{ findTags(tag_filter: {child_count: {value: 0, modifier: GREATER_THAN}}, filter: {per_page: -1}) "
+                            "{ tags { id } } }")["findTags"]["tags"]:
+            names.pop(t["id"], None)
+    labels = Counter(_folder_label(folders[a]) for a, _ in bounds)
+    out = []
+    for k, (a, b) in enumerate(bounds):
+        title = None
+        label = _folder_label(folders[a])
+        # a folder's name, when it's the only chapter from that folder
+        if label and labels[label] == 1 and len({folders[x] for x in range(a, b)}) == 1 and len({folders[x] for x, _ in bounds}) > 1:
+            title = label
+        if not title:
+            st = Counter(stems[a:b]).most_common(1)
+            if st and st[0][1] >= (b - a) * 0.6 and len(st[0][0]) >= 3 and not CHAPTER_GENERIC.match(st[0][0]):
+                title = st[0][0].title()
+        if not title:
+            ps = common(perf, a, b) - every_perf
+            if ps:
+                title = " & ".join(sorted(names.get(p, "") for p in ps)[:3])
+        if not title:
+            here = Counter(t for s in tags[a:b] for t in s)
+            stand = sorted(((m / (b - a)) / (gallery_tags[t] / n), t) for t, m in here.items()
+                           if t in names and m / (b - a) >= 0.5 and (m / (b - a)) / (gallery_tags[t] / n) >= 1.3
+                           and names.get(t, "").strip().lower() not in BODY_TAG_NAMES)
+            if stand:
+                title = " · ".join(names[t] for _, t in sorted(stand, reverse=True)[:2])
+        if not title:
+            s0 = mode(studio, a, b)
+            if s0 and len({mode(studio, x, y) for x, y in bounds}) > 1:
+                title = names.get("s" + s0)
+        out.append({"index": a + 1, "title": title or f"Part {k + 1}", "why": reasons.get(a, []) if a else ["the start"],
+                    "image": imgs[a]["id"], "count": b - a})
+    # (a comic, but the face helper can't read text: say so)
+    return {"chapters": out, "have": g["chapters"], "count": n, "images": [i["id"] for i in imgs], **({"no_reader": True} if is_comic and reader is False else {})}

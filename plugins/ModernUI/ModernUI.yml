@@ -1,6 +1,6 @@
 name: Modern UI
 description: Cleaner scene, performer, image, gallery, studio, group and tag cards, plus a mobile-friendly layout.
-version: "0.57"
+version: "0.58"
 ui:
   javascript:
     - modern-ui.js
@@ -8,6 +8,10 @@ ui:
     - modern-ui.css
 
 settings:
+  autoMute:
+    displayName: Scenes start muted
+    description: Every scene's video starts muted and stays muted until you unmute it (the speaker button, the volume slider or M). The next scene starts muted again.
+    type: BOOLEAN
   colorTheme:
     displayName: Colour theme
     description: "dark (default), light, or auto (follows your phone or computer's light/dark setting)"
@@ -23,6 +27,10 @@ settings:
   showOverlays:
     displayName: Show rating banner
     description: Bring back the rating ribbon on card thumbnails. (The studio name/logo always shows on desktop and is hidden on phones.)
+    type: BOOLEAN
+  hideDonate:
+    displayName: Hide the Donate button
+    description: Takes Stash's Donate (heart) button off the top bar and the phone's More menu. (Stash is free; if it's useful to you, consider supporting it at opencollective.com/stashapp.)
     type: BOOLEAN
   hideTitle:
     displayName: Hide titles

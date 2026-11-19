@@ -33,6 +33,11 @@ done
 SMALL="face_detection_yunet_2023mar.onnx face_recognition_sface_2021dec.onnx nudenet_320n.onnx"
 CLIP=clip_vit_b32_vision.onnx
 CLIP_URL="https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/main/onnx/vision_model.onnx"
+# CLIP's text half (quantized, about 65 MB) and its tokenizer: search by description
+CLIP_TEXT=clip_vit_b32_text_quantized.onnx
+CLIP_TEXT_URL="https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/main/onnx/text_model_quantized.onnx"
+CLIP_TOK=clip_tokenizer.json
+CLIP_TOK_URL="https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/main/tokenizer.json"
 
 # a model file is right if its checksum is the one in models/SHA256SUMS
 check() {
@@ -44,11 +49,16 @@ check() {
 mkdir -p "$DEST/models"
 cp "$HERE/face_helper.py" "$DEST/"
 "$PY" -m venv "$DEST/venv"
-"$DEST/venv/bin/pip" install -q opencv-python-headless numpy onnxruntime || {
+"$DEST/venv/bin/pip" install -q opencv-python-headless numpy onnxruntime tokenizers || {
   echo "Couldn't install the Python packages with $("$PY" --version). onnxruntime may not support it yet:"
   echo "install an older Python (e.g. brew install python@3.13) and run: PYTHON=python3.13 sh setup.sh"
   exit 1
 }
+# on a Mac: Apple's Vision too (comic chapter headings, clothing labels, hand
+# bra); not needed elsewhere
+if [ "$(uname)" = "Darwin" ]; then
+  "$DEST/venv/bin/pip" install -q pyobjc-framework-Vision pyobjc-framework-Quartz || echo "Note: couldn't install Apple's Vision (pyobjc); gallery chapters won't read comic pages and body tags won't use Apple's labels."
+fi
 
 SRC="${FROM:-$HERE/models}"
 for f in $SMALL; do
@@ -64,6 +74,15 @@ elif ! check "$DEST/models/$CLIP" "$CLIP"; then
   curl -sSLf -o "$DEST/models/$CLIP" "$CLIP_URL"
 fi
 check "$DEST/models/$CLIP" "$CLIP" || echo "Note: $CLIP isn't the checked version (it still works if it's a CLIP ViT-B/32 vision model)."
+# the text model and tokenizer (search by description): from --from, else downloaded
+for pair in "$CLIP_TEXT $CLIP_TEXT_URL" "$CLIP_TOK $CLIP_TOK_URL"; do
+  set -- $pair
+  if [ -n "$FROM" ] && [ -f "$FROM/$1" ]; then
+    cp "$FROM/$1" "$DEST/models/$1"
+  elif [ ! -s "$DEST/models/$1" ]; then
+    curl -sSLf -o "$DEST/models/$1" "$2" || echo "Note: couldn't download $1; search by description won't work."
+  fi
+done
 
 if [ "$(uname)" = "Darwin" ]; then
   PLIST="$HOME/Library/LaunchAgents/face-helper.plist"

@@ -86,7 +86,27 @@ html.pb-on.pb-titles:not(.pb-replace) :is(
   .mlt-rel-title,
   .file-info-panel .text-truncate,
   .scene-file-info,
-  .wall-item-text
+  .wall-item-text,
+  .scene-markers-panel .primary-card-body .row > .btn-link:first-child,
+  .scene-marker-card__scene,
+  .bta-quick-prev,
+  .bta-quick-name:not(:focus),
+  .bta-chapter-title:not(:focus),
+  .bta-search-title
+) {
+  filter: blur(var(--pb-text-blur)) !important;
+}
+
+/* With "Replace instead of blurring": what can't be swapped for a made-up
+   name - file names and paths, and the name box of a new marker (it would
+   save the made-up one) - is blurred instead (the box until you tap in it) */
+html.pb-on.pb-titles.pb-replace :is(
+  .file-info-panel .text-truncate,
+  .scene-file-info,
+  .scene-file-card .card-header .TruncatedText,
+  .bta-quick-name:not(:focus),
+  .bta-chapter-title:not(:focus),
+  .bta-search-title
 ) {
   filter: blur(var(--pb-text-blur)) !important;
 }
@@ -110,3 +130,26 @@ html.pb-on.pb-replace .pb-standin-host::after {
 }
 html.pb-on.pb-replace .pb-standin-host .vjs-control-bar,
 html.pb-on.pb-replace .pb-standin-host .vjs-big-play-button { z-index: 2; }
+
+/* ----- The floating Blur on / off button (Settings pages only) ----- */
+
+.pb-float {
+  position: fixed;
+  right: 16px;
+  bottom: 20px;
+  z-index: 1050;
+  padding: 0.55rem 1rem;
+  border: 0;
+  border-radius: 999px;
+  background: #374151;
+  color: #fff;
+  font-size: 0.95rem;
+  font-weight: 600;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+}
+.pb-float.on { background: #2563eb; }
+@media (max-width: 576px) {
+  /* above Modern UI's bottom bar on phones */
+  .pb-float { bottom: calc(76px + env(safe-area-inset-bottom, 0px)); }
+}

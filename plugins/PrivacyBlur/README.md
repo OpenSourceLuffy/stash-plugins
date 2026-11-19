@@ -11,6 +11,8 @@ Use it to take screenshots you can share, or to browse your library when other p
 
 - Go to **Settings → Plugins → Privacy Blur** and turn on **Blur on**. It takes effect straight away.
 - Or press **Shift + Alt + B** (Shift + Option + B on a Mac) on any page to flip the same switch.
+- Or, anywhere in **Settings**, tap the floating **Blur is on / Blur is off** button in the bottom right
+  (it only shows on Settings pages, so it's never on screen while you browse).
 
 The setting is saved in Stash, not in your browser, so turning it on blurs Stash on every device you
 use until you turn it off.

@@ -13,7 +13,7 @@
 
 /* ===== Shared card look ===== */
 
-body.mui :is(.scene-card, .performer-card, .image-card, .gallery-card,
+body.mui :is(.scene-card, .scene-marker-card, .performer-card, .image-card, .gallery-card,
              .studio-card, .group-card, .movie-card, .tag-card).grid-card {
   border: none;
   border-radius: var(--mui-radius);
@@ -24,7 +24,7 @@ body.mui :is(.scene-card, .performer-card, .image-card, .gallery-card,
 }
 
 @media (hover: hover) {
-  body.mui :is(.scene-card, .performer-card, .image-card, .gallery-card,
+  body.mui :is(.scene-card, .scene-marker-card, .performer-card, .image-card, .gallery-card,
                .studio-card, .group-card, .movie-card, .tag-card).grid-card:hover {
     transform: translateY(-3px);
     box-shadow: var(--mui-shadow-hover);
@@ -56,6 +56,7 @@ body.mui .grid-card .card-section-title h5 {
 
 body.mui:not(.mui-show-details) :is(
   .scene-card__details, .scene-card__date, .scene-card__description, .scene-card__path,
+  .scene-marker-card__details,
   .performer-card__age, .performer-card__country, .performer-card .card-section .text-muted,
   .gallery-card__details, .gallery-card__date, .gallery-card__description,
   .image-card__details,
@@ -138,7 +139,7 @@ body.mui.mui-hide-title .grid-card .thumbnail-section {
 
 /* ===== Scene thumbnail badges ===== */
 
-body.mui .scene-card .scene-specs-overlay span {
+body.mui :is(.scene-card, .scene-marker-card) .scene-specs-overlay span {
   background: rgba(0, 0, 0, 0.6);
   border-radius: 6px;
   padding: 1px 6px;
@@ -3814,3 +3815,285 @@ body.mui .mui-sel-info.mui-sel-below { display: none; }
   /* the picture's corner labels stay visible now */
   body.mui .grid-card:has(.mui-sel-below) :is(.scene-specs-overlay, .studio-overlay) { opacity: 1; }
 }
+
+
+/* ===================================================================
+   Marker cards (Markers page): the same look as scene cards - the
+   picture filling the top, the length in a pill, just the title (which
+   holds the time) under it.
+   =================================================================== */
+
+body.mui .scene-marker-card .scene-card-preview,
+body.mui .scene-marker-card .scene-card-preview.portrait {
+  aspect-ratio: 16 / 9;
+  width: 100%;
+  background: #000;
+}
+body.mui .scene-marker-card :is(.scene-card-preview-image, .scene-card-preview-video) {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: cover;
+}
+body.mui .scene-marker-card .card-section-title .TruncatedText {
+  -webkit-line-clamp: 2 !important;
+  white-space: normal;
+}
+body.mui .scene-marker-card .card-section-title {
+  white-space: normal;
+}
+
+@media (max-width: 576px) {
+  body.mui.mui-mobile .scene-marker-card .scene-specs-overlay {
+    display: none !important;
+  }
+  body.mui.mui-mobile .row.justify-content-center:has(> .scene-marker-card) {
+    gap: 6px;
+    padding: 0;
+    margin-left: -8px;
+    margin-right: -8px;
+  }
+  body.mui.mui-mobile .row.justify-content-center > .scene-marker-card.grid-card {
+    border-radius: 10px;
+  }
+  body.mui.mui-mobile .scene-marker-card .thumbnail-section {
+    border-radius: 10px 10px 0 0;
+  }
+  body.mui.mui-mobile .scene-marker-card .card-section {
+    padding: 0.4rem 0.5rem 0.5rem;
+  }
+}
+
+/* ===================================================================
+   A scene's Markers tab: pictures with just a small label (no tags over
+   them), and a compact list above.
+   =================================================================== */
+
+body.mui .scene-markers-panel .wall-item-text {
+  left: 6px !important;
+  right: auto !important;
+  bottom: 6px !important;
+  top: auto !important;
+  max-width: calc(100% - 12px);
+  width: auto !important;
+  height: auto !important;
+  padding: 1px 8px !important;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.6) !important;
+  color: #fff !important;
+  font-size: 0.8rem !important;
+  line-height: 1.5;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-shadow: none !important;
+}
+body.mui .scene-markers-panel .wall-item-text > div {
+  display: inline;
+  font-size: inherit !important;
+  font-weight: 600;
+}
+body.mui .scene-markers-panel .wall-tag {
+  display: none !important;
+}
+body.mui .scene-markers-panel .wall-item-container {
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+/* the list: one line per marker (title, time, Edit), no tag chips */
+body.mui .scene-markers-panel .primary-card .card-section.centered {
+  display: none !important;
+}
+body.mui .scene-markers-panel .primary-card {
+  border-radius: var(--mui-radius);
+  border: none;
+  box-shadow: var(--mui-shadow);
+}
+body.mui .scene-markers-panel .primary-card > h3 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin: 0.75rem 1rem 0;
+}
+body.mui .scene-markers-panel .primary-card-body {
+  padding: 0.25rem 1rem 0.75rem;
+}
+body.mui .scene-markers-panel .primary-card-body hr {
+  margin: 0.4rem 0;
+}
+body.mui .scene-markers-panel .primary-card-body .row {
+  flex-wrap: nowrap;
+  align-items: center;
+  margin: 0;
+}
+body.mui .scene-markers-panel .primary-card-body .row > .btn-link {
+  padding: 0.1rem 0;
+  font-size: 0.9rem;
+}
+body.mui .scene-markers-panel .primary-card-body .row > .btn-link:first-child {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+body.mui .scene-markers-panel .primary-card-body .row > .btn-link.ml-auto {
+  padding-left: 0.75rem;
+}
+body.mui .scene-markers-panel .primary-card-body .d-flex.align-items-center {
+  font-size: 0.8rem;
+  opacity: 0.65;
+}
+
+/* A scene's Markers tab: the pictures as one row in time order, like a
+   timeline - scroll sideways on a computer, swipe on a phone */
+body.mui .scene-markers-panel .wall {
+  display: flex !important;
+  flex-wrap: nowrap !important;
+  justify-content: flex-start !important;
+  gap: 8px;
+  margin: 0.5rem 0 0 !important;
+  padding: 0 0 8px !important;
+  width: 100% !important;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x proximity;
+  /* (the row sits in a full-width .row with negative margins: keep the
+     usual side gap at both ends) */
+  padding-left: 15px !important;
+  padding-right: 15px !important;
+  scroll-padding-left: 15px;
+}
+body.mui .scene-markers-panel .wall > .wall-item {
+  flex: 0 0 auto;
+  align-self: flex-start;
+  width: 220px !important;
+  max-width: none !important;
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  padding: 0 !important;
+  scroll-snap-align: start;
+}
+body.mui .scene-markers-panel .wall-item-container {
+  position: relative;
+  width: 100% !important;
+  height: auto !important;
+  aspect-ratio: 16 / 9;
+  transform: none !important;
+  background: #000;
+}
+body.mui .scene-markers-panel .wall-item-anchor,
+body.mui .scene-markers-panel .wall-item-media {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: cover;
+}
+@media (max-width: 576px) {
+  body.mui .scene-markers-panel .wall > .wall-item {
+    width: 44vw !important;
+  }
+}
+
+/* Under a scene's video: the markers' pictures in a row, like a timeline */
+body.mui .mui-detail-markers {
+  flex: 0 0 100%;
+  max-width: 100%;
+  min-width: 0;
+  margin: 6px 0 4px;
+  padding: 0 15px;
+}
+body.mui .mui-detail-markers { position: relative; }
+/* ‹ › on a computer: jump a screenful */
+body.mui .mui-detail-markers-arrow {
+  position: absolute;
+  top: 2px;
+  bottom: 8px;
+  width: 34px;
+  z-index: 2;
+  border: 0;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 1.6rem;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity 0.15s;
+  cursor: pointer;
+}
+body.mui .mui-detail-markers-arrow.prev { left: 15px; }
+body.mui .mui-detail-markers-arrow.next { right: 15px; }
+body.mui .mui-detail-markers:hover .mui-detail-markers-arrow:not(.off) { opacity: 0.9; }
+body.mui .mui-detail-markers-arrow.off { pointer-events: none; }
+@media (hover: none), (max-width: 576px) {
+  body.mui .mui-detail-markers-arrow { display: none; }
+}
+body.mui .mui-detail-markers-row {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  padding: 2px 0 6px;
+}
+@media (pointer: coarse) {
+  body.mui .mui-detail-markers-row { scroll-snap-type: x mandatory; }
+}
+body.mui .mui-detail-marker {
+  position: relative;
+  flex: 0 0 auto;
+  width: 150px;
+  aspect-ratio: 16 / 9;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #000;
+  scroll-snap-align: start;
+  cursor: pointer;
+  opacity: 0.85;
+  outline: 2px solid transparent;
+  outline-offset: -2px;
+  transition: opacity 0.15s, outline-color 0.15s;
+}
+body.mui .mui-detail-marker:hover { opacity: 1; }
+body.mui .mui-detail-marker.is-current {
+  opacity: 1;
+  outline-color: var(--mui-accent, #3b82f6);
+}
+body.mui .mui-detail-marker img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+body.mui .mui-detail-marker span {
+  position: absolute;
+  left: 4px;
+  bottom: 4px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+}
+@media (max-width: 576px) {
+  body.mui .mui-detail-markers { padding: 0 8px; }
+  body.mui .mui-detail-marker { width: 34vw; }
+}
+
+/* "Hide the Donate button": the top bar (both copies) and the phone's More menu */
+body.mui-hide-donate .nav-utility:has(> .donate),
+body.mui.mui-hide-donate .top-nav .navbar-buttons > a.nav-utility:has(> button.donate),
+body.mui-hide-donate .navbar-nav button.donate,
+body.mui.mui-hide-donate .top-nav .navbar-nav button.donate,
+body.mui-hide-donate a[data-key="donate"],
+body.mui-hide-donate .mui-edit-row[data-key="donate"] { display: none !important; }

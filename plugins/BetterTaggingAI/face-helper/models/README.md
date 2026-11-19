@@ -27,3 +27,5 @@ from move or go away. Each one is an unchanged copy of the original file (checke
 
 `sh setup.sh --from /path/to/backup` takes every model (CLIP included) from a folder with the same
 file names instead of downloading anything, e.g. a copy kept on a NAS.
+
+CLIP's text half (`clip_vit_b32_text_quantized.onnx`, about 65 MB) and `clip_tokenizer.json` (search by description) are downloaded by `setup.sh` from https://huggingface.co/Xenova/clip-vit-base-patch32 (MIT).

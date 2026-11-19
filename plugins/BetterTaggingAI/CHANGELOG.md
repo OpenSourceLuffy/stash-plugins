@@ -4,6 +4,100 @@ Newest first. Versions are what Stash shows under Settings → Plugins. The add-
 (`btt_core.py`) with [Better Organizing Tools](../BetterTaggingTools), so some versions only bring
 that plugin's changes.
 
+## 1.6 (2026-11-16)
+
+- A welcome on first run, with an optional tour of the features (screenshots in `tour/`), remind-me-later
+  and don't-show-again.
+- When something isn't set up, the welcome offers a step-by-step setup guide (screenshots, commands to
+  copy, the matching common problems, Check again) instead of the tour.
+- Features hide until what they need is installed (checked with the new capabilities request).
+- Fixed: the gallery Chapters button (and other page parts) could fail to appear on pages another
+  plugin kept changing; they now check at least every 150-200 ms.
+- **Search by description** (Search in Stash's menu): find photos, scenes and AI markers by describing
+  them, with CLIP's text model in the face helper (run `face-helper/setup.sh` again).
+  Better results: several wordings averaged, near-identical pictures once, at most two per scene, kind
+  filters that fill the page, deleted markers skipped, a note when nothing matches well, and a message
+  that names what's wrong when the face helper can't be reached.
+- **Pictures: aesthetic score and labels**: Apple's aesthetic score and picture labels for every photo,
+  saved as the custom fields `aesthetic` and `seen` (filterable in Stash); Review shows better-looking
+  photos first.
+- Fixed: a tag you removed from an item (or said No to in Review) could be added back to it by a later
+  task. Removals in Review → Check, No answers, and tags the add-on added that you took off anywhere are
+  now remembered per item and respected by every task and suggestion.
+- **Ass** also for clothed butts sticking out (from the photo's look), in body tags and the new quick
+  task **Body tags: clothing from the look (quick)**.
+- Review → Tags → Suggested also shows body tags the detector was nearly sure of, for items with 3 tags
+  or fewer (kept by the body tags task), so untagged photos get something to approve.
+- **Screenshots: crop to the photo** (with a preview and an undo): phone screenshots of posts are cut
+  down to the photo in them; the originals are kept in `screenshot-originals` in Stash's config folder.
+- Tag pictures and AI marker pictures are checked with Apple's aesthetics score on a Mac (face
+  helper): a blurry, dark or screenshot-like one is passed over for the next candidate (for a marker,
+  a frame 3 or 6 seconds on, or 2 or 4 seconds before it), and the best is used if none scores well.
+  New tasks **Pictures: replace blurry or dark tag pictures** and **Pictures: replace blurry, dark or
+  empty marker pictures** (with a preview) do the same for pictures tags and markers already have. A
+  marker picture with nobody in it (title card, logo, black frame) counts as a bad one.
+- Marker pictures from vertical scenes are cut to a wide picture around the people in them (faces kept
+  in) instead of being cropped in the middle by cards and the marker row.
+- Tag pictures: a decent photo is always used before a scene screenshot, marker or video frame, and
+  "Most typical picture" tries a tag's photos first.
+- Pose suggestions (in **Review → Tags → Suggested** for photos and **→ Markers** for markers) (Face Down Ass Up, All Fours, Frog Pose, Kneeling…, set
+  with **Poses: tags**) for photos and markers, learnt from at least 3 you've tagged with each: by body
+  shape (Apple's body pose, new task **Poses: read body poses**) and by look. No answers count against a
+  pose.
+- The face helper's Apple request reads phone photos the right way up (their rotation) and can give
+  each person's body joints.
+- On a Mac, body tags use Apple's Vision through the face helper (run `face-helper/setup.sh` again):
+  its picture classifier adds Woman's Heels, Boots, Sneakers, Socks, Shoes, Jeans, Glasses, Swimsuit /
+  Bikini, Mask, Gloves, Costume and Hat, and its hand and body pose add **Hand Bra** (fingers over a
+  breast, one person in the picture).
+- Body tags add clothing to photos: Lingerie, Panties, Thong, Bikini, Latex, Leather, Crop Top, Skirt,
+  Socks, Sneakers, Schoolgirl Outfit and Animal Ears (from the picture fingerprint, at a high bar; not on
+  drawings or comics), **Shoes** from covered feet, **Bikini** instead of Bra / Panties for a bikini, , **Topless** (bare breasts, covered
+  below) and **Nude** (bare breasts and below with nothing covered). Hands over the breasts no longer
+  count as a bra. (Hand Bra isn't added automatically: neither model can tell it from a nude photo.)
+- Body tags also add **Bra**, **Panties** and **Feet** (when you have those tags): covered breasts or
+  covered genitals with a bare belly (so a shirt or jeans don't count), and bare feet. A single photo
+  needs less to go on (0.05 over the bar, was 0.1), so a clearly shown part isn't missed. A body tag
+  run with nothing to do says why.
+- **Suggest chapters** on a gallery's Chapters tab: chapters where the gallery changes (folder, file
+  names, look, performers, studio, tags, date), with titles to edit before adding.
+  Comics (zip / cbz) get chapters from the chapter headings printed on their pages, or split after
+  each translator's credits page; this uses a new text reader in the face helper (Apple's, on a Mac:
+  run `face-helper/setup.sh` again).
+  Tap a suggested chapter's picture to choose its images (it grows or shrinks, and the chapters next to it
+  follow); added chapters are put away.
+- **Review → Tags → Markers**: tag suggestions for each marker, from its own look-alikes (never its own
+  scene) and the positions seen in it; markers you tag are learned from. Markers no longer get a copy of
+  their scene's tags.
+- **Review → Tags → Suggested** also suggests positions seen in a scene's video that it isn't tagged
+  with, with the moments they were seen (one card when look-alikes agree). Uses the Auto Seek plugin's model (it must be installed); run
+  **Positions in videos: look at scenes** first. Only the four positions it got right most often in
+  a test on tagged scenes are suggested, and nothing is tagged without you.
+- **AI markers** on a scene's page (**Markers → ✨ AI markers**): where the scene shifts, each with a
+  picture, as markers named by their time and the scene's title (tagged *Scene Shift*, or the tag in the new setting **Markers: tag for AI markers**) that run until the next shift; the
+  picture becomes the marker's picture, so it shows without running Generate.
+- Keeps a copy of Auto Seek's model, runtime and frame code in its own folder (`auto-seek-copy`), so
+  positions and AI markers keep working if Auto Seek is removed.
+- AI markers find shifts with picture fingerprints too (CLIP, from the face helper), comparing each
+  frame with its closest match so camera cuts don't count: they now catch changes in scenes the 10
+  positions don't cover, which the positions alone missed. Frames are kept per scene in `video_frames/`. The pictures are compared over the whole scene too (intros, interviews),
+  the scene's start gets a marker when the action starts later, and a marker over 12 minutes gets a second
+  look, so long scenes in one room no longer end up with a single marker.
+- **Create Marker** on a scene's page opens a quick panel: start from where the video is, suggested end
+  times (next marker, the next big changes, +1 min, end of scene), the name filled in, and the marker it
+  falls inside shortened to end there; with Undo. Stash's own form is a tap away.
+- Changing a marker's times (shortening the one a new marker falls inside, Undo, redoing markers) keeps
+  its picture: Stash deletes it whenever a marker's times change, so it's put back. Markers made or
+  moved in Stash's own form get their picture straight away too (no Generate needed).
+- A scene with only one or two AI markers is also split at regular times (every 2-6 minutes,
+  depending on its length), each moved to the biggest change near it. Redoing markers keeps the tags
+  you've given them.
+- Task **AI markers: redo with the newest method**: replaces existing AI markers (other markers are kept). A scene
+  that can't be looked at (the video or face helper busy) is tried again at the end, and any still left
+  are named in the log instead of quietly keeping their old markers.
+- Task **AI markers: scenes without markers** (and a preview): the same for every scene that has no
+  markers yet.
+
 ## 1.5 (2026-11-11)
 
 - Sub-tag cards have **⇅ Switch parent and sub-tag**, to put them the other way round (merging instead follows the switch too).
