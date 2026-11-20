@@ -4,6 +4,16 @@ Newest first. Versions are what Stash shows under Settings → Plugins. The add-
 (`btt_core.py`) with [Better Organizing Tools](../BetterTaggingTools), so some versions only bring
 that plugin's changes.
 
+## 1.6.1 (2026-11-20)
+
+- Fixed: on Windows (Stash running natively) every task and button stopped with
+  `ModuleNotFoundError: No module named 'fcntl'`. File locks now use `msvcrt` on Windows and `fcntl`
+  elsewhere, as before. Thanks to the user who reported it with a fix.
+- Fixed: checking whether the night timer runs no longer uses `os.kill(pid, 0)`, which on Windows ends
+  the process instead of checking it, and works without `/proc` (Stash running natively on a Mac).
+- Messages that ask you to do something first (e.g. "run Look-alike tags: scan scenes and images
+  first") are logged as a short info line instead of an error with a traceback.
+
 ## 1.6 (2026-11-16)
 
 - A welcome on first run, with an optional tour of the features (screenshots in `tour/`), remind-me-later
