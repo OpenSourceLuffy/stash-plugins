@@ -14,7 +14,6 @@ records (gallery-name tags, titles made from file names).
 """
 import base64
 import contextlib
-import fcntl
 import hashlib
 import heapq
 import http.client
@@ -30,6 +29,12 @@ import time
 import urllib.parse
 import urllib.request
 from collections import Counter, defaultdict
+
+try:  # file locks: fcntl on Linux / macOS, msvcrt on Windows
+    import fcntl
+except ImportError:
+    fcntl = None
+    import msvcrt
 
 BASE_ID = "BetterTaggingTools"   # the plugin without AI
 AI_ID = "BetterTaggingAI"        # the AI plugin
@@ -59,6 +64,11 @@ def log(level, msg):
 def progress(p):
     sys.stderr.write(f"\x01p\x02{min(max(p, 0.0), 1.0)}\n")
     sys.stderr.flush()
+
+
+class NotReady(RuntimeError):
+    """Something has to be done first (e.g. a scan): the entry scripts log it
+    as a short info line and hand the message back, without a traceback."""
 
 
 class Stash:
@@ -319,17 +329,103 @@ def count_one(stash, owner, kinds, oid):
 def locked_json(path):
     """Load a JSON dict under a lock, and save it back when done."""
     with open(path + ".lock", "w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+        _lock_file(lock)
         try:
-            with open(path) as f:
-                data = json.load(f)
-        except (OSError, ValueError):
-            data = {}
-        yield data
-        tmp = f"{path}.{os.getpid()}.tmp"  # (two requests at once mustn't share it)
-        with open(tmp, "w") as f:
-            json.dump(data, f, indent=1, sort_keys=True)
-        os.replace(tmp, path)
+            try:
+                with open(path) as f:
+                    data = json.load(f)
+            except (OSError, ValueError):
+                data = {}
+            yield data
+            tmp = f"{path}.{os.getpid()}.tmp"  # (two requests at once mustn't share it)
+            with open(tmp, "w") as f:
+                json.dump(data, f, indent=1, sort_keys=True)
+            _replace(tmp, path)
+        finally:
+            _unlock_file(lock)
+
+
+def _lock_file(handle):
+    """Wait for an exclusive lock on an open file (released by _unlock_file,
+    or when the process ends)."""
+    if fcntl is not None:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        return
+    while True:  # Windows: LK_LOCK gives up after about 10 s, so keep trying
+        try:
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+            return
+        except OSError:
+            time.sleep(0.2)
+
+
+def _unlock_file(handle):
+    with contextlib.suppress(OSError):
+        if fcntl is not None:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+        else:
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+
+
+def _replace(tmp, path):
+    """os.replace, which on Windows fails while someone else has the file
+    open for a moment (e.g. reading it): then try again for a few seconds."""
+    for attempt in range(50):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if os.name != "nt" or attempt == 49:
+                raise
+            time.sleep(0.1)
+
+
+def pid_running(pid, marker=None):
+    """Whether process `pid` is still running (and, with `marker`, whether
+    its command line contains it, where that can be checked). Never signals
+    it: on Windows os.kill(pid, 0) would end the process."""
+    if not pid or pid <= 0:
+        return False
+    if os.name == "nt":
+        import ctypes  # noqa: PLC0415
+        k32 = ctypes.windll.kernel32
+        h = k32.OpenProcess(0x1000, False, int(pid))  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            return False
+        try:
+            code = ctypes.c_ulong()
+            if not k32.GetExitCodeProcess(h, ctypes.byref(code)) or code.value != 259:  # STILL_ACTIVE
+                return False
+            if marker is None:
+                return True
+            # no command line without more privileges: settle for "a Python is running there"
+            buf = ctypes.create_unicode_buffer(1024)
+            size = ctypes.c_ulong(len(buf))
+            if k32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size)):
+                return "python" in os.path.basename(buf.value).lower()
+            return True
+        finally:
+            k32.CloseHandle(h)
+    try:
+        os.kill(pid, 0)
+    except PermissionError:
+        pass  # exists, owned by someone else
+    except OSError:
+        return False
+    if marker is None:
+        return True
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as f:  # Linux (Stash in Docker)
+            return marker.encode() in f.read()
+    except OSError:
+        pass
+    try:  # macOS and others without /proc
+        out = subprocess.run(["ps", "-o", "command=", "-p", str(pid)], capture_output=True, text=True, timeout=10)
+        return marker in out.stdout
+    except (OSError, subprocess.SubprocessError):
+        return True
 
 
 def locked_record(plugin_dir):
@@ -2537,7 +2633,7 @@ def _search_send_index(stash, cfg, plugin_dir, version):
                     vectors.append(ent["e"])
                     groups.append(f"scene:{scene_of[mid]}")
     if not keys:
-        raise RuntimeError('nothing to search yet - run "Look-alike tags: scan scenes and images" first')
+        raise NotReady('nothing to search yet - run "Look-alike tags: scan scenes and images" first')
     _search_post(cfg, "/index", {"name": SEARCH_INDEX, "version": version, "keys": keys, "vectors": vectors, "groups": groups})
 
 
@@ -4579,7 +4675,7 @@ def run_look_suggest(stash, plugin_dir, kind, item_id):
     _, excluded = tag_lookup(stash, cfg, plugin_dir)
     looks = load_look_index(stash, cfg, plugin_dir, excluded, quiet=True)
     if not looks:
-        raise RuntimeError("run the task \"Look-alike tags: scan scenes and images\" first (it needs the face helper)")
+        raise NotReady("run the task \"Look-alike tags: scan scenes and images\" first (it needs the face helper)")
     q = "findScene" if kind == "scene" else "findImage"
     item = stash.call(f"query($id: ID!) {{ {q}(id: $id) {{ {LOOK_ITEM_FIELDS[kind]} }} }}", {"id": str(item_id)})[q]
     scores = looks.for_item(stash, kind, item) or {}
@@ -4602,7 +4698,7 @@ def run_look_suggest_many(stash, plugin_dir, kind, ids):
     _, excluded = tag_lookup(stash, cfg, plugin_dir)
     looks = load_look_index(stash, cfg, plugin_dir, excluded, quiet=True)
     if not looks:
-        raise RuntimeError("run the task \"Look-alike tags: scan scenes and images\" first (it needs the face helper)")
+        raise NotReady("run the task \"Look-alike tags: scan scenes and images\" first (it needs the face helper)")
     q, f = ("findScenes", "scenes") if kind == "scene" else ("findImages", "images")
     ids = [str(i) for i in (ids or [])][:200]
     items = find_by_ids(stash, q, f, ids, LOOK_ITEM_FIELDS[kind])
@@ -5440,16 +5536,18 @@ def ensure_night_runner(stash, plugin_dir, cfg):
     with contextlib.suppress(OSError, ValueError):
         with open(files["pid"]) as f:
             pid = int(f.read().strip())
-        os.kill(pid, 0)  # still there
-        with open(f"/proc/{pid}/cmdline", "rb") as f:
-            if b"--night-runner" in f.read():
-                return
+        if pid_running(pid, "--night-runner"):  # still there
+            return
     script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "better_tagging_ai.py")
     if not os.path.exists(script):
         script = os.path.join(plugin_dir, "better_tagging_ai.py")
     with open(files["log"], "a") as logf:
+        # its own session (Linux / macOS) or process group without a window
+        # (Windows), so it outlives this task
+        extra = ({"creationflags": 0x00000200 | 0x08000000} if os.name == "nt"  # NEW_PROCESS_GROUP | NO_WINDOW
+                 else {"start_new_session": True})
         proc = subprocess.Popen([sys.executable, script, "--night-runner", plugin_dir], stdin=subprocess.DEVNULL,
-                                stdout=logf, stderr=logf, close_fds=True, start_new_session=True)
+                                stdout=logf, stderr=logf, close_fds=True, **extra)
     with open(files["pid"], "w") as f:  # straight away, so a second call sees it
         f.write(str(proc.pid))
 
@@ -6806,7 +6904,7 @@ def _tag_review_candidates(stash, cfg, plugin_dir, excluded, fresh=False):
                 return saved["found"], saved["names"]
     looks = LookIndex(stash, cfg, plugin_dir, excluded)
     if not looks.ready():
-        raise RuntimeError('not enough look-alikes yet - run "Look-alike tags: scan scenes and images" first')
+        raise NotReady('not enough look-alikes yet - run "Look-alike tags: scan scenes and images" first')
     keys = [k for k, ent in looks.cache.data.items() if ent.get("e")]
     pos = {k: i for i, k in enumerate(keys)}
     rows = {pos[r[0]]: r for r in looks.rows if r[0] in pos}
@@ -7122,7 +7220,7 @@ def run_new_performers(stash, plugin_dir, limit=30, skip=(), fresh=False):
                 known[pid] = embs
         cache = FaceCache(plugin_dir)
         if not cache.data:
-            raise RuntimeError('nothing is scanned yet - run "Faces: scan scenes and images" first')
+            raise NotReady('nothing is scanned yet - run "Faces: scan scenes and images" first')
 
         def drawn(key):
             x = items.get(key)
@@ -7627,7 +7725,7 @@ def run_face_review(stash, plugin_dir, performer=None, limit=40, skip=()):
         raise RuntimeError("no performer faces known yet - run \"Faces: learn performers' faces\"")
     cache = FaceCache(plugin_dir)
     if not cache.data:
-        raise RuntimeError('nothing is scanned yet - run "Faces: scan scenes and images" first')
+        raise NotReady('nothing is scanned yet - run "Faces: scan scenes and images" first')
     faces, where = [], []  # where: (item key, picture number)
     groups_of = {}  # item key -> how many pictures were looked at
     for key, entry in cache.data.items():
@@ -7941,7 +8039,7 @@ def run_face_lookalikes(stash, plugin_dir, performer_id, limit=80):
                            "(then run \"Faces: learn performers' faces\")")
     cache = FaceCache(plugin_dir)
     if not cache.data:
-        raise RuntimeError('nothing is scanned yet - run "Faces: scan scenes and images" first')
+        raise NotReady('nothing is scanned yet - run "Faces: scan scenes and images" first')
     have = set((index.get(pid) or {}).get("not", []))  # ones you said aren't them
     for kind, (query, field, farg) in (("scene", ("findScenes", "scenes", "scene_filter")),
                                        ("image", ("findImages", "images", "image_filter"))):
@@ -8624,7 +8722,7 @@ def run_studio_apply(stash, plugin_dir, action, data):
         if action == "add":
             name = clean_handle(data.get("name") or "") or (data.get("name") or "").strip()
             if not name:
-                raise RuntimeError("give it a name first")
+                raise NotReady("give it a name first")
             studios = stash.call("{ findStudios(filter: {per_page: -1}) { studios { id name aliases urls } } }")["findStudios"]["studios"]
             before = {st["id"] for st in studios}
             st, _ = studio_for_handle(stash, studios, data.get("platform") or None, name, True)
@@ -8728,7 +8826,7 @@ def _gallery_shares(stash, cfg, plugin_dir, images, fresh=False):
     cache = LookCache(plugin_dir)
     keys = [k for k in images if (cache.data.get(k) or {}).get("e")]
     if not keys:
-        raise RuntimeError('no photos have look-alike fingerprints yet - run "Look-alike tags: scan scenes and images" first')
+        raise NotReady('no photos have look-alike fingerprints yet - run "Look-alike tags: scan scenes and images" first')
     vecs = [cache.data[k]["e"] for k in keys]
     nn = look_knn(cfg, vecs, list(range(len(keys))), LOOK_K + 1)
     gal_of = [[g["id"] for g in images[k].get("galleries") or []] for k in keys]
@@ -8973,7 +9071,7 @@ def run_gallery_apply(stash, plugin_dir, action, data):
     if action == "gnew":
         title = (data.get("name") or "").strip()
         if not title:
-            raise RuntimeError("give it a name first")
+            raise NotReady("give it a name first")
         got = find_by_ids(stash, "findImages", "images", ids, "id")
         if not got:
             raise RuntimeError("those photos are gone")
@@ -9124,7 +9222,7 @@ def run_tag_groups(stash, plugin_dir, limit=30, skip=(), fresh=False):
         cache = LookCache(plugin_dir)
         keys = [k for k, v in cache.data.items() if v.get("e")]
         if not keys:
-            raise RuntimeError('nothing is scanned yet - run "Look-alike tags: scan scenes and images" first')
+            raise NotReady('nothing is scanned yet - run "Look-alike tags: scan scenes and images" first')
         try:
             res = face_cluster(cfg, [cache.data[k]["e"] for k in keys], threshold=TAG_GROUP_SAME, dim=512, center=True)
         except RuntimeError:
@@ -9442,7 +9540,7 @@ def run_tag_tidy_apply(stash, plugin_dir, action, data):
         if action == "tagnew":
             name = (data.get("name") or "").strip()
             if not name:
-                raise RuntimeError("give the tag a name first")
+                raise NotReady("give the tag a name first")
             got = stash.call("query($n: String!) { findTags(tag_filter: {name: {value: $n, modifier: EQUALS}}) { tags { id } } }",
                              {"n": name})["findTags"]["tags"]
             if got:
@@ -9743,8 +9841,7 @@ def run_diagnose(stash, plugin_dir):
             waiting = 0
         try:
             with open(os.path.join(plugin_dir, "night_runner.pid")) as f:
-                os.kill(int(f.read().strip()), 0)
-            alive = True
+                alive = pid_running(int(f.read().strip()), "--night-runner")
         except (OSError, ValueError):
             alive = False
         out.append(_check("Settings", "Tonight's run", "info" if alive or not waiting else "warn",
@@ -10830,7 +10927,7 @@ def _marker_tag_candidates(stash, cfg, plugin_dir, excluded, markers, ai_tag, fr
                 return saved["found"], saved["names"]
     looks = LookIndex(stash, cfg, plugin_dir, excluded)
     if not looks.ready():
-        raise RuntimeError('not enough look-alikes yet - run "Look-alike tags: scan scenes and images" first')
+        raise NotReady('not enough look-alikes yet - run "Look-alike tags: scan scenes and images" first')
     ml = marker_looks(stash, plugin_dir, markers)
     scene_of = {m["id"]: m["scene"]["id"] for m in markers}
     # what to learn from: your tagged scenes and photos, and your tagged markers

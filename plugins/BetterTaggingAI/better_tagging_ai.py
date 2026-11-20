@@ -263,6 +263,9 @@ def main():
             print(json.dumps({"output": c.run_title_ideas(stash, plugin_dir, args["kind"], args["id"], True)}))
         else:
             raise RuntimeError(f'unknown task "{mode}"')
+    except c.NotReady as e:  # something to do first (e.g. a scan): a short note, no traceback
+        c.log("info", f"Better Organizing AI Add-on: {e}")
+        print(json.dumps({"error": str(e)}))
     except Exception as e:
         c.log("error", f"Better Organizing AI Add-on failed: {e}")
         raise

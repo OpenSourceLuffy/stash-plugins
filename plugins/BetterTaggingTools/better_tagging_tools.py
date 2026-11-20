@@ -87,6 +87,9 @@ def main():
             c.run_all(stash, plugin_dir, dry_run=mode == "dryrun")
         else:
             raise RuntimeError(f'unknown task "{mode}" (AI tasks are in the Better Organizing AI plugin)')
+    except c.NotReady as e:  # something to do first (e.g. a scan): a short note, no traceback
+        c.log("info", f"Better Organizing Tools: {e}")
+        print(json.dumps({"error": str(e)}))
     except Exception as e:
         c.log("error", f"Better Organizing Tools failed: {e}")
         raise

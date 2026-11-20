@@ -31,7 +31,8 @@ service, or come with a fixed list of tags they were trained on. This add-on:
 
 - **Runs on a Mac (and any ordinary computer).** No special graphics card: it uses models that run
   well on Apple Silicon and on a normal processor (about 5 seconds a picture on an Apple M4). Linux
-  works too; on Windows, Ollama works but the face helper is untested.
+  works too, and so does Stash running natively on Windows (from 1.6.1); there the face helper is
+  set up by hand, as `setup.sh` doesn't run on Windows.
 - **Stays on your computer.** A small open model in Ollama and a tiny local helper; nothing is
   uploaded, nothing needs an account.
 - **Learns your tags, not someone else's.** It only ever picks from your own tag list, and learns
@@ -378,7 +379,8 @@ sh face-helper/setup.sh --from /backup/dir   # the same, with every model from a
 ```
 
 - **Needs** Python 3.10–3.14 (picked automatically, or `PYTHON=python3.13`) and `curl`. Mac and
-  Linux; Windows is untested.
+  Linux; on Windows, do the same steps by hand (a Python virtual environment, the packages, the
+  helper and the models).
 - **Installs** OpenCV, NumPy, ONNX Runtime and the models (about 650 MB) in
   `~/Library/Application Support/face-helper` (Mac) or `~/.local/share/face-helper` (Linux; or set
   `FACE_HELPER_DIR`). The small models come with the plugin in [`face-helper/models`](face-helper/models);

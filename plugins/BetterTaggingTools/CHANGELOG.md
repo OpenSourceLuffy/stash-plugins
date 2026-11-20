@@ -4,6 +4,16 @@ Newest first. Versions are what Stash shows under Settings → Plugins. Better O
 [Better Organizing AI Add-on](../BetterTaggingAI) share their code (`btt_core.py`), so some versions
 only bring the other plugin's changes.
 
+## 2.3.1 (2026-11-20)
+
+- Fixed: on Windows (Stash running natively) every task and button stopped with
+  `ModuleNotFoundError: No module named 'fcntl'`. File locks now use `msvcrt` on Windows and `fcntl`
+  elsewhere, as before. Thanks to the user who reported it with a fix.
+- Fixed: checking whether the night timer runs no longer uses `os.kill(pid, 0)`, which on Windows ends
+  the process instead of checking it, and works without `/proc` (Stash running natively on a Mac).
+- Messages that ask you to do something first (e.g. "run Look-alike tags: scan scenes and images
+  first") are logged as a short info line instead of an error with a traceback.
+
 ## 2.3 (2026-11-11)
 
 - Tag pictures skip blurry, dark and screenshot-like candidates when the AI add-on's face helper runs
