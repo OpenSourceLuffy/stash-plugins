@@ -1,6 +1,6 @@
 name: Better Organizing AI Add-on (local AI)
 description: Local AI for Stash - nothing leaves your computer. Tags scenes and images from your own tag list (checked against the items you've already tagged that look most alike), writes titles, recognises performers' faces, finds a scene's studio from the account in its watermark, adds body tags and hair / eye colour, and tidies up studios and galleries. A Review page to accept or undo suggestions with a swipe, "Ask AI" buttons while editing, and tasks for the whole library or new items. Runs on Ollama and a small local helper, on a Mac or any ordinary computer, with no NVIDIA graphics card or online service needed. An add-on for Better Organizing Tools that also works on its own.
-version: "1.6.1"
+version: "1.7"
 url: https://github.com/OpenSourceLuffy/stash-plugins/tree/main/plugins/BetterTaggingAI
 exec:
   - python
@@ -32,6 +32,10 @@ tasks:
     description: Checks everything the add-on needs (Ollama and the model, the face helper and its models, scans, settings, library access) and writes what's working and how to fix what isn't to the log. The page "AI setup & troubleshooting" (address /ai-setup, also linked above these tasks) shows the same with more help.
     defaultArgs:
       mode: diagnose_log
+  - name: "Nightly jobs: run now"
+    description: Runs the jobs chosen on the Nightly jobs page (address /ai-nightly, linked from the AI setup page) now instead of at the night time - Stash's own tasks (scan, auto tag, generate...) and plugin tasks, queued in order. How each one went shows on that page.
+    defaultArgs:
+      mode: nightly_jobs
   - name: "AI: run tonight's new items now"
     description: With "AI - wait until night for new items" on, new scenes and images get the quick steps right after a scan and wait for the AI model's steps (AI tags, studios from watermarks, AI titles) until the night time. This runs those now (it also runs by itself at night).
     defaultArgs:
@@ -241,7 +245,7 @@ settings:
     type: NUMBER
   faceHelperUrl:
     displayName: "Faces: helper address"
-    description: Where the face helper runs, as seen from Stash. Default http://host.docker.internal:11535 (the helper on the same computer as Stash's Docker container).
+    description: Where the face helper runs, as seen from Stash. Empty: http://host.docker.internal:11535 when Stash runs in Docker (the helper on the same computer), else http://127.0.0.1:11535.
     type: STRING
   aiAuto:
     displayName: "AI: tag new scenes and images automatically"
@@ -277,7 +281,7 @@ settings:
     type: STRING
   aiOllamaUrl:
     displayName: "AI: Ollama address"
-    description: Where Ollama runs, as seen from Stash. Default http://host.docker.internal:11434 (Ollama on the same computer as Stash's Docker container); use http://localhost:11434 if Stash isn't in Docker.
+    description: Where Ollama runs, as seen from Stash. Empty: http://host.docker.internal:11434 when Stash runs in Docker (Ollama on the same computer), else http://127.0.0.1:11434.
     type: STRING
   aiModel:
     displayName: "AI: model"
@@ -300,9 +304,13 @@ settings:
     description: Also AI-tag scenes and images you've marked as organized (they're skipped by default).
     type: BOOLEAN
   aiNightBody:
-    displayName: "AI: body tags every night"
-    description: At the night time (the night time setting below), run the body tags task for every scene and image not checked yet - ones with a body tag already are skipped, so after the first night it's quick. Works whether or not the AI tags new items. Needs the face helper's body-part model.
+    displayName: "AI: body tags every night (older setting)"
+    description: Now picked on the Nightly jobs page (address /ai-nightly) as the task "Body tags - scenes and images", with any other jobs you want each night. This switch only counts until that page is first saved.
     type: BOOLEAN
+  nightJobs:
+    displayName: "Nightly jobs (set on the Nightly jobs page)"
+    description: What runs each night, saved by the Nightly jobs page (address /ai-nightly) - easier to change there than here.
+    type: STRING
   aiLookSuggest:
     displayName: "AI: look-alike suggestions from (%)"
     description: On the edit page, "Tags from look-alikes" shows a tag when at least this share of the most alike items you've tagged have it. Default 20 - lower shows more (and more wrong ones); you choose what to add. The tasks only ever add tags at 50% or more.

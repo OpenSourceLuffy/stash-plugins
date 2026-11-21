@@ -4,6 +4,19 @@ Newest first. Versions are what Stash shows under Settings → Plugins. The add-
 (`btt_core.py`) with [Better Organizing Tools](../BetterTaggingTools), so some versions only bring
 that plugin's changes.
 
+## 1.7 (2026-11-21)
+
+- **Nightly jobs** page (`/ai-nightly`, 🌙 on the AI setup page): choose what runs every night - Stash's own
+  tasks (backup, scan, clean, identify, auto tag, generate, clean generated files, optimise) and any
+  plugin's tasks in your order - with Run them now and how last night's jobs went. Scan, Identify,
+  Auto Tag and Generate use the options chosen on Stash's Tasks page; Clean is skipped if a library
+  folder is missing or empty. New task: "Nightly jobs: run now".
+- "AI: body tags every night" is now one of the nightly jobs (it's carried over until the page is saved).
+- The night timer replaces itself when the add-on is updated, so new night code is used straight away.
+- With Stash running natively (not in Docker, e.g. on Windows), the Ollama and face helper addresses
+  default to this computer (`127.0.0.1`) instead of `host.docker.internal`. Set addresses are kept.
+- README: setting up the face helper on Windows (PowerShell steps, tested by a user on Windows 11).
+
 ## 1.6.1 (2026-11-20)
 
 - Fixed: on Windows (Stash running natively) every task and button stopped with

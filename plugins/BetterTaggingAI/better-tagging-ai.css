@@ -1961,3 +1961,19 @@ body:not(.mui-light) .bta-guide-shot { background: #202b33; }
 .bta-guide-caption { font-size: .75rem; opacity: .7; margin-top: 4px; text-align: center; }
 .bta-tour-foot { position: sticky; bottom: -20px; z-index: 1; background: inherit; padding: 10px 0 6px; }
 .bta-welcome .bta-tour, .bta-welcome .bta-tour-foot { background: inherit; }
+
+/* Nightly jobs page */
+.bta-night-row { display: flex; gap: .6rem; align-items: flex-start; padding: .45rem 0; cursor: pointer; margin: 0; }
+.bta-night-row input { margin-top: .3rem; flex: none; width: 1.1rem; height: 1.1rem; }
+.bta-night-row > span, .bta-night-name { display: flex; flex-direction: column; min-width: 0; }
+.bta-night-when { display: flex; flex-wrap: wrap; gap: .8rem; }
+.bta-night-when label { display: flex; flex-direction: column; gap: .25rem; margin: 0; min-width: 10rem; flex: 1 1 10rem; max-width: 18rem; }
+.bta-night-task { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .7rem; padding: .5rem 0; border-bottom: 1px solid rgba(128,128,128,.25); }
+.bta-night-task.missing { opacity: .6; }
+.bta-night-n { flex: none; width: 1.6rem; height: 1.6rem; border-radius: 50%; background: rgba(128,128,128,.25); display: inline-flex; align-items: center; justify-content: center; font-size: .85rem; }
+.bta-night-name { flex: 1 1 12rem; }
+.bta-night-btns { display: flex; flex-wrap: wrap; gap: .3rem; }
+.bta-night-sug { display: flex; flex-wrap: wrap; gap: .35rem; align-items: center; margin-top: .6rem; }
+.bta-night-save { position: sticky; bottom: 0; padding: .6rem 0; background: inherit; z-index: 2; flex-wrap: wrap; align-items: center; }
+.bta-night .bta-setup-tools.bta-night-save { background: var(--bs-body-bg, #202b33); }
+body.mui-light .bta-night .bta-setup-tools.bta-night-save { background: #fff; }

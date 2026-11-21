@@ -4,6 +4,12 @@ Newest first. Versions are what Stash shows under Settings → Plugins. Better O
 [Better Organizing AI Add-on](../BetterTaggingAI) share their code (`btt_core.py`), so some versions
 only bring the other plugin's changes.
 
+## 2.3.2 (2026-11-21)
+
+- Shared code updated for the AI add-on's nightly jobs.
+- With Stash running natively (not in Docker), the face helper address defaults to this computer
+  (`127.0.0.1`) instead of `host.docker.internal`.
+
 ## 2.3.1 (2026-11-20)
 
 - Fixed: on Windows (Stash running natively) every task and button stopped with

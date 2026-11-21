@@ -323,6 +323,23 @@ Turn on what you want in the settings: AI tags, AI titles, studios from watermar
 (file-name tags, look-alike tags, body tags, faces; about a second each) and the AI model's steps run
 once at **AI: night time** (default 03:00), so a big scan doesn't hold Stash up for hours.
 
+## Nightly jobs
+
+The **Nightly jobs** page (🌙 on the AI setup page, or the link above the add-on's tasks; address
+`/ai-nightly`) picks what runs every night at the night time, while you're not using Stash:
+
+- **Stash's own tasks**: back up the database, scan, clean (skipped if a library folder is missing or
+  empty that night, so an unmounted drive can't empty the library), identify, auto tag, generate,
+  clean generated files and optimise the database. Scan, Identify, Auto Tag and Generate use the
+  options you've chosen on Stash's Tasks page.
+- **Any plugin's tasks**, in the order you set (Up / Down): this add-on's scans, body tags, poses,
+  picture scores, AI markers, Better Organizing Tools' tasks, or another plugin's.
+
+They run in this order: backup, scan, clean, identify, auto tag, your plugin tasks, generate, clean
+generated, optimise - Stash runs one job at a time, so each waits for the one before. **Run them now**
+starts them straight away, and **Last run** shows how each one went (finished, failed with the
+error, skipped and why). New items saved for tonight are always done.
+
 ## On other pages
 
 - **Performer pages**: a **Faces** row, **Might also be in…**, lists scanned items where someone looks
@@ -379,8 +396,7 @@ sh face-helper/setup.sh --from /backup/dir   # the same, with every model from a
 ```
 
 - **Needs** Python 3.10–3.14 (picked automatically, or `PYTHON=python3.13`) and `curl`. Mac and
-  Linux; on Windows, do the same steps by hand (a Python virtual environment, the packages, the
-  helper and the models).
+  Linux; on Windows, see [On Windows](#on-windows) below.
 - **Installs** OpenCV, NumPy, ONNX Runtime and the models (about 650 MB) in
   `~/Library/Application Support/face-helper` (Mac) or `~/.local/share/face-helper` (Linux; or set
   `FACE_HELPER_DIR`). The small models come with the plugin in [`face-helper/models`](face-helper/models);
@@ -391,6 +407,51 @@ sh face-helper/setup.sh --from /backup/dir   # the same, with every model from a
   read them). Run the script again after updating the plugin.
 - **To remove it** on a Mac: `launchctl bootout gui/$(id -u)/face-helper`, then delete
   `~/Library/LaunchAgents/face-helper.plist` and the `face-helper` folder (and `ollama rm gemma3:4b`).
+
+#### On Windows
+
+`setup.sh` doesn't run on Windows, so the same steps are done by hand in PowerShell. These are the
+steps a user tested on Windows 11 with Stash running natively (Python 3.12, opencv-python-headless
+5.1, numpy 2.5, onnxruntime 1.32) - thank you! `<dest>` is any folder you like, and
+`<stash plugins folder>` is where Stash keeps its plugins.
+
+```powershell
+# 1. Folder and Python virtual environment
+New-Item -ItemType Directory -Force "<dest>\models" | Out-Null
+py -3.12 -m venv "<dest>\venv"
+& "<dest>\venv\Scripts\python.exe" -m pip install opencv-python-headless numpy onnxruntime tokenizers
+
+# 2. The helper and the three small models, from the plugin's face-helper folder
+$src = "<stash plugins folder>\BetterTaggingAI\face-helper"
+Copy-Item "$src\face_helper.py" "<dest>"
+Copy-Item "$src\models\face_detection_yunet_2023mar.onnx", "$src\models\face_recognition_sface_2021dec.onnx", "$src\models\nudenet_320n.onnx" "<dest>\models"
+
+# 3. The CLIP picture model (about 335 MB)
+curl.exe -L -o "<dest>\models\clip_vit_b32_vision.onnx" https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/main/onnx/vision_model.onnx
+
+# 4. For Search by description: CLIP's text model (about 65 MB) and its tokenizer
+curl.exe -L -o "<dest>\models\clip_vit_b32_text_quantized.onnx" https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/main/onnx/text_model_quantized.onnx
+curl.exe -L -o "<dest>\models\clip_tokenizer.json" https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/main/tokenizer.json
+
+# 5. Start it, without a console window
+Start-Process -FilePath "<dest>\venv\Scripts\pythonw.exe" -ArgumentList "`"<dest>\face_helper.py`"" -WorkingDirectory "<dest>" -WindowStyle Hidden
+
+# 6. Check it: should answer with "ok": true
+Invoke-WebRequest http://127.0.0.1:11535/health -UseBasicParsing | Select-Object -ExpandProperty Content
+```
+
+- The helper finds its models in the `models` folder next to `face_helper.py`, so that layout is all
+  it needs.
+- To check the models against [`SHA256SUMS`](face-helper/models/SHA256SUMS):
+  `Get-FileHash <file> -Algorithm SHA256`.
+- Step 4 and the `tokenizers` package are only for **Search by description**; they came after the
+  steps above were tested, so tell us how they go. Without them, everything else works and Search
+  stays hidden.
+- To start it at login, put a shortcut in your Startup folder (`Win + R`, `shell:startup`) whose
+  target is the command from step 5: `"<dest>\venv\Scripts\pythonw.exe" "<dest>\face_helper.py"`.
+- With Stash running natively (not in Docker), the add-on looks for Ollama at
+  `http://127.0.0.1:11434` and the helper at `http://127.0.0.1:11535` by itself (from 1.7). On
+  older versions, set those two addresses in the add-on's settings.
 
 ### 3. First runs
 
@@ -478,7 +539,8 @@ Under **Settings → Plugins → Better Organizing AI Add-on (local AI)**:
 | AI: most tags per item | Default 6. |
 | AI: don't auto tag from file names first | Skip the file-name matching before the AI looks at an item. |
 | AI: include organized items | Also AI-tag items marked as organized. |
-| AI: body tags every night | At night, run body tags for everything not checked yet. |
+| AI: body tags every night (older setting) | Now chosen on the Nightly jobs page; only counts until that page is first saved. |
+| Nightly jobs | Saved by the Nightly jobs page (`/ai-nightly`); easier to change there. |
 | AI: look-alike suggestions from (%) | Edit page "Tags from look-alikes" cut-off (default 20). The tasks only add at 50%+. |
 | AI: skip items with more tags than | Items with more tags (default 5) skip the AI model; body tags still run. 0 never skips. |
 | AI: wait until night for new items | New items get the quick steps after a scan; the AI model's steps wait for the night. |
