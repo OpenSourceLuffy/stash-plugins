@@ -3738,7 +3738,7 @@ def ai_settings(s):
         except (TypeError, ValueError):
             return default
     return {
-        "url": (s.get("aiOllamaUrl") or "http://host.docker.internal:11434").rstrip("/"),
+        "url": (s.get("aiOllamaUrl") or f"http://{_default_host()}:11434").rstrip("/"),
         "model": (s.get("aiModel") or "gemma3:4b").strip(),
         "vocab_size": num("aiTagCount", 250, 10),
         "max_tags": num("aiMaxTags", 6, 1),
@@ -3757,7 +3757,7 @@ def ai_settings(s):
         "tag_kinds": item_kinds(s.get("aiTagKinds")),
         "title_kinds": item_kinds(s.get("aiTitleKinds")),
         "autotag_first": not s.get("aiNoAutoTag"),
-        "face_url": (s.get("faceHelperUrl") or "http://host.docker.internal:11535").rstrip("/"),
+        "face_url": (s.get("faceHelperUrl") or f"http://{_default_host()}:11535").rstrip("/"),
         "face_auto": bool(s.get("faceAutoAssign")),
         # cosine likeness of two face fingerprints (SFace): about 0.36 and up
         # is usually the same person
@@ -3769,7 +3769,46 @@ def ai_settings(s):
         "night_body": bool(s.get("aiNightBody")),
         "night_time": _clock(s.get("aiNightTime"), "03:00"),
         "time_zone": (s.get("aiTimeZone") or os.environ.get("TZ") or "UTC").strip(),
+        # the Nightly jobs page: Stash's tasks and plugin tasks to run each night
+        "night_jobs": _night_jobs_setting(s),
     }
+
+
+_IN_DOCKER = None
+
+
+def _default_host():
+    """Where Ollama and the face helper are when their address isn't set:
+    the computer running Docker from inside a container, else this computer
+    (Stash running natively - e.g. on Windows or a Mac)."""
+    global _IN_DOCKER
+    if _IN_DOCKER is None:
+        _IN_DOCKER = os.path.exists("/.dockerenv")
+        if not _IN_DOCKER:
+            with contextlib.suppress(OSError):
+                with open("/proc/1/cgroup") as f:
+                    _IN_DOCKER = any(x in f.read() for x in ("docker", "containerd", "kubepods"))
+    return "host.docker.internal" if _IN_DOCKER else "127.0.0.1"
+
+
+def _night_jobs_setting(s):
+    """The jobs chosen on the Nightly jobs page ({"stash": [...], "tasks":
+    [{"plugin", "task"}]}). Before the page was first saved: what the older
+    settings asked for (new items' AI steps, body tags)."""
+    raw = s.get("nightJobs")
+    if raw:
+        with contextlib.suppress(ValueError, TypeError):
+            d = json.loads(raw) if isinstance(raw, str) else raw
+            stash_jobs = [j for j in d.get("stash") or [] if j in STASH_NIGHT_JOBS]
+            tasks = [{"plugin": t["plugin"], "task": t["task"]} for t in d.get("tasks") or []
+                     if isinstance(t, dict) and t.get("plugin") and t.get("task")]
+            return {"stash": stash_jobs, "tasks": tasks, "saved": True}
+    tasks = []
+    if s.get("aiNightly"):
+        tasks.append({"plugin": AI_ID, "task": NIGHT_TASK})
+    if s.get("aiNightBody"):
+        tasks.append({"plugin": AI_ID, "task": NIGHT_BODY_TASK})
+    return {"stash": [], "tasks": tasks, "saved": False}
 
 
 def _clock(value, default):
@@ -5482,15 +5521,13 @@ def run_night(stash, plugin_dir):
     """Task: the AI model steps for the new items saved for tonight."""
     cfg = settings(stash, plugin_dir)
     ai = cfg["ai"]
-    if ai["nightly"] or ai["night_body"]:
+    if night_wanted(cfg):
         ensure_night_runner(stash, plugin_dir, cfg)  # e.g. after Stash restarted
     with locked_night(plugin_dir) as night:
         todo = {"scene": list(night.get("scenes", [])), "image": list(night.get("images", []))}
     n = len(todo["scene"]) + len(todo["image"])
     if not n:
         log("info", "No new items waiting for the AI.")
-        if ai["night_body"]:
-            run_night_body(stash, plugin_dir, cfg)
         return
     log("info", f"Tonight's AI run: {len(todo['scene'])} scene(s), {len(todo['image'])} image(s)")
     if ai["auto"] or ai["new_all"]:
@@ -5504,24 +5541,344 @@ def run_night(stash, plugin_dir):
     with locked_night(plugin_dir) as night:  # items added while this ran stay for next time
         for kind in ("scene", "image"):
             night[kind + "s"] = [i for i in night.get(kind + "s", []) if i not in todo[kind]]
-    if ai["night_body"]:
-        run_night_body(stash, plugin_dir, cfg)
     log("info", "Tonight's AI run is done.")
 
 
-def run_night_body(stash, plugin_dir, cfg):
-    """Night run: the body tags task for everything not checked yet (items
-    with a body tag already are skipped). Needs the face helper's body
-    model; without it, this is skipped with a note."""
-    if not body_ready(cfg):
-        log("warning", "Body tags tonight skipped: the face helper isn't running or has no body-part model.")
+# --- nightly jobs ------------------------------------------------------------
+# The Nightly jobs page (/ai-nightly) picks what runs each night: Stash's own
+# tasks (scan, auto tag, generate...) and any plugin's tasks. At the night time
+# the night runner starts the task "Nightly jobs: run now", which queues them
+# all in Stash's job queue - Stash runs one job at a time, so they run in this
+# order - and starts a small tracker that records how each one went
+# (night_jobs_last.json, shown on the page). Stash's tasks use the options
+# saved as defaults on Stash's own Tasks page.
+
+NIGHT_JOBS_TASK = "Nightly jobs: run now"
+NIGHT_BODY_TASK = "Body tags: scenes and images"
+NIGHT_LAST = "night_jobs_last.json"
+
+# id: (label, what it does, when it runs: "before" the plugin tasks or "after")
+STASH_NIGHT_JOBS = {
+    "backup": ("Back up the database", "A copy of Stash's database in its backup folder (before anything else runs).", "before"),
+    "scan": ("Scan for new files", "Stash's Scan of the whole library, with the scan options saved on Stash's Tasks page.", "before"),
+    "clean": ("Clean: remove missing files", "Removes scenes, images and galleries whose files are gone. Skipped if a library folder "
+              "is missing or empty that night (e.g. the NAS isn't mounted), so nothing is removed by mistake.", "before"),
+    "identify": ("Identify from StashDB / scrapers", "Stash's Identify with the sources and options saved on Stash's Tasks "
+                 "page. Skipped if none are set up.", "before"),
+    "autotag": ("Auto Tag", "Performers, studios and tags from file names (Stash's Auto Tag, your saved options).", "before"),
+    "generate": ("Generate", "Previews, sprites, covers, phashes and so on - what's ticked under Generate on Stash's Tasks page.", "after"),
+    "clean_generated": ("Clean generated files", "Deletes generated files (previews, sprites, thumbnails...) that nothing uses any more.", "after"),
+    "optimise": ("Optimise the database", "Tidies Stash's database so it stays quick (last, when nothing else runs).", "after"),
+}
+STASH_NIGHT_ORDER = ["backup", "scan", "clean", "identify", "autotag", "generate", "clean_generated", "optimise"]
+
+# offered on the page as a start (this add-on's tasks that suit the night)
+NIGHT_SUGGESTED = [NIGHT_TASK, "Look-alike tags: scan scenes and images", "Faces: scan scenes and images",
+                   NIGHT_BODY_TASK, "Poses: read body poses", "Pictures: aesthetic score and labels",
+                   "Tag pictures: most typical one for tags without a picture", "AI markers: scenes without markers"]
+
+
+def night_wanted(cfg):
+    """Whether the night runner has anything to do."""
+    nj = cfg["ai"]["night_jobs"]
+    return bool(cfg["ai"]["nightly"] or nj["stash"] or nj["tasks"])
+
+
+_TYPES = {}
+
+
+def _gql_type(stash, name):
+    """A GraphQL type's fields (output) or input fields: {name: (kind, type name)}."""
+    if name not in _TYPES:
+        q = ("query($n: String!) { __type(name: $n) { kind fields { name type { kind name ofType { kind name "
+             "ofType { kind name ofType { kind name } } } } } inputFields { name type { kind name ofType { kind name "
+             "ofType { kind name ofType { kind name } } } } } } }")
+        t = stash.call(q, {"n": name})["__type"] or {}
+        out = {}
+        for f in (t.get("fields") or t.get("inputFields") or []):
+            ty = f["type"]
+            while ty.get("ofType"):
+                ty = ty["ofType"]
+            out[f["name"]] = (ty["kind"], ty["name"])
+        _TYPES[name] = out
+    return _TYPES[name]
+
+
+def _selection(stash, type_name, depth=0):
+    parts = []
+    for name, (kind, tname) in _gql_type(stash, type_name).items():
+        if kind == "OBJECT":
+            if depth < 4:
+                sub = _selection(stash, tname, depth + 1)
+                if sub:
+                    parts.append(f"{name} {{ {sub} }}")
+        else:
+            parts.append(name)
+    return " ".join(parts)
+
+
+def _as_input(stash, value, input_type):
+    """A saved-defaults value (output type) shaped as the matching input type:
+    only the fields the input has, nested ones too, no empty values."""
+    if isinstance(value, list):
+        return [_as_input(stash, v, input_type) for v in value]
+    if not isinstance(value, dict):
+        return value
+    fields = _gql_type(stash, input_type)
+    out = {}
+    for k, v in value.items():
+        if v is None or k not in fields:
+            continue
+        kind, tname = fields[k]
+        out[k] = _as_input(stash, v, tname) if kind == "INPUT_OBJECT" else v
+    return out
+
+
+def stash_defaults(stash, which):
+    """The options chosen on Stash's Tasks page, as task input: which =
+    scan / autoTag / generate / identify (fields the input doesn't have are
+    left out, so it works across Stash versions)."""
+    out_type = {"scan": "ScanMetadataOptions", "autoTag": "AutoTagMetadataOptions",
+                "generate": "GenerateMetadataOptions", "identify": "IdentifyMetadataTaskOptions"}[which]
+    in_type = {"scan": "ScanMetadataInput", "autoTag": "AutoTagMetadataInput",
+               "generate": "GenerateMetadataInput", "identify": "IdentifyMetadataInput"}[which]
+    # Stash's Tasks page keeps its checkboxes in the UI settings
+    # (ui.taskDefaults); older ones / Identify also in configuration.defaults
+    ui = stash.call("{ configuration { ui } }")["configuration"].get("ui") or {}
+    d = ((ui.get("taskDefaults") or {}) if isinstance(ui, dict) else {}).get(which)
+    if not d:
+        sel = _selection(stash, out_type)
+        d = stash.call(f"{{ configuration {{ defaults {{ {which} {{ {sel} }} }} }} }}")["configuration"]["defaults"][which]
+    return _as_input(stash, d or {}, in_type)
+
+
+def _library_folders_ok(stash):
+    """Every library folder there and not empty (else: the folder that isn't)."""
+    for s in stash.call("{ configuration { general { stashes { path } } } }")["configuration"]["general"]["stashes"] or []:
+        p = s["path"]
+        try:
+            with os.scandir(p) as it:
+                if next(it, None) is None:
+                    return False, p
+        except OSError:
+            return False, p
+    return True, ""
+
+
+def _start_stash_job(stash, job):
+    """Queue one of Stash's tasks: (job id or None, note)."""
+    if job == "scan":
+        i = stash_defaults(stash, "scan")
+        return stash.call("mutation($i: ScanMetadataInput!) { metadataScan(input: $i) }", {"i": i})["metadataScan"], ""
+    if job == "clean":
+        ok, where = _library_folders_ok(stash)
+        if not ok:
+            return None, f"skipped: the library folder {where} is missing or empty tonight"
+        return stash.call("mutation { metadataClean(input: {dryRun: false}) }")["metadataClean"], ""
+    if job == "identify":
+        i = stash_defaults(stash, "identify")
+        if not i.get("sources"):
+            return None, "skipped: no Identify sources are set up (Stash → Settings → Tasks → Identify)"
+        return stash.call("mutation($i: IdentifyMetadataInput!) { metadataIdentify(input: $i) }", {"i": i})["metadataIdentify"], ""
+    if job == "autotag":
+        i = stash_defaults(stash, "autoTag") or {}
+        if not any(i.get(k) for k in ("performers", "studios", "tags")):
+            i = dict(i, performers=["*"], studios=["*"], tags=["*"])
+        return stash.call("mutation($i: AutoTagMetadataInput!) { metadataAutoTag(input: $i) }", {"i": i})["metadataAutoTag"], ""
+    if job == "generate":
+        i = stash_defaults(stash, "generate")
+        if isinstance(i.get("previewOptions"), dict):
+            # 0 / empty there means "not set": leave them out so Stash uses
+            # the preview settings from its main settings
+            i["previewOptions"] = {k: v for k, v in i["previewOptions"].items() if v not in (0, "", None)}
+        if not any(v for v in i.values() if v is True):
+            return None, "skipped: nothing is ticked under Generate on Stash's Tasks page"
+        return stash.call("mutation($i: GenerateMetadataInput!) { metadataGenerate(input: $i) }", {"i": i})["metadataGenerate"], ""
+    if job == "clean_generated":
+        fields = _gql_type(stash, "CleanGeneratedInput")
+        i = {k: True for k, (kind, _) in fields.items() if kind == "SCALAR" and k != "dryRun"}
+        if "dryRun" in fields:
+            i["dryRun"] = False
+        return stash.call("mutation($i: CleanGeneratedInput!) { metadataCleanGenerated(input: $i) }", {"i": i})["metadataCleanGenerated"], ""
+    if job == "optimise":
+        return stash.call("mutation { optimiseDatabase }")["optimiseDatabase"], ""
+    raise ValueError(job)
+
+
+def run_nightly_jobs(stash, plugin_dir):
+    """Task "Nightly jobs: run now": queue tonight's jobs in order, then start
+    the tracker that records how they went."""
+    cfg = settings(stash, plugin_dir)
+    nj = cfg["ai"]["night_jobs"]
+    if night_wanted(cfg):
+        ensure_night_runner(stash, plugin_dir, cfg)
+    tasks = list(nj["tasks"])
+    # new items saved for tonight are always done, even if not picked
+    with contextlib.suppress(OSError, ValueError):
+        with open(os.path.join(plugin_dir, "ai_night.json")) as f:
+            night = json.load(f)
+        if (night.get("scenes") or night.get("images")) and not any(
+                t["plugin"] == AI_ID and t["task"] == NIGHT_TASK for t in tasks):
+            tasks.insert(0, {"plugin": AI_ID, "task": NIGHT_TASK})
+    chosen = set(nj["stash"])
+    plan = ([("stash", j) for j in STASH_NIGHT_ORDER if j in chosen and STASH_NIGHT_JOBS[j][2] == "before"]
+            + [("task", t) for t in tasks]
+            + [("stash", j) for j in STASH_NIGHT_ORDER if j in chosen and STASH_NIGHT_JOBS[j][2] == "after"])
+    if not plan:
+        log("info", "Nightly jobs: nothing is chosen (pick them on the Nightly jobs page).")
         return
-    log("info", "Body tags for everything not checked yet...")
-    run_body(stash, plugin_dir)
+    plugins = stash.call("{ plugins { id name enabled tasks { name } } }")["plugins"]
+    installed = {p["id"]: {t["name"] for t in p.get("tasks") or []} for p in plugins if p.get("enabled")}
+    names = {p["id"]: p["name"] for p in plugins}
+    rows = []
+    for kind, j in plan:
+        row = {"kind": kind, "label": STASH_NIGHT_JOBS[j][0] if kind == "stash" else f"{j['task']} ({names.get(j['plugin'], j['plugin'])})",
+               "status": "queued", "job": None, "note": ""}
+        try:
+            if kind == "stash" and j == "backup":
+                path = stash.call("mutation { backupDatabase(input: {download: false}) }")["backupDatabase"]
+                row.update(status="finished", note=f"saved {os.path.basename(path or '')}".strip())
+            elif kind == "stash":
+                row["job"], row["note"] = _start_stash_job(stash, j)
+                if row["job"] is None:
+                    row["status"] = "skipped"
+            elif j["task"] not in installed.get(j["plugin"], set()):
+                row.update(status="skipped", note="that plugin or task isn't installed / turned on any more")
+            else:
+                row["job"] = stash.call("mutation($p: ID!, $t: String!) { runPluginTask(plugin_id: $p, task_name: $t) }",
+                                        {"p": j["plugin"], "t": j["task"]})["runPluginTask"]
+        except Exception as e:  # one job failing to start mustn't stop the rest
+            row.update(status="failed", note=f"couldn't start: {str(e)[:200]}")
+        rows.append(row)
+        log("info", f"Nightly jobs: {row['label']} - {row['status']}" + (f" ({row['note']})" if row["note"] else ""))
+    with locked_json(os.path.join(plugin_dir, NIGHT_LAST)) as last:
+        last.clear()
+        last.update(started=time.strftime("%Y-%m-%dT%H:%M:%S%z"), jobs=rows, done=not any(r["job"] for r in rows))
+    if any(r["job"] for r in rows):
+        _spawn_self(plugin_dir, "--night-track")
+    log("info", f"Nightly jobs: {sum(1 for r in rows if r['job'])} queued; Stash runs them one after another.")
+
+
+def _spawn_self(plugin_dir, flag):
+    """Start better_tagging_ai.py <flag> <plugin_dir> in the background (it
+    outlives this task)."""
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "better_tagging_ai.py")
+    if not os.path.exists(script):
+        script = os.path.join(plugin_dir, "better_tagging_ai.py")
+    extra = ({"creationflags": 0x00000200 | 0x08000000} if os.name == "nt" else {"start_new_session": True})
+    with open(_night_files(plugin_dir)["log"], "a") as logf:
+        return subprocess.Popen([sys.executable, script, flag, plugin_dir], stdin=subprocess.DEVNULL,
+                                stdout=logf, stderr=logf, close_fds=True, **extra)
+
+
+def night_track_main(plugin_dir):
+    """Background: follow the queued nightly jobs until each one finishes,
+    and note how it went. Stash keeps only its last few finished jobs, so it
+    checks every 15 s."""
+    with open(_night_files(plugin_dir)["json"]) as f:
+        stash = Stash(json.load(f)["conn"])
+    path = os.path.join(plugin_dir, NIGHT_LAST)
+    give_up = time.time() + 20 * 3600
+    final = {"FINISHED": "finished", "FAILED": "failed", "CANCELLED": "stopped"}
+    while time.time() < give_up:
+        with locked_json(path) as last:
+            pending = [r for r in last.get("jobs", []) if r.get("job") and r["status"] in ("queued", "running")]
+            for r in pending:
+                try:
+                    j = stash.call("query($i: ID!) { findJob(input: {id: $i}) { status error startTime endTime } }",
+                                   {"i": str(r["job"])})["findJob"]
+                except Exception:
+                    j = None
+                if j is None:
+                    if r["status"] == "running":  # gone before we saw it end
+                        r["status"] = "finished"
+                        r["note"] = r.get("note") or "finished (its result wasn't recorded)"
+                    continue
+                if j["status"] in final:
+                    r["status"] = final[j["status"]]
+                    if j.get("error"):
+                        r["note"] = j["error"][:300]
+                    r["ended"] = j.get("endTime")
+                elif j["status"] in ("RUNNING", "STOPPING"):
+                    r["status"] = "running"
+                    r["began"] = j.get("startTime")
+            if not any(r.get("job") and r["status"] in ("queued", "running") for r in last.get("jobs", [])):
+                last["done"] = True
+                last["ended"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+                return
+        time.sleep(15)
+
+
+def run_nightly_info(stash, plugin_dir):
+    """For the Nightly jobs page: the choices, what's installed, the next run
+    and how the last one went."""
+    from datetime import datetime, timedelta  # noqa: PLC0415
+    cfg = settings(stash, plugin_dir)
+    ai = cfg["ai"]
+    nxt = None
+    with contextlib.suppress(Exception):
+        from zoneinfo import ZoneInfo  # noqa: PLC0415
+        tz = ZoneInfo(ai["time_zone"])
+        now = datetime.now(tz)
+        hh, mm = (int(x) for x in ai["night_time"].split(":"))
+        at = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+        nxt = (at if at > now else at + timedelta(days=1)).isoformat()
+    try:
+        with open(os.path.join(plugin_dir, NIGHT_LAST)) as f:
+            last = json.load(f)
+    except (OSError, ValueError):
+        last = None
+    try:
+        with open(_night_files(plugin_dir)["pid"]) as f:
+            alive = pid_running(int(f.read().strip()), "--night-runner")
+    except (OSError, ValueError):
+        alive = False
+    try:
+        with open(os.path.join(plugin_dir, "ai_night.json")) as f:
+            night = json.load(f)
+        waiting = len(night.get("scenes") or []) + len(night.get("images") or [])
+    except (OSError, ValueError):
+        waiting = 0
+    return {"time": ai["night_time"], "tz": ai["time_zone"], "next": nxt, "runner": alive, "waiting": waiting,
+            "nightly_items": ai["nightly"], "chosen": ai["night_jobs"], "last": last,
+            "stash_jobs": [{"id": k, "label": STASH_NIGHT_JOBS[k][0], "about": STASH_NIGHT_JOBS[k][1],
+                            "when": STASH_NIGHT_JOBS[k][2]} for k in STASH_NIGHT_ORDER],
+            "suggested": [{"plugin": AI_ID, "task": t} for t in NIGHT_SUGGESTED]}
+
+
+def run_nightly_save(stash, plugin_dir, data):
+    """Save the Nightly jobs page: jobs, night time and time zone (merged into
+    the add-on's settings, which Stash replaces as a whole)."""
+    data = data or {}
+    stash_jobs = [j for j in data.get("stash") or [] if j in STASH_NIGHT_JOBS]
+    tasks = [{"plugin": str(t["plugin"]), "task": str(t["task"])} for t in data.get("tasks") or []
+             if isinstance(t, dict) and t.get("plugin") and t.get("task")]
+    cur = (stash.call("{ configuration { plugins } }")["configuration"]["plugins"] or {}).get(AI_ID) or {}
+    new = dict(cur, nightJobs=json.dumps({"stash": stash_jobs, "tasks": tasks}))
+    if data.get("time"):
+        new["aiNightTime"] = _clock(data["time"], cur.get("aiNightTime") or "03:00")
+    if data.get("tz"):
+        from zoneinfo import ZoneInfo  # noqa: PLC0415
+        try:
+            ZoneInfo(str(data["tz"]).strip())
+        except Exception:
+            raise NotReady(f'"{data["tz"]}" isn\'t a time zone Stash knows - e.g. America/New_York or Europe/London') from None
+        new["aiTimeZone"] = str(data["tz"]).strip()
+    new.pop("aiNightBody", None)  # (now a nightly job of its own)
+    stash.call("mutation($id: ID!, $i: Map!) { configurePlugin(plugin_id: $id, input: $i) }", {"id": AI_ID, "i": new})
+    cfg = settings(stash, plugin_dir)
+    if night_wanted(cfg):
+        ensure_night_runner(stash, plugin_dir, cfg)
+    return run_nightly_info(stash, plugin_dir)
+
+
+# bumped when the night runner's code changes: a runner started with older
+# code is replaced (Python keeps running the code it started with)
+NIGHT_RUNNER_VERSION = 2
 
 
 def _night_files(plugin_dir):
-    return {k: os.path.join(plugin_dir, "night_runner." + k) for k in ("json", "pid", "log")}
+    return {k: os.path.join(plugin_dir, "night_runner." + k) for k in ("json", "pid", "log", "version")}
 
 
 def ensure_night_runner(stash, plugin_dir, cfg):
@@ -5530,13 +5887,16 @@ def ensure_night_runner(stash, plugin_dir, cfg):
     files = _night_files(plugin_dir)
     tmp = files["json"] + ".tmp"
     with open(tmp, "w") as f:
+        nj = cfg["ai"]["night_jobs"]
         json.dump({"conn": stash.conn, "time": cfg["ai"]["night_time"], "tz": cfg["ai"]["time_zone"],
-                   "plugin_id": AI_ID, "task": NIGHT_TASK, "body": cfg["ai"]["night_body"]}, f)
+                   "plugin_id": AI_ID, "task": NIGHT_JOBS_TASK, "jobs": bool(nj["stash"] or nj["tasks"])}, f)
     os.replace(tmp, files["json"])
     with contextlib.suppress(OSError, ValueError):
         with open(files["pid"]) as f:
             pid = int(f.read().strip())
-        if pid_running(pid, "--night-runner"):  # still there
+        with open(files["version"]) as f:
+            current = f.read().strip() == str(NIGHT_RUNNER_VERSION)
+        if current and pid_running(pid, "--night-runner"):  # still there, up to date
             return
     script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "better_tagging_ai.py")
     if not os.path.exists(script):
@@ -5559,6 +5919,8 @@ def night_runner_main(plugin_dir):
     files = _night_files(plugin_dir)
     with open(files["pid"], "w") as f:
         f.write(str(os.getpid()))
+    with open(files["version"], "w") as f:
+        f.write(str(NIGHT_RUNNER_VERSION))
 
     def say(msg):
         print(time.strftime("%Y-%m-%d %H:%M:%S"), msg, flush=True)
@@ -5596,13 +5958,13 @@ def night_runner_main(plugin_dir):
                     night = json.load(f)
             except (OSError, ValueError):
                 night = {}
-            if night.get("scenes") or night.get("images") or conf.get("body"):
+            if night.get("scenes") or night.get("images") or conf.get("jobs"):
                 stash = Stash(conf["conn"])
                 job = stash.call("mutation($p: ID!, $t: String!) { runPluginTask(plugin_id: $p, task_name: $t) }",
-                                 {"p": conf["plugin_id"], "t": conf["task"]})
-                say(f"started tonight's AI run (job {job.get('runPluginTask')})")
+                                 {"p": conf["plugin_id"], "t": conf.get("task") or NIGHT_JOBS_TASK})
+                say(f"started tonight's jobs (job {job.get('runPluginTask')})")
             else:
-                say("nothing waiting tonight")
+                say("nothing to do tonight")
             time.sleep(90)
         except Exception as e:
             say(f"problem: {e}; trying again in 10 minutes")
@@ -9833,7 +10195,7 @@ def run_diagnose(stash, plugin_dir):
                          ("faces added automatically", ai["face_auto"]), ("wait until night", ai["nightly"])) if v]
     out.append(_check("Settings", "After a scan", "info", ("On: " + ", ".join(on)) if on else "Nothing runs by itself after a scan.",
                       "" if on else "Turn on the ones you want under Settings → Plugins → Better Organizing AI Add-on."))
-    if ai["nightly"]:
+    if night_wanted(cfg):
         try:
             with open(os.path.join(plugin_dir, "ai_night.json")) as f:
                 waiting = sum(len(v) for v in (json.load(f) or {}).values() if isinstance(v, list))
@@ -9845,7 +10207,7 @@ def run_diagnose(stash, plugin_dir):
         except (OSError, ValueError):
             alive = False
         out.append(_check("Settings", "Tonight's run", "info" if alive or not waiting else "warn",
-                          f"{waiting} item(s) waiting for {ai['night_time']} ({ai['time_zone']}); the night timer is {'running' if alive else 'not running'}.",
+                          f"{waiting} item(s) waiting for {ai['night_time']} ({ai['time_zone']}), {len(ai['night_jobs']['stash']) + len(ai['night_jobs']['tasks'])} nightly job(s) chosen; the night timer is {'running' if alive else 'not running'}.",
                           "" if alive or not waiting else "Stash was probably restarted. It starts again with the next scan, or run "
                           "\"AI: run tonight's new items now\" to do them straight away."))
     env = _stash_environment()

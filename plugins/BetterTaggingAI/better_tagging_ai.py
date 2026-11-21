@@ -32,6 +32,9 @@ def main():
     if sys.argv[1:2] == ["--night-runner"]:  # the background process for tonight's run
         c.night_runner_main(sys.argv[2])
         return
+    if sys.argv[1:2] == ["--night-track"]:  # follows tonight's queued jobs, notes how they went
+        c.night_track_main(sys.argv[2])
+        return
     payload = json.loads(sys.stdin.read())
     conn = payload.get("server_connection", {})
     stash = c.Stash(conn)
@@ -45,7 +48,7 @@ def main():
     # every night" was just turned on, or Stash restarted)
     try:
         cfg = c.settings(stash, plugin_dir)
-        if cfg["ai"]["night_body"] or cfg["ai"]["nightly"]:
+        if c.night_wanted(cfg):
             c.ensure_night_runner(stash, plugin_dir, cfg)
     except Exception:
         pass
@@ -259,6 +262,12 @@ def main():
             c.run_performer_details(stash, plugin_dir, preview=True, limit=10)
         elif mode == "perf_details_one":
             print(json.dumps({"output": c.run_performer_details_one(stash, plugin_dir, args["id"])}))
+        elif mode == "nightly_jobs":
+            c.run_nightly_jobs(stash, plugin_dir)
+        elif mode == "nightly_info":
+            print(json.dumps({"output": c.run_nightly_info(stash, plugin_dir)}))
+        elif mode == "nightly_save":
+            print(json.dumps({"output": c.run_nightly_save(stash, plugin_dir, args.get("data"))}))
         elif mode == "title_ideas":
             print(json.dumps({"output": c.run_title_ideas(stash, plugin_dir, args["kind"], args["id"], True)}))
         else:

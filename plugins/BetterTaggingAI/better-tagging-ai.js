@@ -904,7 +904,16 @@
     };
     // tasks: before the first of our task groups
     const first = document.querySelector('.bt-task-group[data-group="ai-night"], .bt-task-group[data-group^="ai-"]');
-    if (first && !document.querySelector('.bta-setup-link[data-where="tasks"]')) first.parentElement.insertBefore(make("tasks"), first);
+    if (first && !document.querySelector('.bta-setup-link[data-where="tasks"]')) {
+      first.parentElement.insertBefore(make("tasks"), first);
+      const n = document.createElement("a");
+      n.href = "/ai-nightly";
+      n.className = "bta-setup-link";
+      n.dataset.where = "tasks-night";
+      n.innerHTML = '<span aria-hidden="true">🌙</span> <b>Nightly jobs</b><span> - pick which tasks (Stash\'s and plugins\') run every night</span>';
+      n.addEventListener("click", (e) => { e.preventDefault(); goTo("/ai-nightly"); });
+      first.parentElement.insertBefore(n, first);
+    }
     // plugins: under our plugin's name
     if (/[?&]tab=plugins/.test(location.search) && !document.querySelector('.bta-setup-link[data-where="plugins"]')) {
       // the plugin's row (its name) at the top of its collapsible group
@@ -3345,7 +3354,8 @@
       h("h2", null, "AI setup & troubleshooting"),
       h("p", { className: "bta-setup-sub" }, "Checks everything the Better Organizing AI Add-on needs. Nothing is changed. ",
         h("button", { type: "button", className: "btn btn-secondary btn-sm", onClick: () => { refreshCaps(true); tourBus.open && tourBus.open(); } }, "Show the welcome tour"), " ",
-        h("button", { type: "button", className: "btn btn-secondary btn-sm", onClick: () => { refreshCaps(true); tourBus.setup && tourBus.setup(); } }, "Setup guide")),
+        h("button", { type: "button", className: "btn btn-secondary btn-sm", onClick: () => { refreshCaps(true); tourBus.setup && tourBus.setup(); } }, "Setup guide"), " ",
+        h("button", { type: "button", className: "btn btn-secondary btn-sm", onClick: () => goTo(NIGHTLY_PAGE) }, "🌙 Nightly jobs")),
       res.state === "loading" && h("div", { className: "bta-setup-banner" }, "Checking…"),
       res.state === "error" && h("div", { className: "bta-setup-banner fail" }, "The checks couldn't run: " + res.message),
       res.state === "done" && h("div", { className: "bta-setup-banner " + (bad ? "fail" : warn ? "warn" : "ok") },
@@ -3769,9 +3779,151 @@
       st.items.length > 0 && h("div", { className: "bta-search-grid" }, st.items.map(card)));
   }
 
+  // ---- Nightly jobs page (/ai-nightly) ----------------------------------
+  // What runs each night: Stash's own tasks (backup, scan, clean, identify,
+  // auto tag, generate...) and any plugin's tasks, in order. Saved in the
+  // add-on's settings; at the night time the night timer queues them all and
+  // a tracker notes how each went (shown under "Last run").
+  const NIGHTLY_PAGE = "/ai-nightly";
+  const NIGHT_ICON = { finished: ["✓", "ok"], failed: ["✕", "fail"], stopped: ["■", "warn"], skipped: ["–", "info"],
+    queued: ["…", "info"], running: ["▶", "info"] };
+  function NightlyPage() {
+    const [info, setInfo] = React.useState(null);
+    const [err, setErr] = React.useState("");
+    const [draft, setDraft] = React.useState(null);
+    const [dirty, setDirty] = React.useState(false);
+    const [msg, setMsg] = React.useState("");
+    const [busy, setBusy] = React.useState(false);
+    const [all, setAll] = React.useState([]);
+    const [pick, setPick] = React.useState("");
+    const load = React.useCallback((keepDraft) => ask({ mode: "nightly_info" }).then((d) => {
+      setInfo(d);
+      if (!keepDraft) {
+        setDraft({ stash: d.chosen.stash.slice(), tasks: d.chosen.tasks.map((t) => ({ ...t })), time: d.time, tz: d.tz });
+        setDirty(false);
+      }
+    }).catch((e) => setErr(e.message)), []);
+    React.useEffect(() => {
+      load(false);
+      gql("{ plugins { id name enabled tasks { name description } } }").then((d) => setAll((d.plugins || []).filter((p) => p.enabled && (p.tasks || []).length))).catch(() => {});
+    }, []);
+    // while last night's jobs are still going: refresh their status
+    React.useEffect(() => {
+      if (!info || !info.last || info.last.done) return undefined;
+      const t = setInterval(() => load(true), 15000);
+      return () => clearInterval(t);
+    }, [info && info.last && info.last.done]);
+    if (err) return h("div", { className: "bta-setup" }, h("h2", null, "Nightly jobs"), h("div", { className: "bta-setup-banner fail" }, "Couldn't load: " + err));
+    if (!info || !draft) return h("div", { className: "bta-setup" }, h("h2", null, "Nightly jobs"), h("div", { className: "bta-setup-banner" }, "Loading…"));
+    const change = (fn) => { setDraft((d) => fn({ ...d, stash: d.stash.slice(), tasks: d.tasks.slice() })); setDirty(true); setMsg(""); };
+    const taskKey = (t) => t.plugin + "\u0001" + t.task;
+    const have = new Set(draft.tasks.map(taskKey));
+    const pluginName = (id) => ((all.find((p) => p.id === id) || {}).name) || id;
+    const taskInfo = (t) => ((all.find((p) => p.id === t.plugin) || { tasks: [] }).tasks.find((x) => x.name === t.task));
+    const installed = (t) => !!taskInfo(t);
+    async function save() {
+      setBusy(true); setMsg("");
+      try {
+        const d = await ask({ mode: "nightly_save", data: draft });
+        setInfo(d); setDirty(false); setMsg("Saved.");
+        return true;
+      } catch (e) { setMsg("Couldn't save: " + e.message); return false; } finally { setBusy(false); }
+    }
+    async function runNow() {
+      if (dirty && !(await save())) return;
+      setBusy(true);
+      try {
+        await gql("mutation ($p: ID!, $t: String!) { runPluginTask(plugin_id: $p, task_name: $t) }", { p: PLUGIN_ID, t: "Nightly jobs: run now" });
+        setMsg("Started - they're queued in Stash's task list; the results show below as they finish.");
+        setTimeout(() => load(true), 4000);
+      } catch (e) { setMsg("Couldn't start: " + e.message); } finally { setBusy(false); }
+    }
+    const before = info.stash_jobs.filter((j) => j.when === "before");
+    const after = info.stash_jobs.filter((j) => j.when === "after");
+    const stashRow = (j) => h("label", { key: j.id, className: "bta-night-row" },
+      h("input", { type: "checkbox", checked: draft.stash.includes(j.id),
+        onChange: (e) => change((d) => ({ ...d, stash: e.target.checked ? [...d.stash, j.id] : d.stash.filter((x) => x !== j.id) })) }),
+      h("span", null, h("span", { className: "bta-setup-title" }, j.label), h("span", { className: "bta-setup-detail" }, j.about)));
+    const move = (i, by) => change((d) => { const t = d.tasks; const [x] = t.splice(i, 1); t.splice(i + by, 0, x); return d; });
+    const last = info.last;
+    const next = info.next ? new Date(info.next) : null;
+    const count = draft.stash.length + draft.tasks.length;
+    return h("div", { className: "bta-setup bta-night" },
+      h("h2", null, "Nightly jobs"),
+      h("p", { className: "bta-setup-sub" }, "Pick what runs every night. Stash runs one job at a time, so they run in the order below - while you sleep instead of while you use Stash. ",
+        h("a", { href: SETUP_PAGE, onClick: (e) => { e.preventDefault(); goTo(SETUP_PAGE); } }, "Back to AI setup")),
+      h("div", { className: "bta-setup-banner " + (count || info.waiting ? (info.runner ? "ok" : "warn") : "") },
+        count ? `${count} job${count > 1 ? "s" : ""} chosen` : "Nothing chosen yet",
+        h("small", null, (next ? `Next run: ${next.toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })} (${info.time} ${info.tz})` : `At ${info.time} (${info.tz})`) +
+          (count || info.waiting ? (info.runner ? " · the night timer is running" : " · the night timer starts when you save") : "") +
+          (info.waiting ? ` · ${info.waiting} new item(s) waiting for the AI` : ""))),
+      h("section", { className: "bta-setup-group" },
+        h("h3", null, "When"),
+        h("div", { className: "bta-night-when" },
+          h("label", null, h("span", { className: "bta-setup-title" }, "Time"),
+            h("input", { type: "time", className: "form-control", value: draft.time, onChange: (e) => change((d) => ({ ...d, time: e.target.value })) })),
+          h("label", null, h("span", { className: "bta-setup-title" }, "Time zone"),
+            h("input", { type: "text", className: "form-control", value: draft.tz, placeholder: "e.g. America/New_York", spellCheck: false,
+              onChange: (e) => change((d) => ({ ...d, tz: e.target.value })) })))),
+      h("section", { className: "bta-setup-group" },
+        h("h3", null, "1. Stash's tasks, first"),
+        h("div", { className: "bta-setup-detail" }, "Scan, Identify, Auto Tag and Generate use the options saved as defaults on ",
+          h("a", { href: "/settings?tab=tasks" }, "Stash's Tasks page"), "."),
+        before.map(stashRow)),
+      h("section", { className: "bta-setup-group" },
+        h("h3", null, "2. Plugin tasks, in this order"),
+        info.nightly_items && h("div", { className: "bta-setup-detail" }, "\"AI: wait until night for new items\" is on: new items saved for tonight are always done, even if that task isn't in the list."),
+        draft.tasks.length === 0 && h("div", { className: "bta-setup-detail" }, "None yet - add some below."),
+        draft.tasks.map((t, i) => h("div", { key: taskKey(t), className: "bta-night-task" + (installed(t) || !all.length ? "" : " missing") },
+          h("span", { className: "bta-night-n" }, i + 1),
+          h("span", { className: "bta-night-name" }, h("span", { className: "bta-setup-title" }, t.task),
+            h("span", { className: "bta-setup-detail" }, pluginName(t.plugin) + (installed(t) || !all.length ? "" : " - not installed or turned off: skipped"))),
+          h("span", { className: "bta-night-btns" },
+            h("button", { type: "button", className: "btn btn-secondary btn-sm", disabled: i === 0, onClick: () => move(i, -1) }, "↑ Up"),
+            h("button", { type: "button", className: "btn btn-secondary btn-sm", disabled: i === draft.tasks.length - 1, onClick: () => move(i, 1) }, "↓ Down"),
+            h("button", { type: "button", className: "btn btn-secondary btn-sm", onClick: () => change((d) => ({ ...d, tasks: d.tasks.filter((_, k) => k !== i) })) }, "✕ Remove")))),
+        h("div", { className: "bta-setup-run" },
+          h("select", { className: "form-control", value: pick, onChange: (e) => setPick(e.target.value), "aria-label": "Task to add" },
+            h("option", { value: "" }, "Add a task from any plugin…"),
+            all.map((p) => h("optgroup", { key: p.id, label: p.name },
+              p.tasks.filter((t) => !have.has(p.id + "\u0001" + t.name)).map((t) => h("option", { key: t.name, value: p.id + "\u0001" + t.name }, t.name))))),
+          h("button", { type: "button", className: "btn btn-primary", disabled: !pick, onClick: () => {
+            const [plugin, task] = pick.split("\u0001");
+            change((d) => ({ ...d, tasks: [...d.tasks, { plugin, task }] })); setPick("");
+          } }, "+ Add")),
+        pick && h("div", { className: "bta-setup-detail" }, (taskInfo({ plugin: pick.split("\u0001")[0], task: pick.split("\u0001")[1] }) || {}).description || ""),
+        (() => {
+          const sug = info.suggested.filter((t) => !have.has(taskKey(t)) && installed(t));
+          return sug.length > 0 && h("div", { className: "bta-night-sug" }, h("span", { className: "bta-setup-detail" }, "Good at night: "),
+            sug.map((t) => h("button", { key: t.task, type: "button", className: "btn btn-secondary btn-sm",
+              onClick: () => change((d) => ({ ...d, tasks: [...d.tasks, t] })) }, "+ " + t.task)));
+        })()),
+      h("section", { className: "bta-setup-group" },
+        h("h3", null, "3. Stash's tasks, last"),
+        after.map(stashRow)),
+      h("div", { className: "bta-setup-tools bta-night-save" },
+        h("button", { type: "button", className: "btn btn-primary", disabled: busy || !dirty, onClick: save }, dirty ? "Save" : "✓ Saved"),
+        h("button", { type: "button", className: "btn btn-secondary", disabled: busy || !count, onClick: runNow }, "▶ Run them now"),
+        dirty && h("button", { type: "button", className: "btn btn-link", disabled: busy, onClick: () => load(false) }, "Undo changes"),
+        msg && h("span", { className: "bta-setup-detail" }, msg)),
+      h("section", { className: "bta-setup-group" },
+        h("h3", null, "Last run"),
+        !last ? h("div", { className: "bta-setup-detail" }, "Hasn't run yet.") : h("div", null,
+          h("div", { className: "bta-setup-detail" }, `Started ${new Date(last.started.replace(/([+-]\d\d)(\d\d)$/, "$1:$2")).toLocaleString()}` +
+            (last.done ? (last.ended ? ` · all done ${new Date(last.ended.replace(/([+-]\d\d)(\d\d)$/, "$1:$2")).toLocaleString()}` : " · done") : " · still going (updates every 15 s)")),
+          last.jobs.map((r, i) => {
+            const [icon, st] = NIGHT_ICON[r.status] || ["?", "info"];
+            return h("div", { key: i, className: "bta-setup-check " + st },
+              h("span", { className: "bta-setup-icon" }, icon),
+              h("div", null, h("div", { className: "bta-setup-title" }, r.label),
+                h("div", { className: "bta-setup-detail" }, r.status[0].toUpperCase() + r.status.slice(1) + (r.note ? " - " + r.note : ""))));
+          }))));
+  }
+
   if (api.register && api.register.route) {
     api.register.route(SEARCH_PAGE, AISearch);
     api.register.route(SETUP_PAGE, SetupPage);
+    api.register.route(NIGHTLY_PAGE, NightlyPage);
     api.register.route(REVIEW_PATH, FaceReview);
     api.register.route(REVIEW_PAGE, FaceReview);
     // a "Review" item in Stash's menu (Modern UI's More panel picks it up)
