@@ -450,7 +450,7 @@ Invoke-WebRequest http://127.0.0.1:11535/health -UseBasicParsing | Select-Object
 - To start it at login, put a shortcut in your Startup folder (`Win + R`, `shell:startup`) whose
   target is the command from step 5: `"<dest>\venv\Scripts\pythonw.exe" "<dest>\face_helper.py"`.
 - With Stash running natively (not in Docker), the add-on looks for Ollama at
-  `http://127.0.0.1:11434` and the helper at `http://127.0.0.1:11535` by itself (from 1.7). On
+  `http://127.0.0.1:11434` and the helper at `http://127.0.0.1:11535` by itself (from 1.7.1). On
   older versions, set those two addresses in the add-on's settings.
 
 ### 3. First runs

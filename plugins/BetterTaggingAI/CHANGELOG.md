@@ -4,6 +4,13 @@ Newest first. Versions are what Stash shows under Settings → Plugins. The add-
 (`btt_core.py`) with [Better Organizing Tools](../BetterTaggingTools), so some versions only bring
 that plugin's changes.
 
+## 1.7.1 (2026-11-23)
+
+- Fixed: 1.7 didn't load ("yaml: line 248: mapping values are not allowed in this context"): two
+  setting descriptions with a colon in them weren't quoted. Every plugin's YAML is now checked before
+  the repository is published, so a file Stash can't read can't go out again. Thanks to the user who
+  reported it with the fix.
+
 ## 1.7 (2026-11-21)
 
 - **Nightly jobs** page (`/ai-nightly`, 🌙 on the AI setup page): choose what runs every night - Stash's own
