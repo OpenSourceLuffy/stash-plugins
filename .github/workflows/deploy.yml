@@ -23,6 +23,25 @@ jobs:
       uses: actions/checkout@v6
       with:
         fetch-depth: '0'
+    # a plugin file Stash can't read would break the plugin for everyone who
+    # updates: stop here instead of publishing it
+    - name: Check every plugin's YAML
+      run: |
+        pip install --quiet pyyaml
+        python3 - <<'EOF'
+        import glob, sys, yaml
+        bad = 0
+        for f in sorted(glob.glob("plugins/**/*.yml", recursive=True)):
+            try:
+                d = yaml.safe_load(open(f, encoding="utf-8"))
+                if not isinstance(d, dict) or not d.get("name"):
+                    raise ValueError("no name: at the top level")
+                print("ok  ", f)
+            except Exception as e:
+                bad += 1
+                print(f"::error file={f}::{e}")
+        sys.exit(1 if bad else 0)
+        EOF
     - run: |
         chmod +x build_site.sh
         ./build_site.sh _site/${{ github.ref_name }}
