@@ -249,6 +249,14 @@ def prune_deleted(stash, plugin_dir, every=PRUNE_EVERY):
         path = os.path.join(plugin_dir, name)
         if not os.path.exists(path):
             continue
+        # (read first: rewriting a file with nothing gone would make Review's
+        # "New" groups, kept until these files change, work everything out again)
+        try:
+            with open(path, encoding="utf-8") as fh:
+                if not any(k.split(":")[0] in ("scene", "image") and k not in alive for k in json.load(fh)):
+                    continue
+        except (OSError, ValueError):
+            continue
         with locked_json(path) as rec:
             gone = [k for k in rec if k.split(":")[0] in ("scene", "image") and k not in alive]
             for k in gone:
@@ -9270,6 +9278,20 @@ def look_knn(cfg, vectors, base, k=LOOK_K):
 
 
 TAG_REVIEW_CACHE_SECONDS = 15 * 60
+GROUPS_CACHE_MAX = 24 * 3600  # Review's "New" groups: kept until their scans change (a day at most)
+
+
+def scans_sig(plugin_dir, *names):
+    """Size and time of the scan files a result was worked out from: while
+    they're the same, so is the result (new scans or learned faces change them)."""
+    out = []
+    for n in names:
+        try:
+            st = os.stat(os.path.join(plugin_dir, n))
+            out.append([st.st_size, int(st.st_mtime)])
+        except OSError:
+            out.append(None)
+    return out
 
 
 def locked_tag_review_not(plugin_dir):
@@ -9646,7 +9668,8 @@ def run_new_performers(stash, plugin_dir, limit=30, skip=(), fresh=False):
     face matches none of your performers. A group where a quarter or more of
     the items already have the same performer becomes "It's [them]?" (add them to the rest, learn the
     face); otherwise "New performer?", with a name from a studio or folder
-    most of them share. Drawn items (comics...) are left out. Kept 15 min."""
+    most of them share. Drawn items (comics...) are left out. Kept until the
+    face scans or known faces change (a day at most)."""
     cfg = settings(stash, plugin_dir)
     path = os.path.join(plugin_dir, "new_perf_cache.json")
     found = None
@@ -9654,7 +9677,8 @@ def run_new_performers(stash, plugin_dir, limit=30, skip=(), fresh=False):
         with contextlib.suppress(OSError, ValueError, KeyError):
             with open(path) as f:
                 saved = json.load(f)
-            if time.time() - saved.get("at", 0) < TAG_REVIEW_CACHE_SECONDS and saved.get("same") == NEW_PERF_SAME:
+            if (time.time() - saved.get("at", 0) < GROUPS_CACHE_MAX and saved.get("same") == NEW_PERF_SAME
+                    and saved.get("sig") == scans_sig(plugin_dir, "face_items.json", "face_index.json")):
                 found = saved["found"]
     items = {}
     for kind, query, field in (("scene", "findScenes", "scenes"), ("image", "findImages", "images")):
@@ -9721,7 +9745,8 @@ def run_new_performers(stash, plugin_dir, limit=30, skip=(), fresh=False):
             found.append({"keys": [k for k, _ in ranked], "faces": [v[1] for _, v in ranked[:6]]})
         tmp = f"{path}.{os.getpid()}.tmp"  # (two requests at once mustn't share it)
         with open(tmp, "w") as f:
-            json.dump({"at": time.time(), "found": found, "same": NEW_PERF_SAME}, f)
+            json.dump({"at": time.time(), "found": found, "same": NEW_PERF_SAME,
+                       "sig": scans_sig(plugin_dir, "face_items.json", "face_index.json")}, f)
         _replace(tmp, path)
 
     # performers whose face is known: if their face didn't match, it isn't them
@@ -11724,7 +11749,8 @@ def run_tag_groups(stash, plugin_dir, limit=30, skip=(), fresh=False):
         with contextlib.suppress(OSError, ValueError, KeyError):
             with open(path) as f:
                 saved = json.load(f)
-            if time.time() - saved.get("at", 0) < TAG_REVIEW_CACHE_SECONDS:
+            if (time.time() - saved.get("at", 0) < GROUPS_CACHE_MAX
+                    and saved.get("sig") == scans_sig(plugin_dir, "look_items.json")):
                 found = saved["found"]
     if found is None:
         cache = LookCache(plugin_dir)
@@ -11744,7 +11770,7 @@ def run_tag_groups(stash, plugin_dir, limit=30, skip=(), fresh=False):
         found = [[k for _, k in sorted(m, reverse=True)] for m in groups.values() if len(m) >= TAG_GROUP_MIN]
         tmp = f"{path}.{os.getpid()}.tmp"
         with open(tmp, "w") as f:
-            json.dump({"at": time.time(), "found": found}, f)
+            json.dump({"at": time.time(), "found": found, "sig": scans_sig(plugin_dir, "look_items.json")}, f)
         _replace(tmp, path)
     items = _tidy_items(stash)
     tag_names = {t["id"]: t["name"] for x in items.values() for t in x.get("tags") or []}

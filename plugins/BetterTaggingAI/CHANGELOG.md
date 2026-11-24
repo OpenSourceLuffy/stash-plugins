@@ -4,6 +4,22 @@ Newest first. Versions are what Stash shows under Settings → Plugins. The add-
 (`btt_core.py`) with [Better Organizing Tools](../BetterTaggingTools), so some versions only bring
 that plugin's changes.
 
+## 1.8.2 (2026-11-24)
+
+- Fixed **Markers: download the video model (needed first)** failing with "HTTP Error 404" everywhere
+  except Stash in Docker: the model needs ONNX Runtime, which came from Microsoft's GitHub releases,
+  and Microsoft's ONNX Runtime repository disappeared from GitHub in November 2026. The same version
+  (1.31.1) now comes from this add-on's repository, taken from Microsoft's signed NuGet package, for
+  Linux, macOS and Windows. A video model downloaded before keeps working; nothing to do.
+- **Review keeps your place in every tab**: switching to another tab and back (within 30 minutes)
+  shows the same cards straight away instead of loading again; **↻ Check for new suggestions**
+  starts a tab over. Switching away while a tab is still loading no longer stops the next tab from
+  loading (or mixes in the last tab's cards).
+- **Faces → New** and **Tags → New** keep their groups until the scans they come from change (new
+  scans, learned faces; a day at most), instead of working them all out again every 15 minutes -
+  on a big library that took over a minute. The hourly tidy-up of deleted items no longer counts as
+  a change when it found nothing to remove.
+
 ## 1.8.1 (2026-11-24)
 
 - **Tried on a fresh Windows 11 PC** (Stash installed directly, Python from winget), with fixes:

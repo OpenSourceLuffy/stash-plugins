@@ -2,3 +2,8 @@
 1d1f351097f96aae6b3e8e0e8ed04500830cda45529addcbb5b5eb5b2227287c  onnxruntime-alpine-3.23-aarch64.tar.gz
 99fdc41382c08f5afeb9f067d2e236fe435103366bc8b9d23233f4793ee8f297  onnxruntime-alpine-3.23-armv7.tar.gz
 0534728cbec0ee55f04a57487b362c70f132951d9cc3d93b1ab4cb46ff5a3dd5  onnxruntime-alpine-3.23-x86_64.tar.gz
+16214c46c69545afb1b7a28c77c2aba879cacfdd572b04dff50cfe3747c718da  onnxruntime-linux-aarch64-1.31.1.tgz
+8b660cdd2e90664113f831ccc4c4c4e8da3276ad7bc6fecd6fe836b9f66bb343  onnxruntime-linux-x64-1.31.1.tgz
+2df4ffc0a9e6429ca56acdd7e4205c664a03d420f15f6c88f49d705876a5fd97  onnxruntime-osx-arm64-1.31.1.tgz
+50f1fdc45779b6842d4292440967c1c4ff07534937f588e8169026df036e6b7d  onnxruntime-win-arm64-1.31.1.zip
+bf3c46ac937da079980c077870485667487df7ea5cfc885c8e158aa8e0fcdb85  onnxruntime-win-x64-1.31.1.zip

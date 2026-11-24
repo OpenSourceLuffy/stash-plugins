@@ -1935,10 +1935,13 @@
     return (hh ? hh + ":" + String(mm).padStart(2, "0") : mm) + ":" + String(ss).padStart(2, "0");
   };
 
-  // Where you were in the review, kept while you look at a performer's or
-  // tag's page (tap their picture), so swiping down / Back from that page
-  // lands on the same card without loading again. Kept for 30 minutes.
-  let reviewMemory = null;
+  // Where you were in each tab of the review (and its filter), kept while you
+  // look at a performer's or tag's page (tap their picture) or another tab,
+  // so coming back lands on the same card without loading again. Kept for 30
+  // minutes; "↻ Check for new suggestions" starts that tab over.
+  const reviewMemory = new Map();
+  const REVIEW_MEMORY_MS = 30 * 60 * 1000;
+  const memoryKey = (tab, only, fav) => `${tab}|${only || ""}|${fav ? 1 : 0}`;
 
   // ✕ in the top right of a performer's / tag's page opened from Review:
   // straight back to the card you were on
@@ -3037,16 +3040,21 @@
       }
     };
 
+    const queueOf = React.useRef(null); // which tab (and filter) the cards in the queue are for
+    const loadGen = React.useRef(0);    // bumped on a tab switch: a load still running for the last tab is ignored
     const load = React.useCallback(async (fresh, recompute) => {
       if (loadingMore.current) return;
       loadingMore.current = true;
+      const my = loadGen.current;
       setState((st) => ({ ...st, loading: true }));
       try {
         const r = await M.load(only, [...seen.current], recompute);
+        if (my !== loadGen.current) return; // (you've moved to another tab since)
         const items = (r.items || []).filter((it) => !seen.current.has(keyOf(it)))
           .map((it) => ({ ...it, picture: here(it.picture, it.kind, it.id) }));
         items.forEach((it) => seen.current.add(keyOf(it)));
         setQueue((q) => (fresh ? items : [...q, ...items]));
+        queueOf.current = memoryKey(tabKey, only, favOnly);
         // r.total counts what's left apart from the ones already shown - but
         // when none of them came back (e.g. their scenes were deleted), say so
         // instead of showing "N left" over an empty page
@@ -3056,15 +3064,19 @@
           ? `${r.total} more suggestion${r.total === 1 ? "" : "s"} couldn't be loaded (their scenes or images may have been deleted from Stash). Leave and come back to check again.`
           : r.note || "" });
       } catch (e) {
-        setState({ loading: false, error: e.message });
+        if (my === loadGen.current) setState({ loading: false, error: e.message });
       } finally {
-        loadingMore.current = false;
+        if (my === loadGen.current) loadingMore.current = false;
       }
     }, [only, tabKey, favOnly]);
 
     React.useEffect(() => {
-      const mem = reviewMemory;
-      if (mem && mem.tab === tabKey && mem.only === only && !!mem.fav === favOnly && Date.now() - mem.at < 30 * 60 * 1000) {
+      const mem = reviewMemory.get(memoryKey(tabKey, only, favOnly));
+      loadGen.current += 1;          // (a load for the last tab no longer counts...)
+      loadingMore.current = false;   // (...and doesn't hold this one up)
+      queueOf.current = null;
+      if (mem && Date.now() - mem.at < REVIEW_MEMORY_MS) {
+        queueOf.current = memoryKey(tabKey, only, favOnly);
         seen.current = new Set(mem.seen);
         setQueue(mem.queue);
         setCounts(mem.counts);
@@ -3082,8 +3094,9 @@
 
     // remember where you are (for coming back from a performer's / tag's page)
     React.useEffect(() => {
-      if (state.loading) return;
-      reviewMemory = { tab: tabKey, only, fav: favOnly, queue, counts, undo, total, seen: [...seen.current], at: Date.now() };
+      // (only once this tab's own cards are in: not the last tab's, or an empty list mid-load)
+      if (state.loading || queueOf.current !== memoryKey(tabKey, only, favOnly)) return;
+      reviewMemory.set(memoryKey(tabKey, only, favOnly), { queue, counts, undo, total, seen: [...seen.current], at: Date.now() });
     }, [queue, counts, undo, total, state.loading]);
 
     // (for a moment after switching tabs the old tab's cards are still here)
