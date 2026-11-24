@@ -4,6 +4,11 @@ Newest first. Versions are what Stash shows under Settings → Plugins. Better O
 [Better Organizing AI Add-on](../BetterTaggingAI) share their code (`btt_core.py`), so some versions
 only bring the other plugin's changes.
 
+## 2.4.2 (2026-11-24)
+
+- Shared code (`btt_core.py`) brought up to date with Better Organizing AI 1.8.2; nothing changes in
+  this plugin.
+
 ## 2.4.1 (2026-11-24)
 
 - **Windows**: when Stash is installed directly on Windows and runs the Microsoft Store's stand-in for

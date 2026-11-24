@@ -10,10 +10,13 @@ videos**, so neither needs the Auto Seek plugin.
   source is the source of that part.
 - The add-on runs them with their data in Stash's config folder
   (`plugin-data/BetterTaggingAI/auto-seek/data`). The task **Video model: download it** fills that in:
-  the model and the Alpine (Docker) runtimes come from this repository's
-  [`extras/video-model`](../../../extras/video-model) (each checked against its SHA-256), the other
-  runtimes from Microsoft's ONNX Runtime releases; if this repository can't be reached, the original
-  addresses in `auto_seek.py` are used.
+  the model and every runtime come from this repository's
+  [`extras/video-model`](../../../extras/video-model), each checked against its SHA-256; if this
+  repository can't be reached, the model and Alpine runtimes are tried at their original addresses.
+- Changed from Auto Seek 0.3.1: Microsoft's GitHub releases of ONNX Runtime went away in November
+  2026, so the glibc Linux, macOS and Windows runtimes now come from `extras/video-model` too (the same
+  1.31.1 libraries, from Microsoft's NuGet package). `auto_seek.py` pins their new SHA-256s and still
+  accepts Microsoft's (`sha256_ms`), so a runtime downloaded before keeps working.
 - To update: copy `auto_seek.py`, `ort_api.py` and `LICENSE` from a newer Auto Seek release, check the
   model and runtime hashes in `auto_seek.py` still match `extras/video-model/SHA256SUMS` (or add the
   new files there), and note the version here.

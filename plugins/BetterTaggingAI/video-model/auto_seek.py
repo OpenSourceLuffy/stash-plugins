@@ -78,14 +78,20 @@ ACTS = ("ballerina", "cowgirl", "fingering", "from behind", "handjob",
 # ONNX Runtime per platform: Microsoft's release builds, and for musl (Stash's
 # Docker image is Alpine) Alpine's own build with the libraries it needs. Only
 # the files named in "members" are kept, under "path".
-ORT = "https://github.com/microsoft/onnxruntime/releases/download/v1.31.1/"
+# (Better Organizing AI: Microsoft's GitHub releases of ONNX Runtime went away
+# in November 2026, so these come from the add-on's repository: the same 1.31.1
+# libraries, taken from Microsoft's signed NuGet package Microsoft.ML.OnnxRuntime
+# 1.31.1 and packed the same way. "sha256_ms" is Microsoft's own archive's, so
+# runtimes downloaded before still count.)
+ORT = "https://raw.githubusercontent.com/OpenSourceLuffy/stash-plugins/main/extras/video-model/"
 MUSL = "https://github.com/mrx-31415/stash-curator/releases/download/auto-seek-runtime-v1/"
 RUNTIMES = {
     "linux-x64-glibc": {
         "path": "runtime/ort-1.31.1-linux-x64",
         "url": ORT + "onnxruntime-linux-x64-1.31.1.tgz",
-        "sha256": "c849e36a1ef3e22d4ff217b9d1ce4a3cf5b9467b975610913ae959ad5b16bdc9",
-        "size": 11413655,
+        "sha256": "8b660cdd2e90664113f831ccc4c4c4e8da3276ad7bc6fecd6fe836b9f66bb343",
+        "sha256_ms": "c849e36a1ef3e22d4ff217b9d1ce4a3cf5b9467b975610913ae959ad5b16bdc9",
+        "size": 11190845,
         "members": {
             "onnxruntime-linux-x64-1.31.1/lib/libonnxruntime.so.1.31.1": "libonnxruntime.so",
             "onnxruntime-linux-x64-1.31.1/LICENSE": "LICENSE",
@@ -96,8 +102,9 @@ RUNTIMES = {
     "linux-arm64-glibc": {
         "path": "runtime/ort-1.31.1-linux-arm64",
         "url": ORT + "onnxruntime-linux-aarch64-1.31.1.tgz",
-        "sha256": "5317505e2da99be65f8e2775ba3c2afd6d2961fd78aba1bd8f56159f48820c78",
-        "size": 10332381,
+        "sha256": "16214c46c69545afb1b7a28c77c2aba879cacfdd572b04dff50cfe3747c718da",
+        "sha256_ms": "5317505e2da99be65f8e2775ba3c2afd6d2961fd78aba1bd8f56159f48820c78",
+        "size": 10118465,
         "members": {
             "onnxruntime-linux-aarch64-1.31.1/lib/libonnxruntime.so.1.31.1": "libonnxruntime.so",
             "onnxruntime-linux-aarch64-1.31.1/LICENSE": "LICENSE",
@@ -108,8 +115,9 @@ RUNTIMES = {
     "macos-arm64": {
         "path": "runtime/ort-1.31.1-macos-arm64",
         "url": ORT + "onnxruntime-osx-arm64-1.31.1.tgz",
-        "sha256": "2e1344a1926ee50eb25b38153cb6992c3567515aef0e677a1a520a1798896d6f",
-        "size": 36936435,
+        "sha256": "2df4ffc0a9e6429ca56acdd7e4205c664a03d420f15f6c88f49d705876a5fd97",
+        "sha256_ms": "2e1344a1926ee50eb25b38153cb6992c3567515aef0e677a1a520a1798896d6f",
+        "size": 12601271,
         "members": {
             "onnxruntime-osx-arm64-1.31.1/lib/libonnxruntime.1.31.1.dylib": "libonnxruntime.dylib",
             "onnxruntime-osx-arm64-1.31.1/LICENSE": "LICENSE",
@@ -120,8 +128,9 @@ RUNTIMES = {
     "windows-x64": {
         "path": "runtime/ort-1.31.1-windows-x64",
         "url": ORT + "onnxruntime-win-x64-1.31.1.zip",
-        "sha256": "5869e26bb25314375f2d5ef1877e3ea06b1543d6c710e6e4a1ec2f7177ab4b2c",
-        "size": 82929944,
+        "sha256": "bf3c46ac937da079980c077870485667487df7ea5cfc885c8e158aa8e0fcdb85",
+        "sha256_ms": "5869e26bb25314375f2d5ef1877e3ea06b1543d6c710e6e4a1ec2f7177ab4b2c",
+        "size": 6366379,
         "members": {
             "onnxruntime-win-x64-1.31.1/lib/onnxruntime.dll": "onnxruntime.dll",
             "onnxruntime-win-x64-1.31.1/LICENSE": "LICENSE",
@@ -132,8 +141,9 @@ RUNTIMES = {
     "windows-arm64": {
         "path": "runtime/ort-1.31.1-windows-arm64",
         "url": ORT + "onnxruntime-win-arm64-1.31.1.zip",
-        "sha256": "817f4129073f84f81cde3ff92b1a4e06d007691e7208deed08a8b6d6df143f7f",
-        "size": 85851069,
+        "sha256": "50f1fdc45779b6842d4292440967c1c4ff07534937f588e8169026df036e6b7d",
+        "sha256_ms": "817f4129073f84f81cde3ff92b1a4e06d007691e7208deed08a8b6d6df143f7f",
+        "size": 6342438,
         "members": {
             "onnxruntime-win-arm64-1.31.1/lib/onnxruntime.dll": "onnxruntime.dll",
             "onnxruntime-win-arm64-1.31.1/LICENSE": "LICENSE",
@@ -235,7 +245,7 @@ def file_ready(entry: dict, verified: dict) -> bool:
     status call would cost more than the call itself)."""
     target = target_of(entry)
     return (
-        verified.get(entry["path"]) == entry["sha256"]
+        verified.get(entry["path"]) in (entry["sha256"], entry.get("sha256_ms"))
         and os.path.isfile(target)
         and ("members" in entry or os.path.getsize(target) == entry["size"])
     )
