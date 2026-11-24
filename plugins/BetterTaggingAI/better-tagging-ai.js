@@ -3006,9 +3006,14 @@
           .map((it) => ({ ...it, picture: here(it.picture, it.kind, it.id) }));
         items.forEach((it) => seen.current.add(keyOf(it)));
         setQueue((q) => (fresh ? items : [...q, ...items]));
-        // r.total counts what's left apart from the ones already shown
-        setTotal(Math.max(0, (r.total || 0) - items.length));
-        setState({ loading: false, note: r.note || "" });
+        // r.total counts what's left apart from the ones already shown - but
+        // when none of them came back (e.g. their scenes were deleted), say so
+        // instead of showing "N left" over an empty page
+        const stuck = !items.length && (r.total || 0) > 0;
+        setTotal(stuck ? 0 : Math.max(0, (r.total || 0) - items.length));
+        setState({ loading: false, note: stuck
+          ? `${r.total} more suggestion${r.total === 1 ? "" : "s"} couldn't be loaded (their scenes or images may have been deleted from Stash). Leave and come back to check again.`
+          : r.note || "" });
       } catch (e) {
         setState({ loading: false, error: e.message });
       } finally {

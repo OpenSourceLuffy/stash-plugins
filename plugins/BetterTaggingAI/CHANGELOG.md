@@ -27,6 +27,13 @@ that plugin's changes.
   performer at all - you had to open the video to see the moment. It now shows the frame where the face
   was seen best, cut around that face (made as the card comes up, a moment ahead, and kept); photos
   where the face is small are cut around it too. Also in List and in the zoomed view.
+- Fixed: Review could count suggestions for scenes and images deleted from Stash - e.g. a Faces Batch
+  group of 374 that loaded nothing - and loading them made Stash log one "not found" error per deleted
+  item while the add-on asked again and again (minutes, thousands of errors). Deleted items are now
+  dropped from the add-on's face and look-alike records (at most hourly from Review, and at every
+  scan), never counted, and lookups ask Stash which items still exist once instead of retrying.
+  Review → Faces → Suggested could say "374 left" over an empty page this way; it now only counts
+  what it can show, and if a batch ever comes back empty it says why instead.
 - **Choose which performers faces are suggested and added for** (Faces settings): **Faces: only
   favourite performers**, and/or **Faces: only performers in at least this many scenes and images**.
   Review → Faces and the face tasks then only suggest or add those (Review says so at the top), so a
