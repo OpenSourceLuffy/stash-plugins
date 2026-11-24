@@ -27,6 +27,11 @@ that plugin's changes.
   performer at all - you had to open the video to see the moment. It now shows the frame where the face
   was seen best, cut around that face (made as the card comes up, a moment ahead, and kept); photos
   where the face is small are cut around it too. Also in List and in the zoomed view.
+- **Choose which performers faces are suggested and added for** (Faces settings): **Faces: only
+  favourite performers**, and/or **Faces: only performers in at least this many scenes and images**.
+  Review → Faces and the face tasks then only suggest or add those (Review says so at the top), so a
+  library with thousands of performers isn't months of review. Faces are still compared with every
+  performer you have, so a look-alike who isn't chosen isn't mistaken for one who is.
 - **Review → Faces: Favourites only** (☆ at the top): only suggestions for your favourite performers.
   Faces are still compared with everyone, so the "next closest" check stays the same.
 - **Big libraries no longer stop Stash**: asking Stash for every scene or image at once (Review's
