@@ -2,6 +2,32 @@
 
 Newest first.
 
+## 1.5 (2026-11-24)
+
+- **Windows**: when Stash is installed directly on Windows and runs the Microsoft Store's stand-in for
+  Python (tasks fail with "exit status 9009"), the plugin's pages now say what that means and how to
+  fix it: Stash's **Settings → System → Python executable path**.
+- **Settings** (Settings → Plugins → Stash Suggestions) for how each row picks:
+  - How much each thing counts, as a percentage: 100 = as before, 0 = left out, 200 = counts double.
+    Scenes: shared tags, same studio, look-alike performers, scenes that look alike, similar length,
+    same shape. Photos: shared tags, same gallery, look-alike performers, photos that look alike,
+    better-looking photos. Similar Performers: shared tags, details in common, alike faces, women
+    first. Similar galleries: shared tags, same performers, same studio.
+  - New things to count, off until you set them: rating (scenes and photos), favourite performers
+    (scenes, photos and Similar Performers) and scenes you haven't watched yet.
+  - How many each row shows (default 12, up to 60); for Similar photos, also how many **Load more**
+    adds.
+  - With nothing set, every row works exactly as before.
+
+## 1.4.1 (2026-11-24)
+
+- **Update check**: when a newer version of any of these plugins is out, Stash shows what's new
+  (from the changelogs) with **Yes, install** (for plugins installed through the plugin source; ones
+  copied in by hand are told where to update), **Later** (a day) and **Don't show again**. It looks
+  twice a day at most, reading the published plugin list and changelogs from GitHub - nothing is
+  sent. Shared by Better Organizing Tools / AI, Modern UI, Privacy Blur and Stash Suggestions: one
+  check covers all seven plugins.
+
 ## 1.4 (2026-11-23)
 
 - **Similar photos favour good-looking photos**: with the [Better Organizing AI Add-on](../BetterTaggingAI)'s

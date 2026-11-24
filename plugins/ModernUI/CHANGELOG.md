@@ -2,6 +2,15 @@
 
 Newest first. Versions are what Stash shows under Settings → Plugins.
 
+## 0.59.1 (2026-11-24)
+
+- **Update check**: when a newer version of any of these plugins is out, Stash shows what's new
+  (from the changelogs) with **Yes, install** (for plugins installed through the plugin source; ones
+  copied in by hand are told where to update), **Later** (a day) and **Don't show again**. It looks
+  twice a day at most, reading the published plugin list and changelogs from GitHub - nothing is
+  sent. Shared by Better Organizing Tools / AI, Modern UI, Privacy Blur and Stash Suggestions: one
+  check covers all seven plugins.
+
 ## 0.59 (2026-11-24)
 
 - New setting **Show the studio's logo on the "Studio:" line** (off by default): on scene, image and

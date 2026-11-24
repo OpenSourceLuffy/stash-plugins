@@ -11,6 +11,40 @@
 
   const body = document.body.classList;
 
+  // ------------------------------------------------------------------
+  // Settings (Settings → Plugins → Stash Suggestions): how much each thing
+  // counts when scoring, as a percentage (100 = as it comes, 0 = left out,
+  // 200 = counts double), and how many each row shows. Empty = the default.
+  // Read again each time a row is built (at most every few seconds), so a
+  // change shows on the next page.
+  // ------------------------------------------------------------------
+  const PLUGIN_ID = "StashSuggestions";
+  const COUNT_DEFAULT = 12;
+  let conf = {};
+  let confAt = 0;
+  let confLoading = null; // (rows built at the same time share one read)
+  function loadSettings() {
+    if (confLoading) return confLoading;
+    if (Date.now() - confAt < 5000) return Promise.resolve();
+    confLoading = fetch("/graphql", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: "{ configuration { plugins } }" }),
+    })
+      .then((res) => res.json())
+      .then((json) => {
+        conf = ((json.data && json.data.configuration && json.data.configuration.plugins) || {})[PLUGIN_ID] || {};
+      })
+      .catch(() => { /* keep the last ones */ })
+      .finally(() => { confAt = Date.now(); confLoading = null; });
+    return confLoading;
+  }
+  const unset = (v) => v === undefined || v === null || v === "" || Number.isNaN(Number(v));
+  // a weight as a multiplier: the setting / 100 (`def` % when not set)
+  const weight = (key, def = 100) => Math.max(0, unset(conf[key]) ? def : Number(conf[key])) / 100;
+  // how many a row shows (1 - 60)
+  const howMany = (key) => Math.min(60, Math.max(1, unset(conf[key]) ? COUNT_DEFAULT : Math.round(Number(conf[key])) || COUNT_DEFAULT));
+
   // Mark when an edit form is open (the Edit tab on scene, image and gallery
   // pages, or edit mode on a performer page) so the Suggested / Similar
   // sections can be hidden and don't get mixed in with the form
@@ -98,7 +132,15 @@
         body: JSON.stringify({ query, variables }),
       });
       const json = await res.json();
-      if (json.errors) throw new Error(json.errors[0].message);
+      if (json.errors) {
+        const m = json.errors[0].message;
+        // Windows: Stash ran the Microsoft Store's stand-in for Python (error 9009)
+        throw new Error(/exit status (9009|9003)\b|Python was not found/i.test(m || "")
+          ? "Stash couldn't start Python: on Windows it found the Microsoft Store's stand-in for it (error 9009). "
+            + "In Stash, open Settings → System → Python executable path and enter your Python's full path "
+            + "(run  py -c \"import sys; print(sys.executable)\"  in PowerShell to see it), then try again."
+          : m);
+      }
       return json.data;
     };
     let present = null;
@@ -164,9 +206,9 @@
 
   function setupSuggested() {
     const SCENE_PAGE = /^\/scenes\/(\d+)\/?$/;
-    const MAX = 12;
+    let MAX = COUNT_DEFAULT; // (from the settings, each time)
     const CARD_FIELDS =
-      `id title date paths { screenshot preview } files { duration basename width height } studio { id name } performers { id name ${lookFields()} } tags { id }`;
+      `id title date rating100 play_count paths { screenshot preview } files { duration basename width height } studio { id name } performers { id name favorite ${lookFields()} } tags { id }`;
 
     const esc = (t) => String(t ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
     const gql = async (query, variables) => {
@@ -193,6 +235,13 @@
 
     // Returns [{ title, scenes }] rows to show
     async function rowsFor(id) {
+      await loadSettings();
+      MAX = howMany("scenesCount");
+      const w = {
+        tags: weight("scenesTags"), studio: weight("scenesStudio"), lookalikes: weight("scenesLookalikes"),
+        looks: weight("scenesLooksAlike"), length: weight("scenesLength"), shape: weight("scenesOrientation"),
+        rating: weight("scenesRating", 0), favorite: weight("scenesFavorites", 0), unwatched: weight("scenesUnwatched", 0),
+      };
       const scene = (await gql(
         `query ($id: ID!) { findScene(id: $id) { id tags { id } studio { id } performers { id name ${lookFields()} } files { duration width height } } }`,
         { id }
@@ -258,13 +307,13 @@
       const alikePoints = AI.lookPoints(alike, LOOKS_MAX_POINTS);
 
       const [byTags, byStudio, byShape, byPerformers, byLooks] = await Promise.all([
-        tagIds.size
+        tagIds.size && w.tags
           ? findScenes({ tags: { value: [...tagIds], modifier: "INCLUDES", depth: 0 } }, 150).then(notThis)
           : Promise.resolve([]),
-        studioId
+        studioId && w.studio
           ? findScenes({ studios: { value: [studioId], modifier: "INCLUDES", depth: 0 } }, 60).then(notThis)
           : Promise.resolve([]),
-        len && shape
+        len && shape && (w.length || w.shape)
           ? findScenes({
               duration: { modifier: "BETWEEN", value: Math.floor(len * 0.75), value2: Math.ceil(len * 1.25) },
               orientation: { value: [shape] },
@@ -273,7 +322,7 @@
         perf.size
           ? findScenes({ performers: { value: [...perf], modifier: "INCLUDES" } }, 60).then(notThis)
           : Promise.resolve([]),
-        alike.length
+        alike.length && w.looks
           ? AI.byIds("scene", alike.map((a) => a.id), CARD_FIELDS).then(notThis)
           : Promise.resolve([]),
       ]);
@@ -289,10 +338,12 @@
       //   (best pair, half of lookAlikePoints or - with Better Organizing AI -
       //   of their face score, whichever is closer: up to 5), similar
       //   length 1, same orientation 1, and with Better Organizing AI how
-      //   alike the scene itself looks (the 40 closest: 2-8)
+      //   alike the scene itself looks (the 40 closest: 2-8). Off unless
+      //   turned on in the settings: its rating (5 stars 5), a favourite
+      //   performer in it 3, not watched yet 2. Each times its setting.
       const score = (s) => {
-        let k = 2 * s.tags.filter((t) => tagIds.has(t.id)).length;
-        if (studioId && s.studio && s.studio.id === studioId) k += 3;
+        let k = w.tags * 2 * s.tags.filter((t) => tagIds.has(t.id)).length;
+        if (studioId && s.studio && s.studio.id === studioId) k += w.studio * 3;
         let look = 0;
         scene.performers.forEach((a, i) => {
           for (const b of s.performers) {
@@ -300,11 +351,14 @@
             if (faceMaps[i]) look = Math.max(look, AI.facePoints(faceMaps[i], faceMaps[i].scores[b.id]));
           }
         });
-        k += Math.min(look, 10) / 2;
-        k += alikePoints(s.id);
+        k += w.lookalikes * Math.min(look, 10) / 2;
+        k += w.looks * alikePoints(s.id);
         const f = s.files[0];
-        if (len && f && f.duration && Math.abs(f.duration - len) <= len * 0.25) k += 1;
-        if (shape && orientationOf(f) === shape) k += 1;
+        if (len && f && f.duration && Math.abs(f.duration - len) <= len * 0.25) k += w.length;
+        if (shape && orientationOf(f) === shape) k += w.shape;
+        if (s.rating100) k += w.rating * s.rating100 / 20;
+        if (s.performers.some((p) => p.favorite)) k += w.favorite * 3;
+        if (!s.play_count) k += w.unwatched * 2;
         return k;
       };
       const pool = new Map();
@@ -457,7 +511,8 @@
 
   function setupSimilarImages() {
     const IMAGE_PAGE = /^\/images\/(\d+)\/?$/;
-    const MAX = 12;
+    let MAX = COUNT_DEFAULT; // (from the settings, each time)
+    let w = {};              // the weights (settings), each time
     const TAG_POINTS = 2;
     const GALLERY_POINTS = 2;
     const LOOKALIKE_MAX_POINTS = 5;
@@ -466,14 +521,16 @@
     const LOOKALIKES = 15;         // closest look-alike performers to pull photos from
     const CANDIDATES = 500;        // images fetched per match type before scoring
     const LOOKS_GOOD_POINTS = 3;   // Apple's aesthetics score (0-100, Better Organizing AI): 100 = +3, 50 = 0, 0 = -3
-    const FIELDS = "id title paths { thumbnail } tags { id } performers { id } galleries { id } custom_fields";
+    const FIELDS = "id title rating100 paths { thumbnail } tags { id } performers { id favorite } galleries { id } custom_fields";
     // A photo's aesthetics score, saved by Better Organizing AI as the custom
     // field "aesthetic" (on a Mac); none without it, and then it doesn't count
     const aesthetic = (x) => {
       const a = Number(x && x.custom_fields && x.custom_fields.aesthetic);
       return Number.isFinite(a) && x.custom_fields.aesthetic !== "" ? a : null;
     };
-    const looksGood = (x) => (aesthetic(x) === null ? 0 : ((aesthetic(x) - 50) / 50) * LOOKS_GOOD_POINTS);
+    const looksGood = (x) => (aesthetic(x) === null ? 0 : ((aesthetic(x) - 50) / 50) * LOOKS_GOOD_POINTS * w.looksGood);
+    // off unless turned on in the settings: its rating (5 stars 5), a favourite performer in it 3
+    const extras = (x) => (x.rating100 ? w.rating * x.rating100 / 20 : 0) + (x.performers.some((p) => p.favorite) ? w.favorite * 3 : 0);
     const PERF_FIELDS = `id name image_count tags { id } ${lookFields()}`;
 
     const esc = (t) => String(t ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -539,6 +596,13 @@
     // Returns next(n): the next n photos by score, then the fill-ups.
     // Resolves to { items, done }.
     async function similarSource(id) {
+      await loadSettings();
+      MAX = howMany("photosCount");
+      w = {
+        tags: weight("photosTags"), galleries: weight("photosGalleries"), lookalikes: weight("photosLookalikes"),
+        looks: weight("photosLooksAlike"), looksGood: weight("photosLooksGood"),
+        rating: weight("photosRating", 0), favorite: weight("photosFavorites", 0),
+      };
       const image = (await gql(
         `query ($id: ID!) { findImage(id: $id) { id tags { id name scene_count image_count }
           galleries { id title image_count files { basename } folder { path } } performers { ${PERF_FIELDS} }
@@ -569,8 +633,8 @@
       const samePerformer = (x) => x.performers.some((p) => perfIds.has(p.id));
 
       const [lookAlikes, alike] = await Promise.all([
-        perfIds.size ? lookAlikesOf(image.performers.slice(0, 3), perfIds) : new Map(),
-        AI.looks("image", image.id), // photos that look alike (Better Organizing AI; else none)
+        perfIds.size && w.lookalikes ? lookAlikesOf(image.performers.slice(0, 3), perfIds) : new Map(),
+        w.looks ? AI.looks("image", image.id) : [], // photos that look alike (Better Organizing AI; else none)
       ]);
       const alikePoints = AI.lookPoints(alike, LOOKS_MAX_POINTS);
 
@@ -581,8 +645,8 @@
       if (alike.length) {
         lookups.push(AI.byIds("image", alike.map((a) => a.id), FIELDS));
       }
-      if (tagIds.size) lookups.push(findImages({ tags: { value: [...tagIds], modifier: "INCLUDES", depth: 0 } }, CANDIDATES));
-      if (galleryIds.size) lookups.push(findImages({ galleries: { value: [...galleryIds], modifier: "INCLUDES" } }, CANDIDATES));
+      if (tagIds.size && w.tags) lookups.push(findImages({ tags: { value: [...tagIds], modifier: "INCLUDES", depth: 0 } }, CANDIDATES));
+      if (galleryIds.size && w.galleries) lookups.push(findImages({ galleries: { value: [...galleryIds], modifier: "INCLUDES" } }, CANDIDATES));
       if (lookAlikes.size) lookups.push(findImages({ performers: { value: [...lookAlikes.keys()], modifier: "INCLUDES" } }, CANDIDATES));
       for (const list of await Promise.all(lookups)) {
         for (const x of list) if (x.id !== image.id && !samePerformer(x)) candidates.set(x.id, x);
@@ -596,11 +660,12 @@
           let lookAlike = 0;
           for (const p of x.performers) lookAlike = Math.max(lookAlike, lookAlikes.get(p.id)?.k || 0);
           const lookPoints = Math.min(LOOKALIKE_MAX_POINTS, Math.round(lookAlike / 2));
-          return { x, score: tags * TAG_POINTS + galleries * GALLERY_POINTS + lookPoints + alikePoints(x.id) };
+          return { x, score: w.tags * tags * TAG_POINTS + w.galleries * galleries * GALLERY_POINTS
+            + w.lookalikes * lookPoints + w.looks * alikePoints(x.id) };
         })
         .filter((r) => r.score > 0)
         // (better-looking photos higher, among the matches)
-        .map((r) => ({ x: r.x, k: r.score + looksGood(r.x) + Math.random() * 0.5 }))
+        .map((r) => ({ x: r.x, k: r.score + looksGood(r.x) + extras(r.x) + Math.random() * 0.5 }))
         .sort((a, b) => b.k - a.k)
         .map((r) => r.x);
       scored.forEach((x) => seen.add(x.id));
@@ -1051,10 +1116,11 @@
       // a gallery's pictures: "Similar galleries" under them
       { re: /^\/galleries\/(\d+)(?:\/images)?\/?$/, kind: "gallery", row: () => document.querySelector(".gallery-container") },
     ];
-    const MAX = 12;
+    let MAX = COUNT_DEFAULT; // (from the settings, each time)
+    let w = {};              // the weights (settings), each time
     const MAX_SOURCES = 3;
     const FIELDS =
-      "id name disambiguation gender image_path hair_color eye_color ethnicity country height_cm birthdate fake_tits scene_count image_count gallery_count tags { id }";
+      "id name disambiguation gender favorite image_path hair_color eye_color ethnicity country height_cm birthdate fake_tits scene_count image_count gallery_count tags { id }";
 
     const esc = (t) => String(t ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
     const gql = async (query, variables) => {
@@ -1100,17 +1166,21 @@
 
       const tagIds = new Set(p.tags.map((t) => t.id));
       // performers whose face looks a lot like theirs, whatever else they share
-      const pull = Object.entries(faces.scores).sort((a, b) => b[1] - a[1]).slice(0, FACE_PULL).map(([id]) => id);
+      const pull = !w.face ? [] : Object.entries(faces.scores).sort((a, b) => b[1] - a[1]).slice(0, FACE_PULL).map(([id]) => id);
       if (pull.length) {
         queries.push(Promise.all(pull.map((id) =>
           gql(`query ($id: ID!) { findPerformer(id: $id) { ${FIELDS} } }`, { id }).then((d) => d.findPerformer).catch(() => null)))
           .then((list) => list.filter((x) => x && (!p.gender || x.gender === p.gender))));
       }
+      // 1 point per shared tag, details in common (ethnicity 3, hair 2, eyes,
+      // country, height, age... 1 each), their face (2-10), women 2, and off
+      // unless turned on: a favourite 3. Each times its setting.
       const score = (x) => {
-        let k = x.tags.filter((t) => tagIds.has(t.id)).length; // 1 point per shared tag
-        k += lookAlikePoints(p, x);
-        k += facePoints(faces, faces.scores[x.id] || 0);
-        if (x.gender === "FEMALE") k += 2;
+        let k = w.tags * x.tags.filter((t) => tagIds.has(t.id)).length;
+        k += w.details * lookAlikePoints(p, x);
+        k += w.face * facePoints(faces, faces.scores[x.id] || 0);
+        if (x.gender === "FEMALE") k += w.women * 2;
+        if (x.favorite) k += w.favorite * 3;
         return k;
       };
 
@@ -1126,6 +1196,12 @@
     }
 
     async function similarTo(kind, id) {
+      await loadSettings();
+      MAX = howMany("performersCount");
+      w = {
+        tags: weight("performersTags"), details: weight("performersDetails"), face: weight("performersFace"),
+        women: weight("performersWomen"), favorite: weight("performersFavorites", 0),
+      };
       const ids = (await sourcesFor(kind, id)).slice(0, MAX_SOURCES);
       if (!ids.length) return [];
       const sources = (await gql(
@@ -1267,6 +1343,8 @@
     // the same performers (on the gallery or on its pictures) and studio
     let allGalleries = null;
     async function similarGalleries(gid) {
+      await loadSettings();
+      const gw = { tags: weight("galleriesTags"), performers: weight("galleriesPerformers"), studio: weight("galleriesStudio") };
       allGalleries = allGalleries || gql(`{ findGalleries(filter: { per_page: -1 }) { galleries {
           id title image_count paths { cover } files { path } folder { path } studio { id } performers { id } tags { id } } } }`)
         .then((d) => d.findGalleries.galleries);
@@ -1280,8 +1358,8 @@
       const idf = (t) => Math.log((gals.length + 1) / ((df.get(t) || 0) + 0.5));
       const myTags = new Set(me.tags.map((t) => t.id));
       const myPerf = new Set([...me.performers.map((p) => p.id), ...pics.findImages.images.flatMap((im) => im.performers.map((p) => p.id))]);
-      const weight = (set) => [...set].reduce((a, t) => a + idf(t), 0) || 1;
-      const myW = weight(myTags);
+      const tagWeight = (set) => [...set].reduce((a, t) => a + idf(t), 0) || 1;
+      const myW = tagWeight(myTags);
       const name = (g) => g.title || ((g.folder?.path || g.files?.[0]?.path || "").split("/").filter(Boolean).pop()) || "Gallery " + g.id;
       return gals
         .filter((g) => g.id !== gid && g.image_count > 0)
@@ -1289,13 +1367,13 @@
           const tags = new Set(g.tags.map((t) => t.id));
           const shared = [...tags].filter((t) => myTags.has(t)).reduce((a, t) => a + idf(t), 0);
           const perf = g.performers.filter((p) => myPerf.has(p.id)).length;
-          const score = (10 * shared) / Math.sqrt(myW * weight(tags)) + 3 * Math.min(perf, 3)
-            + (me.studio && g.studio && me.studio.id === g.studio.id ? 2 : 0);
+          const score = gw.tags * (10 * shared) / Math.sqrt(myW * tagWeight(tags)) + gw.performers * 3 * Math.min(perf, 3)
+            + (me.studio && g.studio && me.studio.id === g.studio.id ? gw.studio * 2 : 0);
           return { ...g, name: name(g), score };
         })
         .filter((g) => g.score >= 1.5)
         .sort((a, b) => b.score - a.score)
-        .slice(0, MAX);
+        .slice(0, howMany("galleriesCount"));
     }
 
     function rowHtml(title, cards) {

@@ -1,9 +1,15 @@
 name: Modern UI
 description: Cleaner scene, performer, image, gallery, studio, group and tag cards, plus a mobile-friendly layout.
-version: "0.59"
+version: "0.59.1"
 ui:
+  # (the update check reads the published plugin list and changelogs from GitHub)
+  csp:
+    connect-src:
+      - https://opensourceluffy.github.io
+      - https://raw.githubusercontent.com
   javascript:
     - modern-ui.js
+    - osl-updates.js
   css:
     - modern-ui.css
 

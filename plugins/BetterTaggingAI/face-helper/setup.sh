@@ -8,6 +8,8 @@
 # model (about 350 MB) is downloaded. Options:
 #   --from DIR   take every model, CLIP included, from DIR instead (a backup,
 #                e.g. on a NAS); nothing is downloaded
+#   --listen-all answer other computers too (Stash on another computer): no
+#                SSH tunnel needed; only on a home network you trust
 #   --body       (kept for older instructions; NudeNet is always set up now)
 set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -22,10 +24,12 @@ if [ -z "$PY" ]; then
   done
 fi
 FROM=""
+LISTEN=""   # --listen-all: answer other computers too (Stash on another computer)
 while [ $# -gt 0 ]; do
   case "$1" in
     --from) FROM="$2"; shift 2 ;;
     --body) shift ;;
+    --listen-all) LISTEN="--host 0.0.0.0"; shift ;;
     *) echo "Unknown option: $1"; exit 1 ;;
   esac
 done
@@ -39,10 +43,15 @@ CLIP_TEXT_URL="https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/main/
 CLIP_TOK=clip_tokenizer.json
 CLIP_TOK_URL="https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/main/tokenizer.json"
 
+# downloads go to a .part file first, so one that's cut off isn't kept
+fetch() {
+  curl -sSLf -o "$1.part" "$2" && mv -f "$1.part" "$1" || { rm -f "$1.part"; return 1; }
+}
+
 # a model file is right if its checksum is the one in models/SHA256SUMS
 check() {
   want="$(grep " $2\$" "$HERE/models/SHA256SUMS" | cut -d' ' -f1)"
-  got="$( (shasum -a 256 "$1" 2>/dev/null || sha256sum "$1") | cut -d' ' -f1)"
+  got="$( (shasum -a 256 "$1" 2>/dev/null || sha256sum "$1" 2>/dev/null) | cut -d' ' -f1)"
   [ -n "$want" ] && [ "$want" = "$got" ]
 }
 
@@ -71,7 +80,7 @@ if [ -n "$FROM" ]; then
   cp "$FROM/$CLIP" "$DEST/models/$CLIP"
 elif ! check "$DEST/models/$CLIP" "$CLIP"; then
   # CLIP ViT-B/32 picture model (about 350 MB), for tags from look-alikes
-  curl -sSLf -o "$DEST/models/$CLIP" "$CLIP_URL"
+  fetch "$DEST/models/$CLIP" "$CLIP_URL" || { echo "Couldn't download $CLIP_URL"; exit 1; }
 fi
 check "$DEST/models/$CLIP" "$CLIP" || echo "Note: $CLIP isn't the checked version (it still works if it's a CLIP ViT-B/32 vision model)."
 # the text model and tokenizer (search by description): from --from, else downloaded
@@ -80,7 +89,7 @@ for pair in "$CLIP_TEXT $CLIP_TEXT_URL" "$CLIP_TOK $CLIP_TOK_URL"; do
   if [ -n "$FROM" ] && [ -f "$FROM/$1" ]; then
     cp "$FROM/$1" "$DEST/models/$1"
   elif [ ! -s "$DEST/models/$1" ]; then
-    curl -sSLf -o "$DEST/models/$1" "$2" || echo "Note: couldn't download $1; search by description won't work."
+    fetch "$DEST/models/$1" "$2" || echo "Note: couldn't download $1; search by description won't work."
   fi
 done
 
@@ -92,7 +101,7 @@ if [ "$(uname)" = "Darwin" ]; then
 <plist version="1.0"><dict>
   <key>Label</key><string>face-helper</string>
   <key>ProgramArguments</key><array>
-    <string>$DEST/venv/bin/python</string><string>$DEST/face_helper.py</string>
+    <string>$DEST/venv/bin/python</string><string>$DEST/face_helper.py</string>${LISTEN:+<string>--host</string><string>0.0.0.0</string>}
   </array>
   <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
   <key>StandardErrorPath</key><string>$DEST/face-helper.log</string>
@@ -101,8 +110,13 @@ PL
   launchctl bootout "gui/$(id -u)/face-helper" 2>/dev/null || true
   launchctl bootstrap "gui/$(id -u)" "$PLIST"
   echo "Face helper installed in $DEST and started (it starts at login too)."
+elif pgrep -f "$DEST/face_helper.py" >/dev/null 2>&1; then
+  # (run again: the one running has the old code - restart it the same way, in the background)
+  pkill -f "$DEST/face_helper.py"; sleep 1
+  nohup "$DEST/venv/bin/python" "$DEST/face_helper.py" $LISTEN >>"$DEST/face-helper.log" 2>&1 &
+  echo "Face helper updated in $DEST and restarted (log: $DEST/face-helper.log)."
 else
-  echo "Face helper installed in $DEST. Start it with: $DEST/venv/bin/python $DEST/face_helper.py"
+  echo "Face helper installed in $DEST. Start it with: $DEST/venv/bin/python $DEST/face_helper.py${LISTEN:+ $LISTEN}"
 fi
 echo "Check it: curl http://127.0.0.1:11535/health"
 echo "The AI model for tags and titles runs in Ollama (https://ollama.com): ollama pull gemma3:4b"
