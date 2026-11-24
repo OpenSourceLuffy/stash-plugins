@@ -188,23 +188,78 @@ class Stash:
             return resp.read(), resp.headers.get_content_type()
 
 
+_existing = {}  # "findScenes" / "findImages" -> (when, ids that exist)
+
+
+def existing_ids(stash, query, max_age=120):
+    """The ids of every scene (query "findScenes") or image ("findImages")
+    there is now - cheap: ids only. Kept for `max_age` seconds."""
+    hit = _existing.get(query)
+    if hit and time.time() - hit[0] < max_age:
+        return hit[1]
+    field = {"findScenes": "scenes", "findImages": "images", "findGalleries": "galleries",
+             "findPerformers": "performers", "findStudios": "studios", "findTags": "tags"}[query]
+    got = {x["id"] for x in stash.call(f"{{ {query}(filter: {{per_page: -1}}) {{ {field} {{ id }} }} }}")[query][field]}
+    _existing[query] = (time.time(), got)
+    return got
+
+
 def find_by_ids(stash, query, field, ids, fields):
     """findScenes / findImages (ids: ...) that doesn't fail when some of the
-    ids are gone (deleted since a scan remembered them): Stash refuses the
-    whole lookup then, so the missing ones are left out and it's asked again."""
+    ids are gone (deleted since a scan or a Review list remembered them):
+    Stash refuses the whole lookup then, naming one missing id at a time, so
+    on the first refusal the ids that still exist are looked up (one cheap
+    call) and only those are asked for - not one retry per deleted item,
+    which with hundreds of them kept Review loading for minutes."""
     ids = [str(i) for i in ids]
-    for _ in range(len(ids) + 1):
-        if not ids:
-            return []
-        try:
-            return stash.call(f"query($ids: [ID!]) {{ {query}(ids: $ids, filter: {{per_page: -1}}) {{ {field} {{ {fields} }} }} }}",
-                              {"ids": ids})[query][field]
-        except RuntimeError as e:
-            gone = set(re.findall(r"with id (\d+) not found", str(e)))
-            if not gone or not gone & set(ids):
-                raise
-            ids = [i for i in ids if i not in gone]
-    return []
+    if not ids:
+        return []
+    q = f"query($ids: [ID!]) {{ {query}(ids: $ids, filter: {{per_page: -1}}) {{ {field} {{ {fields} }} }} }}"
+    try:
+        return stash.call(q, {"ids": ids})[query][field]
+    except RuntimeError as e:
+        if not re.search(r"with id \d+ not found", str(e)):
+            raise
+    _existing.pop(query, None)  # (fresh: something was deleted)
+    have = existing_ids(stash, query)
+    ids = [i for i in ids if i in have]
+    return stash.call(q, {"ids": ids})[query][field] if ids else []
+
+
+# Scenes and images deleted from Stash stay in the add-on's records (the faces
+# and looks found in them) until pruned; Review then counted suggestions for
+# them that could never be shown (a Batch group of 374 that loaded nothing).
+PRUNE_EVERY = 3600  # seconds between checks (Review asks often)
+PRUNE_FILES = ("face_items.json", "look_items.json")
+
+
+def prune_deleted(stash, plugin_dir, every=PRUNE_EVERY):
+    """Drops deleted scenes and images from the face and look-alike records
+    (at most once every `every` seconds). Returns how many were dropped."""
+    stamp = os.path.join(plugin_dir, "prune_last.json")
+    with contextlib.suppress(OSError, ValueError):
+        with open(stamp) as fh:
+            if time.time() - json.load(fh).get("at", 0) < every:
+                return 0
+    alive = {f"scene:{i}" for i in existing_ids(stash, "findScenes", 0)} | {f"image:{i}" for i in existing_ids(stash, "findImages", 0)}
+    if len(alive) < 2:
+        return 0  # (Stash answered with nothing: never prune on that)
+    dropped = 0
+    for name in PRUNE_FILES:
+        path = os.path.join(plugin_dir, name)
+        if not os.path.exists(path):
+            continue
+        with locked_json(path) as rec:
+            gone = [k for k in rec if k.split(":")[0] in ("scene", "image") and k not in alive]
+            for k in gone:
+                del rec[k]
+            dropped += len(gone)
+    with contextlib.suppress(OSError):
+        with open(stamp, "w") as fh:
+            json.dump({"at": time.time(), "dropped": dropped}, fh)
+    if dropped:
+        log("info", f"Left out {dropped} record(s) of scenes and images deleted from Stash.")
+    return dropped
 
 
 SETTINGS_CACHE_SECONDS = 30
@@ -3645,20 +3700,20 @@ def _search_send_index(stash, cfg, plugin_dir, version):
 
 def find_markers_by_ids(stash, ids, fields):
     """findSceneMarkers (ids: ...) that doesn't fail when some were deleted
-    since (Stash refuses the whole lookup then): the missing ones are left out."""
+    since (Stash refuses the whole lookup then, one missing id at a time):
+    on the first refusal only the markers that still exist are asked for."""
     ids = [str(i) for i in ids]
-    for _ in range(len(ids) + 1):
-        if not ids:
-            return []
-        try:
-            return stash.call(f"query($ids: [ID!]) {{ findSceneMarkers(ids: $ids) {{ scene_markers {{ {fields} }} }} }}",
-                              {"ids": ids})["findSceneMarkers"]["scene_markers"]
-        except RuntimeError as e:
-            gone = set(re.findall(r"marker with id (\d+) not found", str(e)))
-            if not gone:
-                raise
-            ids = [i for i in ids if i not in gone]
-    return []
+    if not ids:
+        return []
+    q = f"query($ids: [ID!]) {{ findSceneMarkers(ids: $ids) {{ scene_markers {{ {fields} }} }} }}"
+    try:
+        return stash.call(q, {"ids": ids})["findSceneMarkers"]["scene_markers"]
+    except RuntimeError as e:
+        if not re.search(r"marker with id \d+ not found", str(e)):
+            raise
+    have = {m["id"] for m in stash.call("{ findSceneMarkers(filter: {per_page: -1}) { scene_markers { id } } }")["findSceneMarkers"]["scene_markers"]}
+    ids = [i for i in ids if i in have]
+    return stash.call(q, {"ids": ids})["findSceneMarkers"]["scene_markers"] if ids else []
 
 
 def run_ai_search(stash, plugin_dir, text, kinds=None, limit=60, min_aesthetic=None):
@@ -6063,6 +6118,8 @@ def _look_targets(stash, cfg, only_untagged):
 def run_look_scan(stash, plugin_dir):
     """Task: a picture fingerprint for every scene and image (once; changed
     files again)."""
+    with contextlib.suppress(Exception):
+        prune_deleted(stash, plugin_dir, every=0)  # (a scan: always)
     cfg = settings(stash, plugin_dir)
     picture_helper(cfg, [])  # fails early if the helper or its model isn't there
     cache = LookCache(plugin_dir)
@@ -9280,6 +9337,8 @@ def run_tag_review(stash, plugin_dir, tag=None, limit=40, skip=(), fresh=False):
     you haven't turned down. Body tags are left out (the body detector does
     those), as are "Top tags: tags to ignore", gallery-name tags and tags you've
     mostly removed. Best first. `skip`: "kind:id:tag" already shown."""
+    with contextlib.suppress(Exception):
+        prune_deleted(stash, plugin_dir, every=PRUNE_EVERY)
     cfg = settings(stash, plugin_dir)
     _, excluded = tag_lookup(stash, cfg, plugin_dir)
     found, names = _tag_review_candidates(stash, cfg, plugin_dir, excluded, fresh)
@@ -10091,6 +10150,8 @@ def run_face_review(stash, plugin_dir, performer=None, limit=40, skip=(), favour
     clearly ahead of anyone else, and in a scene the best match in 2+ frames.
     Best first. `skip`: "kind:id:performer" already shown this visit."""
     cfg = settings(stash, plugin_dir)
+    with contextlib.suppress(Exception):
+        prune_deleted(stash, plugin_dir)
     index = load_face_index(plugin_dir)
     known = {}
     for pid, entry in index.items():
@@ -10147,6 +10208,8 @@ def run_face_review(stash, plugin_dir, performer=None, limit=40, skip=(), favour
         if kind == "scene" and len(h["pics"]) < 2:
             continue
         if key in (index.get(pid) or {}).get("not", []) or f"{key}:{pid}" in skip or pid in tagged.get(key, ()):
+            continue
+        if key not in tagged:  # (deleted from Stash since its faces were found)
             continue
         strong.append((h["score"], kind, iid, pid, h))
     strong.sort(key=lambda x: -x[0])
@@ -10291,6 +10354,8 @@ def run_face_scan(stash, plugin_dir, kinds=("scene", "image")):
     """Task: find the faces in every scene (a few frames) and image once, so
     look-alike searches and learning from tagged items are quick. Picks up
     where it left off; changed files are looked at again."""
+    with contextlib.suppress(Exception):
+        prune_deleted(stash, plugin_dir, every=0)  # (a scan: always)
     cfg = settings(stash, plugin_dir)
     face_helper(cfg, [])  # fails early if the helper isn't running
     cache = FaceCache(plugin_dir)
