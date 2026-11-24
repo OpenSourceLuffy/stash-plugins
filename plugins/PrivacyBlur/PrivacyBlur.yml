@@ -1,11 +1,17 @@
 name: Privacy Blur
 description: A settings switch that blurs every cover, thumbnail, photo and video in Stash - or replaces them with safe stand-in pictures and made-up names, titles and tags. Handy for taking screenshots or browsing around other people.
-version: "1.5"
+version: "1.5.1"
 url: https://github.com/OpenSourceLuffy/stash-plugins/tree/main/plugins/PrivacyBlur
 ui:
+  # (the update check reads the published plugin list and changelogs from GitHub)
+  csp:
+    connect-src:
+      - https://opensourceluffy.github.io
+      - https://raw.githubusercontent.com
   javascript:
     - privacy-blur.js
     - privacy-blur-replace.js
+    - osl-updates.js
   css:
     - privacy-blur.css
 

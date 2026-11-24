@@ -25,6 +25,8 @@ Plugins for [Stash](https://stashapp.cc):
 3. Open the new source, tick the plugins you want and click **Install**.
 4. Reload the page (or click **Reload plugins** under Settings → Plugins).
 
+Installed this way, the plugins tell you when there's an update: Stash shows what's new, with **Yes, install**, **Later** and **Don't show again**. (Updates also show under **Settings → Plugins**.)
+
 Updates show up in the same place whenever a new version is published. Each plugin's changelog
 (linked above) lists what changed.
 

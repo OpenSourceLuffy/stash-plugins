@@ -1,9 +1,132 @@
 name: Stash Suggestions
 description: '"Suggested" scenes, "Similar photos" and "Similar Performers" rows at the bottom of scene, image and performer pages. Works with any theme; looks its best with Modern UI.'
-version: "1.4"
+version: "1.5"
 url: https://github.com/OpenSourceLuffy/stash-plugins/tree/main/plugins/StashSuggestions
 ui:
+  # (the update check reads the published plugin list and changelogs from GitHub)
+  csp:
+    connect-src:
+      - https://opensourceluffy.github.io
+      - https://raw.githubusercontent.com
   javascript:
     - stash-suggestions.js
+    - osl-updates.js
   css:
     - stash-suggestions.css
+settings:
+  # --- Scene page: Suggested ---
+  scenesCount:
+    displayName: "Scenes: how many to suggest"
+    description: "How many scenes the Suggested row shows. Default 12 (1 - 60)."
+    type: NUMBER
+  scenesTags:
+    displayName: "Scenes: shared tags (%)"
+    description: "How much each shared tag counts. 100 = default (2 points a tag), 0 = left out, 200 = double."
+    type: NUMBER
+  scenesStudio:
+    displayName: "Scenes: same studio (%)"
+    description: "100 = default (3 points), 0 = left out."
+    type: NUMBER
+  scenesLookalikes:
+    displayName: "Scenes: look-alike performers (%)"
+    description: "Performers who look like the ones in the scene (details in common, and their face with Better Organizing AI). 100 = default (up to 5 points), 0 = left out."
+    type: NUMBER
+  scenesLooksAlike:
+    displayName: "Scenes: scenes that look alike (%)"
+    description: "With Better Organizing AI: the 40 scenes whose pictures look most alike. 100 = default (2 - 8 points), 0 = left out."
+    type: NUMBER
+  scenesLength:
+    displayName: "Scenes: similar length (%)"
+    description: "Within a quarter of this scene's length. 100 = default (1 point), 0 = left out."
+    type: NUMBER
+  scenesOrientation:
+    displayName: "Scenes: same shape (%)"
+    description: "Portrait, landscape or square, like this one. 100 = default (1 point), 0 = left out."
+    type: NUMBER
+  scenesRating:
+    displayName: "Scenes: rating (%) - off by default"
+    description: "Higher-rated scenes first: 100 = 5 stars adds 5 points (1 star 1). Empty or 0 = not counted."
+    type: NUMBER
+  scenesFavorites:
+    displayName: "Scenes: favourite performers (%) - off by default"
+    description: "Scenes with a favourite performer in them: 100 = 3 points. Empty or 0 = not counted."
+    type: NUMBER
+  scenesUnwatched:
+    displayName: "Scenes: not watched yet (%) - off by default"
+    description: "Scenes you haven't played: 100 = 2 points. Empty or 0 = not counted."
+    type: NUMBER
+  # --- Image page: Similar photos ---
+  photosCount:
+    displayName: "Photos: how many to show"
+    description: "How many photos Similar photos shows at first, and adds with Load more. Default 12 (1 - 60)."
+    type: NUMBER
+  photosTags:
+    displayName: "Photos: shared tags (%)"
+    description: "100 = default (2 points a tag), 0 = left out, 200 = double."
+    type: NUMBER
+  photosGalleries:
+    displayName: "Photos: same gallery (%)"
+    description: "100 = default (2 points a gallery), 0 = left out."
+    type: NUMBER
+  photosLookalikes:
+    displayName: "Photos: look-alike performers (%)"
+    description: "Photos of performers who look like the ones in this photo. 100 = default (up to 5 points), 0 = left out."
+    type: NUMBER
+  photosLooksAlike:
+    displayName: "Photos: photos that look alike (%)"
+    description: "With Better Organizing AI: the 40 photos that look most alike. 100 = default (2 - 8 points), 0 = left out."
+    type: NUMBER
+  photosLooksGood:
+    displayName: "Photos: better-looking photos first (%)"
+    description: "With Better Organizing AI on a Mac: Apple's aesthetics score (-3 to +3 points). 100 = default, 0 = left out."
+    type: NUMBER
+  photosRating:
+    displayName: "Photos: rating (%) - off by default"
+    description: "Higher-rated photos first: 100 = 5 stars adds 5 points. Empty or 0 = not counted."
+    type: NUMBER
+  photosFavorites:
+    displayName: "Photos: favourite performers (%) - off by default"
+    description: "Photos with a favourite performer: 100 = 3 points. Empty or 0 = not counted."
+    type: NUMBER
+  # --- Similar Performers ---
+  performersCount:
+    displayName: "Performers: how many to show"
+    description: "How many performers Similar Performers shows. Default 12 (1 - 60)."
+    type: NUMBER
+  performersTags:
+    displayName: "Performers: shared tags (%)"
+    description: "100 = default (1 point a tag), 0 = left out."
+    type: NUMBER
+  performersDetails:
+    displayName: "Performers: details in common (%)"
+    description: "Ethnicity (3), hair colour (2), eye colour, country, height, age and the like (1 each). 100 = default, 0 = left out."
+    type: NUMBER
+  performersFace:
+    displayName: "Performers: alike faces (%)"
+    description: "With Better Organizing AI: how alike their faces look (2 - 10 points; the closest few are added even with nothing else in common). 100 = default, 0 = left out."
+    type: NUMBER
+  performersWomen:
+    displayName: "Performers: women first (%)"
+    description: "100 = default (2 points for women), 0 = no preference."
+    type: NUMBER
+  performersFavorites:
+    displayName: "Performers: favourites (%) - off by default"
+    description: "Favourite performers first: 100 = 3 points. Empty or 0 = not counted."
+    type: NUMBER
+  # --- Gallery page: Similar galleries ---
+  galleriesCount:
+    displayName: "Galleries: how many to show"
+    description: "How many galleries Similar galleries shows. Default 12 (1 - 60)."
+    type: NUMBER
+  galleriesTags:
+    displayName: "Galleries: shared tags (%)"
+    description: "Rarer tags count more. 100 = default, 0 = left out."
+    type: NUMBER
+  galleriesPerformers:
+    displayName: "Galleries: same performers (%)"
+    description: "100 = default (3 points each, up to 3), 0 = left out."
+    type: NUMBER
+  galleriesStudio:
+    displayName: "Galleries: same studio (%)"
+    description: "100 = default (2 points), 0 = left out."
+    type: NUMBER

@@ -4,6 +4,18 @@ Newest first. Versions are what Stash shows under Settings → Plugins. Better O
 [Better Organizing AI Add-on](../BetterTaggingAI) share their code (`btt_core.py`), so some versions
 only bring the other plugin's changes.
 
+## 2.4.1 (2026-11-24)
+
+- **Windows**: when Stash is installed directly on Windows and runs the Microsoft Store's stand-in for
+  Python (tasks fail with "exit status 9009"), the plugin's pages now say what that means and how to
+  fix it: Stash's **Settings → System → Python executable path**.
+- **Update check**: when a newer version of any of these plugins is out, Stash shows what's new
+  (from the changelogs) with **Yes, install** (for plugins installed through the plugin source; ones
+  copied in by hand are told where to update), **Later** (a day) and **Don't show again**. It looks
+  twice a day at most, reading the published plugin list and changelogs from GitHub - nothing is
+  sent. Shared by Better Organizing Tools / AI, Modern UI, Privacy Blur and Stash Suggestions: one
+  check covers all seven plugins.
+
 ## 2.4 (2026-11-24)
 
 - **Naming conventions** for performers, studios, galleries and scene / image titles, like tags'

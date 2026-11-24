@@ -65,11 +65,14 @@ zoo); CLIP ViT-B/32 (OpenAI, MIT licence) the picture fingerprints.
                      "ocr": true/false, "apple": true/false}
 
 Runs on 127.0.0.1 only (Stash's Docker container reaches it as
-host.docker.internal). Port: FACE_HELPER_PORT, default 11535.
+host.docker.internal on a Mac), unless --host / FACE_HELPER_HOST says otherwise
+(e.g. 0.0.0.0 when Stash runs elsewhere). Port: --port / FACE_HELPER_PORT,
+default 11535.
 """
 import base64
 import contextlib
 import json
+import sys
 import os
 import threading
 import socketserver
@@ -397,11 +400,13 @@ def nearest(vectors, base, k):
     return out
 
 
-def cluster_faces(faces, threshold, dim=128, center=False):
-    """Group faces of the same person: each face joins the most alike group
-    (the average of its faces) if it's at least `threshold` alike, else
-    starts a new one; then every face is checked again against the final
-    groups. Returns [group, likeness] per face (group -1: alone)."""
+def cluster_faces(faces, threshold, dim=128, center=False, batch=256):
+    """Group faces of the same person (or pictures that look alike): each
+    joins the most alike group (the average of its members) if it's at least
+    `threshold` alike, else starts a new one; then every one is checked again
+    against the final groups. Returns [group, likeness] each (group -1: alone).
+    Works through them `batch` at a time against the groups so far (one matrix
+    product each), so 100,000 pictures take seconds, not hours."""
     if not faces:
         return []
     F = _q8(faces, dim)
@@ -411,26 +416,44 @@ def cluster_faces(faces, threshold, dim=128, center=False):
         # (the library's average look taken away), or everything looks alike
         F -= F.mean(axis=0, keepdims=True)
         F /= np.linalg.norm(F, axis=1, keepdims=True) + 1e-9
-    n = len(F)
-    sums = np.zeros((n, F.shape[1]), dtype=np.float32)  # each group's summed faces
-    count = np.zeros(n, dtype=np.int32)
+    n, d = F.shape
+    cap = min(n, 4096)
+    sums = np.zeros((cap, d), dtype=np.float32)  # each group's summed members
+    C = np.zeros((cap, d), dtype=np.float32)     # ...and their average, as a unit vector
     groups = 0
-    for i in range(n):
+    for at in range(0, n, batch):
+        X = F[at:at + batch]
+        hit = np.zeros(len(X), dtype=bool)
+        j = np.zeros(len(X), dtype=np.int64)
         if groups:
-            C = sums[:groups]
-            sims = (C @ F[i]) / (np.linalg.norm(C, axis=1) + 1e-9)
-            j = int(np.argmax(sims))
-            if sims[j] >= threshold:
-                sums[j] += F[i]
-                count[j] += 1
-                continue
-        sums[groups] = F[i]
-        count[groups] = 1
-        groups += 1
-    C = sums[:groups] / (np.linalg.norm(sums[:groups], axis=1, keepdims=True) + 1e-9)
+            S = X @ C[:groups].T
+            j = np.argmax(S, axis=1)
+            hit = S[np.arange(len(X)), j] >= threshold
+            np.add.at(sums, j[hit], X[hit])
+        touched = set(np.unique(j[hit]).tolist())
+        start = groups
+        for r in np.nonzero(~hit)[0]:  # the rest: against the groups this batch started
+            x = X[r]
+            if groups > start:
+                local = sums[start:groups]
+                sims = (local @ x) / (np.linalg.norm(local, axis=1) + 1e-9)
+                k = int(np.argmax(sims))
+                if sims[k] >= threshold:
+                    sums[start + k] += x
+                    continue
+            if groups == cap:
+                cap *= 2
+                sums = np.vstack([sums, np.zeros_like(sums)])
+                C = np.vstack([C, np.zeros_like(C)])
+            sums[groups] = x
+            groups += 1
+        idx = np.array(sorted(touched | set(range(start, groups))), dtype=np.int64)
+        if len(idx):
+            C[idx] = sums[idx] / (np.linalg.norm(sums[idx], axis=1, keepdims=True) + 1e-9)
+    C = C[:groups]
     out = []
-    for at in range(0, n, 4000):
-        S = F[at:at + 4000] @ C.T
+    for at in range(0, n, 512):
+        S = F[at:at + 512] @ C.T
         best = np.argmax(S, axis=1)
         for r, j in enumerate(best):
             sim = float(S[r, j])
@@ -450,7 +473,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/health":
             self._send(200, {"ok": True, "embed": os.path.exists(CLIP_MODEL), "body": os.path.exists(BODY_MODEL),
-                             "match": True, "knn": True, "cluster": True, "ocr": HAVE_OCR, "apple": HAVE_OCR, "shotcrop": True,
+                             "match": True, "knn": True, "cluster": True, "cluster_fast": True, "ocr": HAVE_OCR, "apple": HAVE_OCR, "shotcrop": True,
                              "text": os.path.exists(CLIP_TEXT_MODEL) and os.path.exists(CLIP_TOKENIZER),
                              "gpu": _gpu()})
         else:
@@ -839,5 +862,14 @@ class Server(ThreadingHTTPServer):
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("FACE_HELPER_PORT", "11535"))
-    Server(("127.0.0.1", port), Handler).serve_forever()
+    # where it listens: 127.0.0.1 (this computer only) unless told otherwise -
+    # --host 0.0.0.0 (or FACE_HELPER_HOST) for Stash in Docker on Windows, or
+    # on another computer; --port (or FACE_HELPER_PORT), default 11535
+    args = sys.argv[1:]
+
+    def arg(name, default):
+        return args[args.index(name) + 1] if name in args[:-1] else default
+
+    host = arg("--host", os.environ.get("FACE_HELPER_HOST", "127.0.0.1"))
+    port = int(arg("--port", os.environ.get("FACE_HELPER_PORT", "11535")))
+    Server((host, port), Handler).serve_forever()

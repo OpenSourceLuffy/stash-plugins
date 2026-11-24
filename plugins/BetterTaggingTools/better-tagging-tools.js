@@ -21,8 +21,18 @@
       body: JSON.stringify({ query, variables }),
     });
     const json = await res.json();
-    if (json.errors) throw new Error(json.errors[0].message);
+    if (json.errors) throw new Error(pythonWhy(json.errors[0].message));
     return json.data;
+  }
+
+  // Windows: Stash ran the Microsoft Store's stand-in for Python (error 9009)
+  // instead of a real one - say how to point Stash at the real one
+  function pythonWhy(m) {
+    return /exit status (9009|9003)\b|Python was not found/i.test(m || "")
+      ? "Stash couldn't start Python: on Windows it found the Microsoft Store's stand-in for it (error 9009). "
+        + "In Stash, open Settings → System → Python executable path and enter your Python's full path "
+        + "(run  py -c \"import sys; print(sys.executable)\"  in PowerShell to see it), then try again."
+      : m;
   }
 
   let maxSuggestions = 15;

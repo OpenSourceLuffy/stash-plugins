@@ -239,6 +239,8 @@ def main():
         elif mode == "tag_groups":
             print(json.dumps({"output": c.run_tag_groups(stash, plugin_dir, int(args.get("limit") or 30), args.get("skip") or [],
                                                          fresh=bool(args.get("fresh")))}))
+        elif mode == "perf_pairs":
+            print(json.dumps({"output": c.run_perf_pairs(stash, plugin_dir, int(args.get("limit") or 30), args.get("skip") or [])}))
         elif mode == "tag_pairs":
             print(json.dumps({"output": c.run_tag_pairs(stash, plugin_dir, int(args.get("limit") or 30), args.get("skip") or [])}))
         elif mode == "tag_tidy_apply":

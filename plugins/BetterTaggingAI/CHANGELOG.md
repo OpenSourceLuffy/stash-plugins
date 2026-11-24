@@ -4,6 +4,70 @@ Newest first. Versions are what Stash shows under Settings → Plugins. The add-
 (`btt_core.py`) with [Better Organizing Tools](../BetterTaggingTools), so some versions only bring
 that plugin's changes.
 
+## 1.8.1 (2026-11-24)
+
+- **Tried on a fresh Windows 11 PC** (Stash installed directly, Python from winget), with fixes:
+  - Stash on Windows runs plugins with `python3` first, which on most PCs is the Microsoft Store's
+    stand-in, so every task failed with "exit status 9009". The add-on's pages (and Better Organizing
+    Tools and Stash Suggestions) now say what that means and how to fix it (Stash's **Python
+    executable path** setting), `setup.ps1` prints the path to enter, and the README says so.
+  - On a new Stash, the welcome (and the update prompt) opened on top of Stash's own **Release
+    Notes** window; they now wait until it's closed.
+  - The setup check showed "0 of 0 scanned" as problems on an empty library; it now says to add a
+    library folder and scan.
+  - The setup check and **Find Ollama** read the settings as they are now: for up to 30 seconds after
+    changing the Ollama address, they still checked the old one.
+  - On a new library the AI had no tags to choose from until some were on items ("No tags to choose
+    from yet"); tags you've made but not used yet now count too, after the used ones.
+  - "Look-alike tags not used yet: run the look-alike scan" showed after that scan too, when the
+    real reason was too few tagged items; it now says which.
+  - Tried with Ollama on another computer over Tailscale (the PC's Stash, a Mac's Ollama): 6s an
+    item, against over a minute on the PC itself (no graphics card).
+- Running the face helper's setup again is safe: it keeps the models it has (nothing is downloaded
+  twice), updates the helper and restarts it - now on Linux too, where the old one kept running with
+  the old code and a new one couldn't start. A download that's cut off is no longer kept as if it
+  were whole (`setup.sh`).
+- Fixed **Review → Tags → New** (and **Faces → New**) timing out on big libraries: the face helper
+  grouped pictures one at a time against every group so far, which grows with the square of the
+  library (hours for 100,000 pictures). It now groups them in batches with one matrix product each:
+  seconds for 100,000 (0.2s instead of 3s for 15,000), with much the same groups. **Update the face
+  helper** (run its setup again) to get it; with an older helper and over 20,000 pictures, Review says
+  so straight away instead of waiting, and a helper that still takes over 30 minutes gets a short note,
+  not a traceback.
+- **Review → Faces → Similar**: performers who may be one person under two names (an account name and
+  a stage name, a name with and without a surname), from their faces, their names and aliases, and
+  what they share (the same StashDB / ThePornDB entry, a link to the same account). Each card says
+  why, with both pictures; pick which to keep and its name. **Merge** asks first (Stash can't undo
+  it), then moves everything to the one you keep and adds the other's names to its aliases; **Not
+  the same** isn't suggested again. A short alias many people use ("Bella") only counts alongside a
+  face match.
+- **Ollama or the face helper on another computer, without an SSH tunnel**: the README and the setup
+  page's Common problems say how to make each listen on the network (`OLLAMA_HOST=0.0.0.0` on
+  Windows, Mac and Linux; the face helper's `--listen-all` / `-ListenAll`) and which ports to let
+  through. When the address set is another computer and doesn't answer, the setup check and **Find
+  Ollama** say that instead of "start Ollama". `setup.sh --listen-all` is new (the Mac / Linux
+  match for `setup.ps1 -ListenAll`).
+- **Setup & troubleshooting on Windows**: the setup page, the setup check and its fixes now give the
+  Windows commands when Stash (or, with Stash in Docker Desktop, the computer it runs on) is Windows -
+  setup.ps1, Invoke-RestMethod, starting Ollama from the Start menu - instead of Mac / Linux ones.
+  Library folders show as Windows writes them (D:\Videos, \\nas\share).
+- Fixed on Windows: Python there has no list of time zones of its own, so every time zone looked
+  wrong - the setup check warned, and the jobs page refused to save one. Now the night time follows
+  the computer's clock until `py -m pip install tzdata` adds the list (the setup check says so), and
+  an empty time zone means the computer's clock.
+- **Face helper setup on Windows**: `face-helper\setup.ps1` does what `setup.sh` does on a Mac or Linux -
+  finds a Python, makes the environment, checks and downloads the models, starts the helper without
+  a window and at sign-in, and checks it. `-ListenAll` for Stash in Docker Desktop or on another
+  computer, `-Gpu` for NVIDIA cards, `-From` for a backup of the models.
+- The face helper takes `--host` / `--port` (or `FACE_HELPER_HOST` / `FACE_HELPER_PORT`): `--host
+  0.0.0.0` when Stash runs in Docker on Windows or on another computer.
+- **Update check**: when a newer version of any of these plugins is out, Stash shows what's new
+  (from the changelogs) with **Yes, install** (for plugins installed through the plugin source; ones
+  copied in by hand are told where to update), **Later** (a day) and **Don't show again**. It looks
+  twice a day at most, reading the published plugin list and changelogs from GitHub - nothing is
+  sent. Shared by Better Organizing Tools / AI, Modern UI, Privacy Blur and Stash Suggestions: one
+  check covers all seven plugins.
+
 ## 1.8 (2026-11-24)
 
 - **Markers help scenes**: a scene's markers now count towards its own tags, faces and AI pictures.

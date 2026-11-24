@@ -101,6 +101,7 @@ row is what's reviewed (**Faces**, **Tags**, **Studios**, **Galleries**); under 
 
 - **Suggested**: what's likely missing.
 - **Check**: what's already there that may be wrong.
+- **Similar**: performers or tags that may be the same, to merge.
 - **New**: performers, studios or galleries you don't have yet.
 
 Tapping a tab goes back to the action you used last there.
@@ -124,6 +125,11 @@ Tapping a tab goes back to the action you used last there.
   Yes also learns that face.
 - *Check*: "Is [performer] in this?" when their face is known, faces were found, and none look like
   them. **✕ Remove** takes them off.
+- *Similar*: two performers who may be one person (an account name and a stage name, a name with and
+  without a surname), from their faces, names and aliases, and a shared StashDB / ThePornDB entry or
+  link to the same account. The card shows both, with the reasons; pick which to keep and the name.
+  **✓ Merge** asks first, since Stash can't undo a merge: everything moves to the one you keep, the
+  other's names become aliases and it's deleted. **✕ Not the same** isn't suggested again.
 - *New*: the same face in 3 or more items without a performer. **Is this [them]?** when a quarter or
   more of those items already have one performer whose face isn't known yet; otherwise **New
   performer?** with name ideas (from accounts in file names and links, shared studios and folders,
@@ -451,6 +457,7 @@ A tiny local program that turns pictures into "fingerprints". From this plugin's
 ```sh
 sh face-helper/setup.sh                      # install and start it
 sh face-helper/setup.sh --from /backup/dir   # the same, with every model from a backup folder
+sh face-helper/setup.sh --listen-all         # answer other computers too (see below)
 ```
 
 - **Needs** Python 3.10–3.14 (picked automatically, or `PYTHON=python3.13`) and `curl`. Mac and
@@ -468,8 +475,35 @@ sh face-helper/setup.sh --from /backup/dir   # the same, with every model from a
 
 #### On Windows
 
-`setup.sh` doesn't run on Windows, so the same steps are done by hand in PowerShell. These are the
-steps a user tested on Windows 11 with Stash running natively (Python 3.12, opencv-python-headless
+> **Stash installed directly on Windows (not in Docker): set its Python first.** When a plugin asks
+> for Python, Stash tries `python3`, which on most PCs is the Microsoft Store's stand-in, so every
+> task fails with **"exit status 9009"**. In Stash, open **Settings → System → Python executable
+> path** and enter your Python's full path. `py -c "import sys; print(sys.executable)"` in
+> PowerShell shows it, and `setup.ps1` prints it at the end. This goes for every Python plugin.
+
+Use **`setup.ps1`**, the Windows version of `setup.sh`. In the plugin's `face-helper` folder, run in
+PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\setup.ps1
+```
+
+It finds a Python 3.10 - 3.14 (the `py` launcher or PATH; `winget install Python.Python.3.12` if you
+have none), makes the environment in `%LOCALAPPDATA%\face-helper`, checks the bundled models against
+`SHA256SUMS`, downloads the CLIP models, starts the helper without a window and adds a Startup
+shortcut so it starts when you sign in, then checks it answers. Options:
+
+- `-ListenAll`: listen on the network, not just this PC - for Stash in **Docker Desktop** (then set
+  the add-on's face helper address to `http://host.docker.internal:11535`) or on another computer.
+- `-Gpu`: use an NVIDIA graphics card (installs `onnxruntime-gpu`; needs CUDA).
+- `-From <folder>`: take every model from a backup instead of downloading.
+- `-Python "py -3.12"`, `-Port 11535`, `-Dest <folder>`, `-NoStartup`.
+
+Running it again updates the helper (it stops the running one first).
+
+<details><summary>The same steps by hand</summary>
+
+These are the steps a user tested on Windows 11 with Stash running natively (Python 3.12, opencv-python-headless
 5.1, numpy 2.5, onnxruntime 1.32) - thank you! `<dest>` is any folder you like, and
 `<stash plugins folder>` is where Stash keeps its plugins.
 
@@ -512,6 +546,43 @@ Invoke-WebRequest http://127.0.0.1:11535/health -UseBasicParsing | Select-Object
 - With Stash running natively (not in Docker), the add-on looks for Ollama at
   `http://127.0.0.1:11434` and the helper at `http://127.0.0.1:11535` by itself (from 1.7.1). On
   older versions, set those two addresses in the add-on's settings.
+
+
+</details>
+
+### Ollama or the face helper on another computer
+
+Both can run on a different computer from Stash (say, a PC with a graphics card), and **no SSH
+tunnel is needed**. By default each one only answers the computer it runs on, so tell it to listen on
+the network:
+
+- **Ollama:** set `OLLAMA_HOST` to `0.0.0.0` on that computer, then restart Ollama.
+  - Windows: `setx OLLAMA_HOST 0.0.0.0` in a terminal, then quit Ollama (its icon by the clock) and
+    open it again.
+  - Mac (the app): `launchctl setenv OLLAMA_HOST 0.0.0.0`, then quit and reopen Ollama (run it again
+    after a restart).
+  - Mac (Homebrew, `brew services`): add it to the service, then restart it with launchctl:
+    ```sh
+    P=$(ls ~/Library/LaunchAgents/*ollama*.plist)
+    /usr/libexec/PlistBuddy -c "Add :EnvironmentVariables:OLLAMA_HOST string 0.0.0.0" "$P"
+    launchctl bootout gui/$(id -u) "$P"; launchctl bootstrap gui/$(id -u) "$P"
+    ```
+    `brew upgrade ollama` and `brew services restart ollama` write that file again, so do this again
+    after either.
+  - Linux: `sudo systemctl edit ollama`, add these two lines, then `sudo systemctl restart ollama`:
+    ```
+    [Service]
+    Environment="OLLAMA_HOST=0.0.0.0"
+    ```
+- **Face helper:** `sh face-helper/setup.sh --listen-all` (Windows: `.\setup.ps1 -ListenAll`), or start
+  it with `--host 0.0.0.0`.
+- Let ports **11434** (Ollama) and **11535** (face helper) through that computer's firewall.
+- Set **Setup: Ollama address** to `http://<its IP>:11434` and the face helper address to
+  `http://<its IP>:11535`. From Stash's computer, `curl http://<its IP>:11434/api/tags` should answer.
+
+Neither has a password, so only do this on a home network you trust (a VPN like Tailscale between the
+two computers works too, and keeps them off the rest of the network). **AI setup & troubleshooting**
+(`/ai-setup`) checks both addresses and says what to change.
 
 ### 3. First runs
 

@@ -48,6 +48,23 @@ performer pages (plus a performer's galleries and studios), so there's always so
 - **Similar galleries** under a gallery's pictures: scored by the tags they share (rarer tags count
   more), the same performers (on the gallery or its pictures) and the same studio.
 
+## Settings
+
+Under **Settings → Plugins → Stash Suggestions** (all optional; empty = the default):
+
+- **How much each thing counts**, as a percentage: 100 = the default, 0 = left out, 200 = counts
+  double. Each row has its own list: Scenes (shared tags, same studio, look-alike performers,
+  scenes that look alike, similar length, same shape), Photos (shared tags, same gallery, look-alike
+  performers, photos that look alike, better-looking photos), Performers (shared tags, details in
+  common, alike faces, women first) and Galleries (shared tags, same performers, same studio).
+- **Extra things to count**, off until you give them a percentage: rating (scenes and photos),
+  favourite performers (scenes, photos and performers), and scenes you haven't watched yet.
+- **How many to show** in each row: default 12, up to 60. For Similar photos it's also how many
+  **Load more** adds.
+
+Changes show on the next page you open. If everything a row scores on is set to 0, it falls back to
+its fill-up (unorganised, then random items).
+
 ## Notes
 
 - The rows are hidden while an **Edit** tab is open, so they don't get mixed in with the form.

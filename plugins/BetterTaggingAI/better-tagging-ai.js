@@ -20,8 +20,18 @@
       body: JSON.stringify({ query, variables }),
     });
     const json = await res.json();
-    if (json.errors) throw new Error(json.errors[0].message);
+    if (json.errors) throw new Error(pythonWhy(json.errors[0].message));
     return json.data;
+  }
+
+  // Windows: Stash ran the Microsoft Store's stand-in for Python (error 9009)
+  // instead of a real one - say how to point Stash at the real one
+  function pythonWhy(m) {
+    return /exit status (9009|9003)\b|Python was not found/i.test(m || "")
+      ? "Stash couldn't start Python: on Windows it found the Microsoft Store's stand-in for it (error 9009). "
+        + "In Stash, open Settings → System → Python executable path and enter your Python's full path "
+        + "(run  py -c \"import sys; print(sys.executable)\"  in PowerShell to see it), then try again."
+      : m;
   }
 
   function ask(args) {
@@ -1774,14 +1784,16 @@
       load: (only, skip, fresh) => ask({ mode: REVIEW_MODES._tidyMode, limit: 30, skip, fresh: !!fresh }),
       keyOf: (it) => it.sig,
       yes: async (it) => {
-        const data = it.type === "tagmerge" ? { keep: it._keep, others: it._others, name: it._name }
+        const data = it.type === "tagmerge" || it.type === "perfmerge" ? { keep: it._keep, others: it._others, name: it._name }
           : it.type === "tagsub" ? { child: it.child.id, parent: it.parent.id }
           : it.type === "tagjoin" ? { tag: it._tag.id, keys: it.keys }
           : { name: it._name, keys: it.keys };
         it._undo = await ask({ mode: "tag_tidy_apply", action: it.type, data });
       },
       no: (it) => ask({ mode: "tag_tidy_apply", action: "no", data: { sig: it.sig } }),
-      undoYes: (it) => ask({ mode: "tag_tidy_undo", undo: it._undo }),
+      undoYes: (it) => it.type === "perfmerge"
+        ? Promise.reject(new Error("A performer merge can't be undone in Stash."))
+        : ask({ mode: "tag_tidy_undo", undo: it._undo }),
       undoNo: (it) => ask({ mode: "tag_tidy_undo", undo: { action: "no", sig: it.sig } }),
       empty: "Nothing to suggest.",
       loading: "Looking through your tags…",
@@ -1834,6 +1846,10 @@
       tileMeta: (it, pct) => pct(it.score),
       loading: "Comparing body shapes and looks…",
       empty: "No pose suggestions. They come from photos and markers you tag with a pose (Face Down Ass Up, All Fours, Kneeling… - set in the add-on's settings), and need \"Tags: scan images' body poses for pose suggestions (Mac)\" (on a Mac)." },
+    // performers who may be one person (by face, name, a shared StashDB entry or link)
+    faces_similar: { ...REVIEW_MODES.tagtidy, base: "tagtidy", label: "Similar", card: true, tidyMode: "perf_pairs",
+      loading: "Comparing performers' faces and names…",
+      empty: "No performers look like the same person. Pairs come from faces (after face scans), names and aliases, and a shared StashDB entry or link." },
     tags_similar: { ...REVIEW_MODES.tagtidy, base: "tagtidy", label: "Similar", card: true, tidyMode: "tag_pairs",
       empty: "No tags to merge or nest. Tags named alike, or nested in name (\"Solo Female\" / \"Solo\"), show up here." },
     tags_new: { ...REVIEW_MODES.tagtidy, base: "tagtidy", label: "New", card: true, tidyMode: "tag_groups",
@@ -1852,7 +1868,7 @@
       empty: "No folders of photos without a gallery." },
   };
   const REVIEW_GROUPS = [
-    { key: "faces", label: "Faces", actions: ["faces", "faces_check", "new"] },
+    { key: "faces", label: "Faces", actions: ["faces", "faces_check", "faces_similar", "new"] },
     { key: "tags", label: "Tags", actions: ["tags", "tags_markers", "tags_check", "tags_similar", "tags_new"] },
     { key: "studios", label: "Studios", actions: ["studios_add", "studios_check", "studios_new"] },
     { key: "galleries", label: "Galleries", actions: ["galleries_add", "galleries_check", "galleries_new"] },
@@ -2597,8 +2613,33 @@
     }, h("img", { className: "bta-fr-avatar bta-fr-avatar-tag" + (big ? " bta-tt-big" : ""), src: `/tag/${x.id}/image`, alt: "", draggable: false }),
       h("span", { className: "bta-fr-avatar-hint" }, "View"));
     const items = (n) => `${n} item${n === 1 ? "" : "s"}`;
+    const perfPic = (x) => h("button", {
+      type: "button", className: "bta-fr-avatar-btn", title: `See ${x.name}'s page`,
+      onPointerDown: (e) => e.stopPropagation(), onClick: () => onPage(`/performers/${x.id}`),
+    }, h("img", { className: "bta-fr-avatar bta-tt-big", src: `/performer/${x.id}/image`, alt: "", draggable: false }),
+      h("span", { className: "bta-fr-avatar-hint" }, "View"));
     let top, body, labels;
-    if (t === "tagmerge") {
+    if (t === "perfmerge") {
+      const keepName = ((it.perfs.find((x) => x.id === keep) || {}).name || "").replace(/ \(.*\)$/, "");
+      const typed = name != null ? name : keepName;
+      labels = ["✕ Not the same", "✓ Merge", "NOT SAME", "MERGE"];
+      top = h("div", { className: "bta-st-list" }, it.perfs.map((x) => h("div", { key: x.id, className: "bta-st-row" + (x.id === keep ? " keep" : "") },
+        perfPic(x),
+        h("div", { className: "bta-st-info" },
+          h("div", { className: "bta-st-name" }, (x.favorite ? "♥ " : "") + x.name),
+          h("div", { className: "bta-fr-meta" }, items(x.count) + (x.aliases.length ? ` · also ${x.aliases.slice(0, 3).join(", ")}` : ""))),
+        h("div", { className: "bta-st-choose" },
+          h("button", { type: "button", className: "bta-st-opt" + (x.id === keep ? " on" : ""), disabled: x.id === keep, onClick: () => setKeep(x.id) },
+            x.id === keep ? "✓ Keeping" : "Keep this")))));
+      body = [
+        h("div", { key: "q", className: "bta-fr-q" }, "The same person?"),
+        h("input", { key: "n", className: "bta-np-name", type: "text", value: typed, placeholder: "Name to keep",
+          onChange: (e) => setName(e.target.value), onKeyDown: (e) => { if (e.key === "Enter") answer("yes"); } }),
+        h("div", { key: "m", className: "bta-fr-meta" }, it.reasons.join(" · ")),
+        h("div", { key: "m2", className: "bta-fr-meta bta-st-wide" },
+          "Merging moves everything to the one you keep, adds the other's names to its aliases and deletes the other. Stash can't undo a merge."),
+      ];
+    } else if (t === "tagmerge") {
       const keepName = (it.tags.find((x) => x.id === keep) || {}).name || "";
       const typed = name != null ? name : keepName;
       labels = ["✕ Not the same", "✓ Merge", "NOT SAME", "MERGE"];
@@ -3134,6 +3175,19 @@
         if (one.type === "tagsub" && confirmed && confirmed.merge) {
           // "…or merge instead": the child becomes an alias of the parent
           one = { ...one, type: "tagmerge", tags: [one.parent, one.child], keep: one.parent.id, _orig: one._orig || one };
+        }
+        if (one.type === "perfmerge") {
+          const keep = (studioPick[one.sig] || {}).keep || one.keep;
+          const keepName = ((one.perfs.find((x) => x.id === keep) || {}).name || "").replace(/ \(.*\)$/, "");
+          const others = one.perfs.filter((x) => x.id !== keep);
+          one = { ...one, _keep: keep, _others: others.map((x) => x.id),
+                  _name: String(names[one.sig] != null ? names[one.sig] : keepName).trim() || keepName };
+          // (Stash can't undo it, so it always asks)
+          if (kind === "yes" && !window.confirm(`Merge ${others.map((x) => `"${x.name}"`).join(", ")} into "${one._name}"?\n\n`
+              + "Their scenes, images and galleries move over, their names become aliases, and they're deleted. This can't be undone.")) {
+            setDrag(null);
+            return;
+          }
         }
         if (one.type === "tagmerge") {
           const keep = (studioPick[one.sig] || {}).keep || one.keep;
@@ -3767,13 +3821,14 @@
   // ---- Setup & troubleshooting page (/ai-setup) ----------------------------
   const SETUP_PAGE = "/ai-setup";
   const COMMON = [
-    ["\"Can't reach Ollama\"", "Ollama isn't running, or Stash can't see it. On a Mac: brew services start ollama (or open the Ollama app). Stash in Docker Desktop reaches it at http://host.docker.internal:11434; Stash installed directly at http://localhost:11434; Stash in Docker on Linux needs network_mode: host and http://127.0.0.1:11434. Set it under Setup: Ollama address."],
+    ["\"Can't reach Ollama\"", "Ollama isn't running, or Stash can't see it. On a Mac: brew services start ollama (or open the Ollama app); on Windows: start Ollama from the Start menu (it sits by the clock). Stash in Docker Desktop reaches it at http://host.docker.internal:11434; Stash installed directly at http://localhost:11434; Stash in Docker on Linux needs network_mode: host and http://127.0.0.1:11434. Set it under Setup: Ollama address."],
+    ["Ollama or the face helper is on another computer (no SSH tunnel needed)", "By default each only answers the computer it runs on. On that computer, make Ollama listen on the network: Windows: setx OLLAMA_HOST 0.0.0.0, then quit Ollama by the clock and open it again; Mac app: launchctl setenv OLLAMA_HOST 0.0.0.0, then quit and reopen Ollama; Linux: sudo systemctl edit ollama, add [Service] and Environment=\"OLLAMA_HOST=0.0.0.0\", then sudo systemctl restart ollama. For the face helper run setup again with --listen-all (Windows: setup.ps1 -ListenAll). Let ports 11434 and 11535 through its firewall, then set Setup: Ollama address to http://<its IP>:11434 and the face helper address to http://<its IP>:11535. Neither has a password: only on a home network you trust (or a VPN like Tailscale)."],
     ["\"Ollama doesn't have the model\"", "On the computer running Ollama: ollama pull gemma3:4b (about 3.3 GB). If you set Setup: AI model (in Ollama) to something else, pull that one, and make sure it can see pictures."],
-    ["\"Can't reach the face helper\" / faces and look-alikes do nothing", "Install it: from the add-on's folder run sh face-helper/setup.sh. On a Mac it starts at login; check it with curl http://127.0.0.1:11535/health. Keep it out of Documents, Desktop and Downloads on a Mac (programs started at login can't read those)."],
-    ["setup.sh fails installing onnxruntime", "Your newest Python is too new for ONNX Runtime. Install an older one (brew install python@3.13) and run PYTHON=python3.13 sh face-helper/setup.sh."],
-    ["\"The face helper is too old\"", "A newer add-on needs a newer helper: run sh face-helper/setup.sh again. It updates in place and keeps nothing you'd lose."],
+    ["\"Can't reach the face helper\" / faces and look-alikes do nothing", "Install it: from the add-on's folder run sh face-helper/setup.sh (on Windows, in PowerShell: powershell -ExecutionPolicy Bypass -File face-helper\\setup.ps1, with -ListenAll when Stash runs in Docker Desktop). It starts at login; check it with curl http://127.0.0.1:11535/health. Keep it out of Documents, Desktop and Downloads on a Mac (programs started at login can't read those)."],
+    ["setup.sh / setup.ps1 fails installing onnxruntime", "Your newest Python is too new for ONNX Runtime. Install an older one (brew install python@3.13) and run PYTHON=python3.13 sh face-helper/setup.sh. On Windows: winget install Python.Python.3.12, then .\\setup.ps1 -Python \"py -3.12\"."],
+    ["\"The face helper is too old\"", "A newer add-on needs a newer helper: run sh face-helper/setup.sh again (on Windows, face-helper\\setup.ps1). It updates in place and keeps nothing you'd lose."],
     ["Tasks stop working after about an hour, or say \"Done\" having skipped everything", "The task's login runs out. Generate an API key under Settings → Security; the add-on uses it from then on."],
-    ["Full-size pictures or videos won't open, but thumbnails do", "Stash lost its link to your library drive (often a network drive after it disconnected or the computer slept). Reconnect the drive, then restart Stash (e.g. docker restart stash)."],
+    ["Full-size pictures or videos won't open, but thumbnails do", "Stash lost its link to your library drive (often a network drive after it disconnected or the computer slept). Reconnect the drive, then restart Stash (in Docker: docker restart stash; on Windows: quit Stash from its tray icon and start it again)."],
     ["Look-alike tags, Similar galleries or Review → Tags show nothing", "Run \"Tags: scan scenes and images for look-alikes (do this first)\" under Settings → Tasks. New items get their fingerprint as they're scanned; cancel and rerun to carry on."],
     ["No face matches", "Run \"Faces: learn performers' faces\" (it uses their profile pictures - give performers a clear, front-facing one), then \"Faces: scan scenes and images\"."],
     ["The AI is slow, or other tasks wait for hours", "Stash runs one task at a time and the AI takes seconds per item. Turn on New items: wait until night for the AI model steps so the slow steps run once at night; the first request after a while is slower while the model loads."],
@@ -3786,6 +3841,7 @@
   // "task:" runs a task (only previews and harmless ones), "log" opens the log.
   const FAQ_ACTIONS = [
     [/^"Can't reach Ollama/, [["Find Ollama", "findollama"], ["Test the connection", "group:AI model (Ollama)"], ["Test the AI on a picture", "ai"]]],
+    [/^Ollama or the face helper is on another/, [["Test the connection", "group:AI model (Ollama)"], ["Check the face helper", "group:Face helper"]]],
     [/^"Ollama doesn't have/, [["List the installed models", "models"], ["Test the connection", "group:AI model (Ollama)"]]],
     [/^"Can't reach the face helper/, [["Check the face helper", "group:Face helper"]]],
     [/^"The face helper is too old/, [["Check what the helper can do", "group:Face helper"]]],
@@ -4185,22 +4241,26 @@
   const tip = (start) => COMMON.find(([q]) => q.startsWith(start));
   function setupSteps(c) {
     const docker = c.docker;
+    // the helper runs on the computer Stash runs on: Windows when Stash does,
+    // or (Stash in Docker) when this browser is on Windows - usually the same PC
+    const win = c.windows || (docker && /Windows/i.test(navigator.userAgent));
+    const setupCmd = win ? "powershell -ExecutionPolicy Bypass -File face-helper\\setup.ps1" + (docker ? " -ListenAll" : "") : "sh face-helper/setup.sh";
     const steps = [];
     const working = "What the setup page shows once it's working.";
     if (!c.helper) steps.push({ k: "helper", img: "setup-helper.jpg", caption: working, title: "Install the face helper", done: (x) => x.helper,
       intro: "Faces, look-alikes, body tags, search and picture scores all use the face helper - a small program that runs on your own computer" +
         (docker ? " (outside Docker, on the computer Stash's container runs on)." : "."),
       todo: [
-        ["Open Terminal in the add-on's folder (plugins/BetterTaggingAI, in Stash's config folder) and run the setup - it takes a few minutes and downloads the models:", "sh face-helper/setup.sh"],
-        ["Check that it answers:", "curl http://127.0.0.1:11535/health"],
+        [(win ? "Open PowerShell" : "Open Terminal") + " in the add-on's folder (plugins/BetterTaggingAI, in Stash's config folder) and run the setup - it takes a few minutes and downloads the models:", setupCmd],
+        ["Check that it answers:", win ? "Invoke-RestMethod http://127.0.0.1:11535/health" : "curl http://127.0.0.1:11535/health"],
         [`The add-on looks for it at ${c.face_url || "http://localhost:11535"}` + (docker ? " (Stash in Docker Desktop reaches your computer at host.docker.internal)." : ".") +
           " If yours is somewhere else: Settings → Plugins → Better Organizing AI → Setup: face helper address.", null],
       ],
-      tips: [tip("\"Can't reach the face helper"), tip("setup.sh fails")] });
+      tips: [tip("\"Can't reach the face helper"), tip("setup.sh / setup.ps1 fails")] });
     else if (!c.embed || !c.text) steps.push({ k: "update", img: "setup-helper.jpg", caption: working, title: "Update the face helper", done: (x) => x.embed && x.text,
       intro: "The face helper is running, but it's missing " + [!c.embed && "the picture model (look-alikes, search)", !c.text && "the text model (search by description)"].filter(Boolean).join(" and ") + ".",
-      todo: [["Run the setup again in the add-on's folder - it updates in place:", "sh face-helper/setup.sh"]],
-      tips: [tip("\"The face helper is too old"), tip("setup.sh fails")] });
+      todo: [["Run the setup again in the add-on's folder - it updates in place:", setupCmd]],
+      tips: [tip("\"The face helper is too old"), tip("setup.sh / setup.ps1 fails")] });
     if (c.helper && c.embed && !c.looks) steps.push({ k: "scan", img: "setup-scan.jpg", caption: "Settings → Tasks → Look-alike tags.", title: "Scan your library's looks", done: (x) => x.looks,
       intro: "Look-alike tags, Review's suggestions, Check and search compare pictures by their look. Each scene and photo needs its fingerprint once (well under a second each); new ones get it as they're scanned.",
       todo: [["Run the task (Settings → Tasks → Look-alike tags), or start it here:", null]],
@@ -4209,7 +4269,8 @@
     if (!c.ollama) steps.push({ k: "ollama", img: "setup-ollama.jpg", caption: working, title: "Install the AI model (Ollama)", done: (x) => x.ollama,
       intro: "Ask AI for tags, AI titles and performer details use a local AI model in Ollama. Everything else works without it.",
       todo: [
-        ["Install Ollama from ollama.com (on a Mac: brew install ollama, then start it with brew services start ollama), then get the model (about 3.3 GB):", `ollama pull ${c.model || "gemma3:4b"}`],
+        ["Install Ollama from ollama.com (" + (win ? "the Windows installer; it starts by itself and sits by the clock" : "on a Mac: brew install ollama, then start it with brew services start ollama") +
+          "), then get the model (about 3.3 GB)" + (win ? " - in PowerShell:" : ":"), `ollama pull ${c.model || "gemma3:4b"}`],
         [`The add-on looks for it at ${c.ollama_url || "http://localhost:11434"}.` + (docker ? " Stash in Docker Desktop: http://host.docker.internal:11434; in Docker on Linux use network_mode: host and http://127.0.0.1:11434." : "") +
           " Change it under Setup: Ollama address.", null],
       ],
@@ -4300,7 +4361,10 @@
         try {
           const d = await gql("{ configuration { plugins } }");
           const cur = ((d.configuration || {}).plugins || {})[PLUGIN_ID] || {};
-          if (!cur.welcomeOff && live) setStep((s0) => s0 || "hello");
+          if (cur.welcomeOff) return;
+          // (after Stash's own windows, like the release notes on a new Stash, are closed)
+          while (live && document.querySelector(".modal.show, .modal-backdrop")) await new Promise((r) => setTimeout(r, 1000));
+          if (live) setStep((s0) => s0 || "hello");
         } catch (e) { /* fine */ }
       }, 1500);
       return () => { live = false; clearTimeout(t); };
@@ -4350,6 +4414,7 @@
 
   function AISearch() {
     const cz = useCaps();
+    const winPC = cz.windows || (cz.docker && /Windows/i.test(navigator.userAgent)); // (Windows: the PowerShell commands)
     const params = new URLSearchParams(window.location.search);
     const [text, setText] = React.useState(params.get("q") || "");
     const [kinds, setKinds] = React.useState(new Set((params.get("kinds") || "image,scene,marker").split(",")));
@@ -4393,8 +4458,8 @@
     if (!can("search", cz)) {
       return h("div", { className: "bta-search" }, h("h2", null, "Search by description"),
         h("p", { className: "bta-search-help" }, cz.text === undefined ? "Checking what's installed…"
-          : !cz.helper ? `Can't reach the face helper${cz.face_url ? " at " + cz.face_url : ""} - is it running? On a Mac it starts at login; check it with curl http://127.0.0.1:11535/health, or run face-helper/setup.sh again. `
-          : !cz.text || !cz.embed ? "The face helper is missing CLIP's text model, which search uses - run face-helper/setup.sh again (it updates in place). "
+          : !cz.helper ? `Can't reach the face helper${cz.face_url ? " at " + cz.face_url : ""} - is it running? It starts at sign-in; check it with ${winPC ? "Invoke-RestMethod" : "curl"} http://127.0.0.1:11535/health, or run the setup again (${winPC ? "face-helper\\setup.ps1" : "face-helper/setup.sh"}). `
+          : !cz.text || !cz.embed ? `The face helper is missing CLIP's text model, which search uses - run ${winPC ? "face-helper\\setup.ps1" : "face-helper/setup.sh"} again (it updates in place). `
           : "Search needs your library's look-alike fingerprints first: run \"Tags: scan scenes and images for look-alikes (do this first)\" under Settings → Tasks. ",
           cz.text !== undefined && h("a", { href: SETUP_PAGE }, "Open the setup page"),
           cz.text !== undefined && " · ",
@@ -4543,7 +4608,7 @@
       h("div", { className: "bta-setup-banner " + (count ? (info.runner || !anything ? "ok" : "warn") : "") },
         count ? `${count} job${count > 1 ? "s" : ""} chosen` : "Nothing chosen yet",
         h("small", null, tab === "night"
-          ? (next ? `Next run: ${next.toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })} (${info.time} ${info.tz})` : `At ${info.time} (${info.tz})`) +
+          ? (next ? `Next run: ${next.toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })} (${info.time} ${info.tz || "on Stash's computer's clock"})` : `At ${info.time} (${info.tz || "on Stash's computer's clock"})`) +
             (info.waiting ? ` · ${info.waiting} new item(s) waiting for the AI` : "")
           : "When a scan you start finishes (Stash → Tasks → Scan, or a scan button). Scans the nightly run starts don't count - its own list runs after them. Several scans close together: once, after the last.",
           anything ? (info.runner ? " · the timer is running" : " · the timer starts when you save") : "")),
@@ -4553,7 +4618,7 @@
           h("label", null, h("span", { className: "bta-setup-title" }, "Time"),
             h("input", { type: "time", className: "form-control", value: draft.time, onChange: (e) => change((d) => ({ ...d, time: e.target.value })) })),
           h("label", null, h("span", { className: "bta-setup-title" }, "Time zone"),
-            h("input", { type: "text", className: "form-control", value: draft.tz, placeholder: "e.g. America/New_York", spellCheck: false,
+            h("input", { type: "text", className: "form-control", value: draft.tz, placeholder: "e.g. America/New_York (empty: Stash's computer's clock)", spellCheck: false,
               onChange: (e) => change((d) => ({ ...d, tz: e.target.value })) })))),
       h("section", { className: "bta-setup-group" },
         h("h3", null, "The jobs, in the order they run"),
@@ -5078,7 +5143,7 @@
           : `${st.count} images, and nothing changes enough to split them.`) +
         (list.length ? " Tap a chapter's picture to choose its images; edit a title before adding it." : "")),
       st.no_reader && h("div", { className: "bta-markers-note" },
-        "This looks like a comic: with the face helper's text reader (on a Mac, run the add-on's face-helper/setup.sh again), chapters come from the chapter headings printed on its pages."),
+        "This looks like a comic: with the face helper's text reader (on a Mac only: run the add-on's face-helper/setup.sh again), chapters come from the chapter headings printed on its pages."),
       err && h("div", { className: "bta-markers-error" }, err),
       h("div", { className: "bta-chapters" },
         shown.map((c) => {

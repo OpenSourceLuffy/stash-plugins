@@ -265,6 +265,13 @@ def prune_deleted(stash, plugin_dir, every=PRUNE_EVERY):
 SETTINGS_CACHE_SECONDS = 30
 
 
+def forget_settings(plugin_dir):
+    """Drops the 30-second copy of the settings: the setup checks read them as
+    they are now (an address changed a moment ago counts)."""
+    with contextlib.suppress(OSError):
+        os.remove(os.path.join(plugin_dir, "settings_cache.json"))
+
+
 def plugin_settings(stash, plugin_dir=None, plugin_id=BASE_ID):
     """A plugin's raw settings (Better Organizing Tools' unless said otherwise).
     With plugin_dir, a copy up to 30 seconds old is reused: scans fire a hook
@@ -5009,7 +5016,7 @@ def ai_settings(s):
         # the body tags task (items not checked yet) as part of the night run
         "night_body": bool(s.get("aiNightBody")),
         "night_time": _clock(s.get("aiNightTime"), "03:00"),
-        "time_zone": (s.get("aiTimeZone") or os.environ.get("TZ") or "UTC").strip(),
+        "time_zone": (s.get("aiTimeZone") or os.environ.get("TZ") or ("" if os.name == "nt" else "UTC")).strip(),
         # scene covers the covers task may change besides Stash's own generated ones
         "cover_scraped": bool(s.get("coverReplaceScraped")),
         "cover_picked": bool(s.get("coverReplacePicked")),
@@ -5224,6 +5231,9 @@ def ai_vocabulary(stash, cfg, plugin_dir):
     _, excluded = tag_lookup(stash, cfg, plugin_dir)
     usable = [t for t in tags if t["id"] not in excluded and uses(t) > 0]
     usable.sort(key=lambda t: -uses(t))
+    if len(usable) < cfg["ai"]["vocab_size"]:
+        # (a new library: tags made but not on anything yet still count, after the used ones)
+        usable += sorted((t for t in tags if t["id"] not in excluded and not uses(t)), key=lambda t: t["name"].lower())
     chosen = usable[: cfg["ai"]["vocab_size"]]
     return {t["name"].lower(): t["id"] for t in chosen}, [t["name"] for t in chosen]
 
@@ -5544,7 +5554,8 @@ def run_ai(stash, plugin_dir, only_untagged=False, preview=False, targets=None):
     ai_check(cfg)
     vocab, names = ai_vocabulary(stash, cfg, plugin_dir)
     if not names:
-        log("warning", "No tags to choose from yet.")
+        log("warning", "No tags to choose from yet: the AI picks from your tags. Make some under Tags (or tag a few "
+                       "items), then run this again.")
         return
     if targets is None:
         with locked_ai_done(plugin_dir) as done:
@@ -6089,7 +6100,12 @@ def load_look_index(stash, cfg, plugin_dir, excluded=frozenset(), quiet=False):
         return None
     if not looks.ready():
         if not quiet:
-            log("info", "Look-alike tags not used yet: run \"Tags: scan scenes and images for look-alikes (do this first)\" first.")
+            scanned = sum(1 for v in LookCache(plugin_dir).data.values() if v.get("e"))
+            if scanned > len(looks.rows) * 2:  # (scanned, but few of them tagged)
+                log("info", f"Look-alike tags not used yet: they learn from tagged items, and {len(looks.rows)} of the "
+                            f"scanned ones have tags ({LOOK_MIN_ITEMS} needed). Tag more (or accept AI tags), and they start.")
+            else:
+                log("info", "Look-alike tags not used yet: run \"Tags: scan scenes and images for look-alikes (do this first)\" first.")
         return None
     return looks
 
@@ -7384,9 +7400,8 @@ def run_nightly_info(stash, plugin_dir):
     ai = cfg["ai"]
     nxt = None
     with contextlib.suppress(Exception):
-        from zoneinfo import ZoneInfo  # noqa: PLC0415
-        tz = ZoneInfo(ai["time_zone"])
-        now = datetime.now(tz)
+        tz = tz_zone(ai["time_zone"])  # (None: this computer's clock)
+        now = datetime.now(tz) if tz else datetime.now().astimezone()
         hh, mm = (int(x) for x in ai["night_time"].split(":"))
         at = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
         nxt = (at if at > now else at + timedelta(days=1)).isoformat()
@@ -7669,11 +7684,10 @@ def run_nightly_save(stash, plugin_dir, data):
         if data.get("time"):
             new["aiNightTime"] = _clock(data["time"], cur.get("aiNightTime") or "03:00")
         if data.get("tz"):
-            from zoneinfo import ZoneInfo  # noqa: PLC0415
-            try:
-                ZoneInfo(str(data["tz"]).strip())
-            except Exception:
-                raise NotReady(f'"{data["tz"]}" isn\'t a time zone Stash knows - e.g. America/New_York or Europe/London') from None
+            # (a Python without a time-zone list - Windows without tzdata -
+            # can't tell: the name is kept and the computer's clock is used)
+            if tz_list_ok() and tz_zone(str(data["tz"])) is None:
+                raise NotReady(f'"{data["tz"]}" isn\'t a time zone Stash knows - e.g. America/New_York or Europe/London')
             new["aiTimeZone"] = str(data["tz"]).strip()
         new.pop("aiNightBody", None)  # (now a nightly job of its own)
     stash.call("mutation($id: ID!, $i: Map!) { configurePlugin(plugin_id: $id, input: $i) }", {"id": AI_ID, "i": new})
@@ -7764,11 +7778,7 @@ def night_runner_main(plugin_dir):
                 new = json.load(f)
             if new != conf:  # settings or connection changed: work out the time again
                 conf = new
-                try:
-                    from zoneinfo import ZoneInfo  # noqa: PLC0415
-                    tz = ZoneInfo(conf.get("tz") or "UTC")
-                except Exception:
-                    tz = None
+                tz = tz_zone(conf.get("tz"))  # (None: this computer's clock - UTC in Stash's Docker image)
                 now = datetime.now(tz)
                 hh, mm = (int(x) for x in (conf.get("time") or "03:00").split(":"))
                 at = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
@@ -9528,12 +9538,27 @@ NEW_PERF_GENERIC_FOLDER = re.compile(r"(?i)(^[\d_\W]|locked|folder|download|dcim
                                      r"videos?$|^misc|^new\b|^stuff|^tmp|^temp)")
 
 
+CLUSTER_OLD_HELPER_MAX = 20000  # an older helper groups this many in a few minutes; more can take hours
+
+
 def face_cluster(cfg, faces, threshold=NEW_PERF_SAME, dim=128, center=False):
+    if len(faces) > CLUSTER_OLD_HELPER_MAX:
+        # (helpers before 1.8.1 compared one at a time: hours for a big library)
+        health = {"cluster_fast": True}  # (can't tell: try it)
+        with contextlib.suppress(Exception):
+            health = _get_json(cfg["ai"]["face_url"] + "/health", timeout=10)
+        if not health.get("cluster_fast"):
+            raise NotReady(f"grouping {len(faces):,} pictures needs the newer face helper (the older one would take hours) - "
+                           "run the add-on's face-helper setup again (sh face-helper/setup.sh, or face-helper\\setup.ps1 on "
+                           "Windows) to update it, then try again")
     body = json.dumps({"faces": faces, "threshold": threshold, "dim": dim, "center": center}).encode()
     req = urllib.request.Request(cfg["ai"]["face_url"] + "/cluster", data=body, headers={"Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=600) as resp:
+        with urllib.request.urlopen(req, timeout=1800) as resp:
             return json.loads(resp.read())["results"]
+    except TimeoutError:
+        raise NotReady(f"the face helper took over 30 minutes grouping {len(faces):,} pictures - update it (run the add-on's "
+                           "face-helper setup again), and check it isn't busy with a scan")
     except urllib.error.HTTPError as e:
         if e.code == 404:
             raise RuntimeError("the face helper is too old for new performers - copy the add-on's face-helper/face_helper.py "
@@ -11982,6 +12007,198 @@ def run_tag_pairs(stash, plugin_dir, limit=30, skip=()):
 TAG_SNAP_FIELDS = "id name sort_name description aliases favorite ignore_auto_tag image_path parents { id } children { id }"
 
 
+# --- Review → Faces → Similar: performers who may be one person --------------
+# Stash ends up with one person under two names (an account name and a stage
+# name, a scraper's spelling and yours). Pairs come from their faces (the
+# closest few faces to each performer's), their names and aliases, and what
+# they share (a StashDB / ThePornDB entry, a link to the same account); each
+# card says why. Merging moves everything to the one you keep, adds the other's
+# name to its aliases, and deletes the other (Stash can't undo a merge).
+PERF_PAIR_FACE = 0.45     # faces this alike back up a name or link (one person's faces score 0.4-0.8)
+PERF_PAIR_FACE_ALONE = 0.68  # ...and count on their own (different people score up to about 0.62)
+PERF_PAIR_NAME = 0.86     # names this alike (0-1) back up a face or link...
+PERF_PAIR_NAME_ALONE = 0.9  # ...and count on their own (full names only)
+PERF_PAIR_FIELDS = ("id name disambiguation alias_list favorite image_path scene_count image_count gallery_count gender "
+                    "birthdate country urls stash_ids { endpoint stash_id }")
+
+
+def _name_key(name):
+    return re.sub(r"[^a-z0-9]", "", (name or "").lower())
+
+
+def _link_key(url):
+    u = re.sub(r"^https?://(www\.|m\.)?", "", (url or "").strip().lower())
+    u = re.sub(r"[?&](utm_[a-z]+|ref|s|t)=[^&]*", "", u).split("#")[0]
+    return u.rstrip("/?")
+
+
+def run_perf_pairs(stash, plugin_dir, limit=30, skip=()):
+    """Pairs of performers who may be one person: [{sig, tp, type "perfmerge",
+    perfs: [card, card], keep, reasons, score}], surest first."""
+    from difflib import SequenceMatcher  # noqa: PLC0415
+    cfg = settings(stash, plugin_dir)
+    perfs = stash.call(f"{{ findPerformers(filter: {{per_page: -1}}) {{ performers {{ {PERF_PAIR_FIELDS} }} }} }}")["findPerformers"]["performers"]
+    by_id = {p["id"]: p for p in perfs}
+    with locked_tag_tidy(plugin_dir) as d:
+        turned_down = set(d.get("no", []))
+    skip = set(skip or ()) | turned_down
+    found = {}  # (a, b) -> {"face", "name", "same": [reasons]}
+
+    def note(a, b, **kw):
+        if a == b or a not in by_id or b not in by_id:
+            return
+        key = tuple(sorted((a, b), key=int))
+        e = found.setdefault(key, {"face": 0.0, "name": 0.0, "same": [], "link": []})
+        for k, v in kw.items():
+            if k in ("same", "link"):
+                if v not in e[k]:
+                    e[k].append(v)
+            else:
+                e[k] = max(e[k], v)
+
+    # the same StashDB / ThePornDB entry, or a link to the same account
+    seen_ids, seen_links = defaultdict(list), defaultdict(list)
+    for p in perfs:
+        for sid in p.get("stash_ids") or []:
+            seen_ids[(sid["endpoint"], sid["stash_id"])].append(p["id"])
+        for u in p.get("urls") or []:
+            k = _link_key(u)
+            if k.count("/") >= 1:  # (an account, not just a site)
+                seen_links[k].append(p["id"])
+    for (endpoint, _), ids in seen_ids.items():
+        site = re.sub(r"^https?://|/.*$", "", endpoint)
+        for i, a in enumerate(ids):
+            for b in ids[i + 1:]:
+                note(a, b, same=f"the same {site} entry")
+    for link, ids in seen_links.items():
+        if len(set(ids)) > 3:  # (a site's page, not one person's)
+            continue
+        for i, a in enumerate(ids):
+            for b in ids[i + 1:]:
+                note(a, b, link=f"the same link ({link})")
+    # names and aliases: the same once spaces and punctuation go, or very close
+    # ("Bella" or "Danny" alone is many people's alias: it only backs up a face)
+    names, short = defaultdict(set), set()  # name key -> performer ids
+    for p in perfs:
+        for n in [p["name"]] + list(p.get("alias_list") or []):
+            k = _name_key(n)
+            if len(k) >= 3:
+                names[k].add(p["id"])
+                if len(k) < 7 and len(n.split()) < 2:
+                    short.add(k)
+    for k, ids in names.items():
+        ids = sorted(ids, key=int)
+        for i, a in enumerate(ids):
+            for b in ids[i + 1:]:
+                note(a, b, name=0.5 if k in short else 1.0)
+    blocks = defaultdict(set)  # (first letters) -> full-name keys, to compare near spellings
+    for k in names:
+        if k not in short:
+            blocks[k[:3]].add(k)
+    for block in blocks.values():
+        block = sorted(block)
+        for i, x in enumerate(block):
+            for y in block[i + 1:]:
+                if abs(len(x) - len(y)) > 3:
+                    continue
+                r = SequenceMatcher(None, x, y).ratio()
+                if r >= PERF_PAIR_NAME:
+                    for a in names[x]:
+                        for b in names[y]:
+                            note(a, b, name=r)
+    # faces: each performer's closest few faces (the helper's search), then
+    # the best of all their known faces
+    index = load_face_index(plugin_dir)
+    known = {pid: known_embs(v) for pid, v in index.items() if pid in by_id and known_embs(v)}
+    pids = sorted(known, key=int)
+    if len(pids) >= 2:
+        try:
+            mean = []
+            for pid in pids:
+                v = [sum(x) for x in zip(*known[pid])]
+                n = math.sqrt(sum(x * x for x in v)) or 1.0
+                mean.append([x / n for x in v])
+            near = look_knn(cfg, [q8(m) for m in mean], list(range(len(mean))), min(6, len(mean) - 1))
+            for i, row in enumerate(near):
+                for j, _ in row:
+                    if j == i:
+                        continue
+                    a, b = pids[i], pids[j]
+                    best = max(_dot(x, y) for x in known[a] for y in known[b])
+                    if best >= PERF_PAIR_FACE:
+                        note(a, b, face=best)
+        except Exception as e:  # (names and links still count)
+            log("warning", f"Similar performers: couldn't compare faces ({e}).")
+    out = []
+    for (a, b), e in found.items():
+        sig = f"pp:{a}:{b}"
+        if sig in skip:
+            continue
+        pa, pb = by_id[a], by_id[b]
+        # different genders, or both have a different birthdate: not one person
+        if pa.get("gender") and pb.get("gender") and pa["gender"] != pb["gender"] and not e["same"]:
+            continue
+        if pa.get("birthdate") and pb.get("birthdate") and pa["birthdate"] != pb["birthdate"] and not e["same"]:
+            continue
+        sure = bool(e["same"])
+        face, name, link = e["face"], e["name"], bool(e["link"])
+        hint = face >= PERF_PAIR_FACE or name >= PERF_PAIR_NAME  # (a short alias counts as half)
+        if not (sure or (link and (hint or name >= 0.5)) or (face >= PERF_PAIR_FACE and name >= 0.5)
+                or face >= PERF_PAIR_FACE_ALONE or name >= PERF_PAIR_NAME_ALONE):
+            continue
+        reasons = list(e["same"]) + list(e["link"])
+        if name >= 1.0:
+            reasons.append("the same name (or one's alias)")
+        elif name >= PERF_PAIR_NAME:
+            reasons.append(f"names alike ({round(name * 100)}%)")
+        elif name:
+            reasons.append("a short alias in common")
+        if face >= PERF_PAIR_FACE:
+            reasons.append(f"faces {round(face * 100)}% alike")
+        score = (2 if sure else 0) + (1 if link else 0) + face + name * 0.8
+
+        def card(p):
+            return {"id": p["id"], "name": p["name"] + (f" ({p['disambiguation']})" if p.get("disambiguation") else ""),
+                    "count": (p.get("scene_count") or 0) + (p.get("image_count") or 0) + (p.get("gallery_count") or 0),
+                    "aliases": list(p.get("alias_list") or [])[:4], "favorite": bool(p.get("favorite"))}
+        # keep the one with more (a favourite, or one linked to StashDB, first)
+        keep = max((pa, pb), key=lambda p: (bool(p.get("favorite")), bool(p.get("stash_ids")),
+                                             (p.get("scene_count") or 0) + (p.get("image_count") or 0), -int(p["id"])))
+        out.append({"sig": sig, "tp": True, "type": "perfmerge", "perfs": [card(pa), card(pb)], "keep": keep["id"],
+                    "reasons": reasons, "score": round(score, 3), "count": card(pa)["count"] + card(pb)["count"]})
+    out.sort(key=lambda x: -x["score"])
+    return {"items": out[:limit], "total": len(out)}
+
+
+def _perf_merge(stash, plugin_dir, keep, others, name=None):
+    """Merges `others` into `keep` (Stash's merge: their scenes, images,
+    galleries and groups move over and they're deleted); their names go in
+    its aliases, and their known faces into its."""
+    keep, others = str(keep), [str(o) for o in others if str(o) != str(keep)]
+    if not others:
+        raise NotReady("nothing to merge")
+    f = "id name alias_list"
+    dest = stash.call(f"query($id: ID!) {{ findPerformer(id: $id) {{ {f} }} }}", {"id": keep})["findPerformer"]
+    srcs = [stash.call(f"query($id: ID!) {{ findPerformer(id: $id) {{ {f} }} }}", {"id": o})["findPerformer"] for o in others]
+    srcs = [x for x in srcs if x]
+    final = (name or "").strip() or dest["name"]
+    aliases = []
+    for n in list(dest.get("alias_list") or []) + [dest["name"]] + [x for p in srcs for x in [p["name"]] + list(p.get("alias_list") or [])]:
+        if n and n.strip().lower() != final.lower() and n.strip().lower() not in {a.lower() for a in aliases}:
+            aliases.append(n.strip())
+    stash.call("mutation($i: PerformerMergeInput!) { performerMerge(input: $i) { id } }",
+               {"i": {"source": [p["id"] for p in srcs], "destination": keep,
+                      "values": {"id": keep, "name": final, "alias_list": aliases}}})
+    with locked_face_index(plugin_dir) as index:  # (their faces are this one's now)
+        mine = index.setdefault(keep, {"name": final})
+        for p in srcs:
+            other = index.pop(p["id"], None) or {}
+            for k in ("tagged", "conf"):
+                mine[k] = list(dict.fromkeys((mine.get(k) or []) + (other.get(k) or [])))[:FACE_MAX_TAGGED + FACE_MAX_CONF]
+    log("info", f'Merged {", ".join(chr(34) + p["name"] + chr(34) for p in srcs)} into "{final}" (performer {keep}).')
+    return {"action": "perfmerge", "keep": keep, "merged": [p["id"] for p in srcs], "name": final}
+
+
 def _tag_items(stash, tid):
     """Everything with the tag: {"scene": ids, "image": ids, "gallery": ids, "performer": ids, "studio": ids}."""
     out = {}
@@ -12039,6 +12256,8 @@ def run_tag_tidy_apply(stash, plugin_dir, action, data):
             added[kind] = [x["id"] for x in got if tid not in {t["id"] for t in x.get("tags") or []}]
         _tag_on(stash, added, tid, "ADD")
         return {"action": action, "tag": tid, "added": added, "made": made}
+    if action == "perfmerge":
+        return _perf_merge(stash, plugin_dir, data["keep"], data.get("others") or [], data.get("name"))
     if action == "tagsub":
         child = stash.call(f"query($id: ID!) {{ findTag(id: $id) {{ {TAG_SNAP_FIELDS} }} }}", {"id": str(data["child"])})["findTag"]
         before = [p["id"] for p in child.get("parents") or []]
@@ -12130,6 +12349,7 @@ def run_capabilities(stash, plugin_dir):
     """What's installed, for the page to show only the features that work:
     the face helper and its models, Apple's Vision, CLIP's text model, the
     AI model in Ollama, Auto Seek's model, and whether look-alikes are scanned."""
+    forget_settings(plugin_dir)
     cfg = settings(stash, plugin_dir)
     ai = cfg["ai"]
     out = {k: False for k in ("helper", "faces", "embed", "body", "apple", "ocr", "text", "ollama", "auto_seek", "looks")}
@@ -12149,16 +12369,20 @@ def run_capabilities(stash, plugin_dir):
         out["looks"] = os.path.getsize(os.path.join(plugin_dir, "look_items.json")) > 1000
     # for the setup guide: where things are looked for
     out["docker"] = os.path.exists("/.dockerenv")
+    out["windows"] = os.name == "nt"  # (Stash itself on Windows: the setup page shows setup.ps1)
     out["face_url"], out["ollama_url"], out["model"] = ai["face_url"], ai["url"], ai["model"]
     return out
 
 
 def run_diagnose(stash, plugin_dir):
+    forget_settings(plugin_dir)
     out = []
     cfg = settings(stash, plugin_dir)
     ai = cfg["ai"]
     docker = os.path.exists("/.dockerenv")
     local_host = "host.docker.internal" if docker else "localhost"
+    env0 = _stash_environment()
+    helpme = setup_help(host_os(env0), docker)  # (the commands for the computer the AI programs run on)
 
     # --- Stash and this plugin
     out.append(_check("Stash", "Python", "ok", f"Python {sys.version.split()[0]} runs the add-on's tasks."))
@@ -12205,7 +12429,7 @@ def run_diagnose(stash, plugin_dir):
                 out.append(_check("Stash", "Library files reachable", "ok" if ok else "fail",
                                   f"{path} {'is there' if ok else 'can not be opened'}.",
                                   "" if ok else "Stash can't see your library files (a network drive that disconnected, or a Docker volume that went stale). "
-                                                 "Reconnect the drive, then restart Stash (e.g. docker restart stash)."))
+                                                 "Reconnect the drive, then restart Stash" + (" (e.g. docker restart stash)." if docker else ".")))
     except Exception as e:
         out.append(_check("Stash", "Pictures can be fetched", "fail", str(e),
                           "Check that Stash is running and that the add-on can log in (Settings → Security → API key)."))
@@ -12242,8 +12466,10 @@ def run_diagnose(stash, plugin_dir):
             pass
     except Exception as e:
         out.append(_check("AI model (Ollama)", "Ollama is reachable", "fail", f"{ai['url']}: {e}",
-                          f"Start Ollama (Mac: brew services start ollama). From Stash in Docker the address is http://{local_host}:11434; "
-                          "on Linux Docker, run Stash with network_mode: host and use http://127.0.0.1:11434. Set it under Setup: Ollama address."))
+                          remote_help("ollama") if other_computer(ai["url"], env0) else
+                          f"Start Ollama - {helpme['ollama']}." + (f" From Stash in Docker the address is http://{local_host}:11434"
+                          + ("; on Linux Docker, run Stash with network_mode: host and use http://127.0.0.1:11434" if host_os(env0) == "linux" else "")
+                          + "." if docker else "") + " Set it under Setup: Ollama address."))
 
     # --- face helper
     try:
@@ -12261,7 +12487,7 @@ def run_diagnose(stash, plugin_dir):
             else:
                 old.append(title)
                 out.append(_check("Face helper", title, "fail" if key in ("embed", "match") else "warn", f"Missing: {use} won't work.",
-                                  "Run face-helper/setup.sh again from the add-on's folder: it updates the helper and its models."))
+                                  f"Run the setup again from the add-on's folder ({helpme['setup']}): it updates the helper and its models."))
         # picture grouping needs the newer helper (pictures, not just faces)
         if health.get("cluster"):
             try:
@@ -12272,11 +12498,12 @@ def run_diagnose(stash, plugin_dir):
                 ok = False
             out.append(_check("Face helper", "Groups pictures (not just faces)", "ok" if ok else "warn",
                               "Ready." if ok else "This helper only groups faces, so Review → Tags → New can't work.",
-                              "" if ok else "Run face-helper/setup.sh again to update the helper."))
+                              "" if ok else f"Run the setup again to update the helper: {helpme['setup']}"))
     except Exception as e:
         out.append(_check("Face helper", "Face helper is reachable", "fail", f"{ai['face_url']}: {e}",
-                          "Install it: from the add-on's folder run  sh face-helper/setup.sh  (Mac / Linux). On a Mac it starts at login; "
-                          f"check it with curl http://127.0.0.1:11535/health. From Stash in Docker the address is http://{local_host}:11535."))
+                          remote_help("face") if other_computer(ai["face_url"], env0) else
+                          f"Install it: from the add-on's folder run  {helpme['setup']}  - it starts at sign-in too. "
+                          f"Check it with {helpme['check']}." + (f" From Stash in Docker the address is http://{local_host}:11535." if docker else "")))
 
     # --- what's been scanned
     try:
@@ -12284,6 +12511,9 @@ def run_diagnose(stash, plugin_dir):
         total = n_items["findScenes"]["count"] + n_items["findImages"]["count"]
         looks = sum(1 for v in LookCache(plugin_dir).data.values() if v.get("e"))
         share = looks / total if total else 0
+        if not total:  # (a new Stash: nothing to scan yet)
+            raise NotReady("Your library is empty: add a library folder under Settings → Library and run Scan "
+                           "(Settings → Tasks); then the add-on's scans have something to look at.")
         out.append(_check("Scans", "Look-alike scan", "ok" if share > 0.8 else "warn" if looks else "fail",
                           f"{looks:,} of {total:,} scenes and images have a picture fingerprint ({share:.0%}).",
                           "" if share > 0.8 else 'Run "Tags: scan scenes and images for look-alikes (do this first)" (Settings → Tasks). It carries on where it stopped.'))
@@ -12298,18 +12528,20 @@ def run_diagnose(stash, plugin_dir):
         out.append(_check("Scans", "Performers' faces learned", "ok" if known else "warn",
                           f"{known:,} of {n_perf:,} performers have a face the add-on knows.",
                           "" if known else 'Run "Faces: learn performers\' faces" - it uses their profile pictures.'))
+    except NotReady as e:
+        out.append(_check("Scans", "Library", "info", str(e)))
     except Exception as e:
         out.append(_check("Scans", "Scans", "warn", str(e)))
 
     # --- settings
-    try:
-        from zoneinfo import ZoneInfo
-        ZoneInfo(ai["time_zone"])
-        tz_ok = True
-    except Exception:
-        tz_ok = False
-    out.append(_check("Settings", "Time zone", "ok" if tz_ok else "warn", ai["time_zone"],
-                      "" if tz_ok else "Schedules: time zone isn't a known zone; use one like America/New_York or Europe/London."))
+    if not tz_list_ok():
+        out.append(_check("Settings", "Time zone", "warn", (ai["time_zone"] or "(not set)") + " - this Python has no list of time zones "
+                          "(Windows), so the night time follows this computer's clock.",
+                          "To use the setting: py -m pip install tzdata (in the Python Stash uses), then restart Stash."))
+    else:
+        tz_ok = tz_zone(ai["time_zone"]) is not None
+        out.append(_check("Settings", "Time zone", "ok" if tz_ok else "warn", ai["time_zone"],
+                          "" if tz_ok else "Schedules: time zone isn't a known zone; use one like America/New_York or Europe/London."))
     on = [n for n, v in (("AI tags for new items", ai["auto"] or ai["new_all"]), ("watermarks on new photos", ai["photo_studios"]),
                          ("faces added automatically", ai["face_auto"]), ("wait until night", ai["nightly"])) if v]
     out.append(_check("Settings", "After a scan", "info", ("On: " + ", ".join(on)) if on else "Nothing runs by itself after a scan.",
@@ -12329,14 +12561,16 @@ def run_diagnose(stash, plugin_dir):
                           f"{waiting} item(s) waiting for {ai['night_time']} ({ai['time_zone']}), {len(ai['night_jobs']['stash']) + len(ai['night_jobs']['tasks'])} nightly job(s) chosen; the night timer is {'running' if alive else 'not running'}.",
                           "" if alive or not waiting else "Stash was probably restarted. It starts again with the next scan, or run "
                           "\"Schedules: run tonight's waiting steps for new items now\" to do them straight away."))
-    env = _stash_environment()
+    env = env0
     out.insert(0, _check("Stash", "Where Stash runs", "info",
                          env["where"][0].upper() + env["where"][1:] + (f" (inside the container: {env['os']})." if env["docker"] else ".")))
-    return {"checks": out, "model": ai["model"], "ollama": ai["url"], "helper": ai["face_url"], "docker": docker, "where": env["where"]}
+    return {"checks": out, "model": ai["model"], "ollama": ai["url"], "helper": ai["face_url"], "docker": docker, "where": env["where"],
+            "windows": os.name == "nt"}
 
 
 def run_diagnose_ai(stash, plugin_dir):
     """One real request: a random photo shown to the model, timed."""
+    forget_settings(plugin_dir)
     cfg = settings(stash, plugin_dir)
     ai_check(cfg)
     img = stash.call("{ findImages(filter: {per_page: 1, sort: \"random\"}) { images { id paths { thumbnail } } } }")["findImages"]["images"]
@@ -12354,6 +12588,7 @@ def run_diagnose_ai(stash, plugin_dir):
 
 def run_diagnose_models(stash, plugin_dir):
     """Every model Ollama has, and whether each can see pictures."""
+    forget_settings(plugin_dir)
     cfg = settings(stash, plugin_dir)
     ai = cfg["ai"]
     tags = _get_json(ai["url"] + "/api/tags")
@@ -12373,6 +12608,7 @@ def run_diagnose_models(stash, plugin_dir):
 def run_diagnose_files(stash, plugin_dir, n=24):
     """Random scenes and images: can their files be opened? Grouped by the
     folder they're under, so a drive that's gone shows up as one line."""
+    forget_settings(plugin_dir)
     items = []
     for q, f, fields in (("findScenes", "scenes", "files { path }"), ("findImages", "images", "visual_files { ... on BaseFile { path } }")):
         got = stash.call(f'{{ {q}(filter: {{per_page: {n // 2}, sort: "random"}}) {{ {f} {{ {fields} }} }} }}')[q][f]
@@ -12385,7 +12621,14 @@ def run_diagnose_files(stash, plugin_dir, n=24):
         arch = re.match(r"(.+?\.(?:zip|cbz|cbr|rar|7z))(?:[\\/]|$)", p, re.I)
         real = arch.group(1) if arch else p
         parts = [x for x in re.split(r"[\\/]", real) if x]
-        root = "/" + "/".join(parts[:2]) if len(parts) > 2 else os.path.dirname(real)
+        if len(parts) <= 2:
+            root = os.path.dirname(real)
+        elif real.startswith(("\\\\", "//")):  # a Windows network share: \\server\share
+            root = "\\\\" + "\\".join(parts[:2])
+        elif re.match(r"^[A-Za-z]:$", parts[0]):  # a Windows drive: D:\Videos
+            root = parts[0] + "\\" + parts[1]
+        else:
+            root = "/" + "/".join(parts[:2])
         roots[root][0] += 1
         if os.path.exists(real):
             roots[root][1] += 1
@@ -12395,6 +12638,49 @@ def run_diagnose_files(stash, plugin_dir, n=24):
         libs = []
     lib_ok = [{"path": l, "ok": os.path.isdir(l) and bool(os.listdir(l) if os.path.isdir(l) else [])} for l in libs]
     return {"roots": [{"root": r, "checked": c, "ok": ok} for r, (c, ok) in sorted(roots.items())], "libraries": lib_ok}
+
+
+def tz_zone(name):
+    """The time zone called `name`, or None for this computer's own clock: an
+    unknown or empty name, or a Python without a time-zone list (Windows has
+    none of its own - "py -m pip install tzdata" adds it)."""
+    with contextlib.suppress(Exception):
+        from zoneinfo import ZoneInfo  # noqa: PLC0415
+        if (name or "").strip():
+            return ZoneInfo(name.strip())
+    return None
+
+
+def tz_list_ok():
+    """Whether this Python knows time-zone names (on Windows only with tzdata)."""
+    with contextlib.suppress(Exception):
+        import zoneinfo  # noqa: PLC0415
+        return bool(zoneinfo.available_timezones())
+    return False
+
+
+def host_os(env=None):
+    """Where the AI programs (Ollama, the face helper) run: "windows", "mac"
+    or "linux" - Stash's own computer, or, Stash in Docker Desktop, the one
+    the container runs on."""
+    env = env or _stash_environment()
+    kernel = env.get("kernel", "").lower()
+    if env["docker"]:
+        if "microsoft" in kernel or "wsl" in kernel:
+            return "windows"
+        return "mac" if "linuxkit" in kernel else "linux"
+    return {"nt": "windows"}.get(os.name) or ("mac" if sys.platform == "darwin" else "linux")
+
+
+def setup_help(os_kind, docker=False):
+    """The commands that install / check the face helper and start Ollama, for
+    that computer."""
+    if os_kind == "windows":
+        return {"setup": "powershell -ExecutionPolicy Bypass -File face-helper\\setup.ps1" + (" -ListenAll" if docker else ""),
+                "check": "Invoke-RestMethod http://127.0.0.1:11535/health",
+                "ollama": "open it from the Start menu (it then sits by the clock)"}
+    return {"setup": "sh face-helper/setup.sh", "check": "curl http://127.0.0.1:11535/health",
+            "ollama": "brew services start ollama, or open the Ollama app" if os_kind == "mac" else "systemctl start ollama, or run: ollama serve"}
 
 
 def _stash_environment():
@@ -12438,8 +12724,40 @@ def _stash_environment():
             "os": os_name, "kernel": platform.release()}
 
 
+LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "host.docker.internal", "172.17.0.1", "ollama", "gateway.docker.internal"}
+
+
+def other_computer(url, env=None):
+    """The host in `url` when it's another computer (not this one, or Docker's
+    way to it), else None."""
+    host = (urllib.parse.urlparse(url or "").hostname or "").lower()
+    if not host or host in LOCAL_HOSTS or (env and host == (env.get("gateway") or "")):
+        return None
+    return host
+
+
+def remote_help(kind):
+    """What to do when Ollama / the face helper is on another computer and
+    doesn't answer: by default both only listen to the computer they run on
+    (no SSH tunnel needed - tell them to listen on the network)."""
+    if kind == "ollama":
+        return ("Ollama on another computer only answers that computer until it's told to listen on the network - "
+                "no SSH tunnel needed. On that computer set OLLAMA_HOST to 0.0.0.0 and restart Ollama: "
+                "Windows: setx OLLAMA_HOST 0.0.0.0, then quit Ollama by the clock and open it again; "
+                "Mac app: launchctl setenv OLLAMA_HOST 0.0.0.0, then quit and reopen Ollama "
+                "(Homebrew: OLLAMA_HOST=0.0.0.0 ollama serve, or add it to the brew service); "
+                "Linux: sudo systemctl edit ollama, add [Service] Environment=\"OLLAMA_HOST=0.0.0.0\", then sudo systemctl restart ollama. "
+                "Allow port 11434 through its firewall, and use its address here (http://<its IP>:11434). "
+                "Only do this on a home network you trust: Ollama has no password.")
+    return ("The face helper on another computer only answers that computer by default - no SSH tunnel needed. "
+            "Start it listening on the network: run setup again with --listen-all (Windows: setup.ps1 -ListenAll), or start it "
+            "with --host 0.0.0.0. Allow port 11535 through its firewall, and use http://<its IP>:11535 here. "
+            "Only on a home network you trust: the helper has no password.")
+
+
 def run_find_ollama(stash, plugin_dir):
     """Every address Ollama is usually at, tried from where Stash runs."""
+    forget_settings(plugin_dir)
     cfg = settings(stash, plugin_dir)
     env = _stash_environment()
     cands = [cfg["ai"]["url"], "http://host.docker.internal:11434", "http://localhost:11434", "http://127.0.0.1:11434"]
@@ -12471,6 +12789,11 @@ def run_find_ollama(stash, plugin_dir):
     else:
         advice = ("Stash runs directly on the computer: Ollama on the same computer is at http://localhost:11434. "
                   "Make sure it's running (Mac: brew services start ollama; Linux: systemctl start ollama).")
+    if other_computer(cfg["ai"]["url"], env) and not any(t["ok"] and t["current"] for t in tried):
+        advice = remote_help("ollama") + " " + advice
+    else:
+        advice += (" Ollama on another computer works too, without an SSH tunnel: see \"Ollama or the face helper is on "
+                   "another computer\" under Common problems.")
     return {"env": env, "tried": tried, "advice": advice, "setting": cfg["ai"]["url"]}
 
 
