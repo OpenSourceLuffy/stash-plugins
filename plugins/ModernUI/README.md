@@ -99,7 +99,7 @@ A cleaner, app-like look for Stash, built to feel good on a phone as well as a c
 - Image details (title, rating, tabs) sit under the picture on wide screens, like scenes. You can change this in the settings.
 - Gallery pages look like a performer's page on a computer: the cover on the left, and the name, rating, details, tags and performers beside it, above the pictures (instead of Stash's side panel). **Gallery details beside the pictures** brings back the side panel.
 - **Show only** on a gallery's pictures: a row of the performers (with their picture) and tags on the gallery's pictures, most used first, each with how many pictures have it. Tap one to see only those pictures, tap more to narrow it down (the counts follow what's left), tap again or **✕ Show all** to undo. It's Stash's own filter, so Back, paging and sorting work as usual. Scrolls sideways on a phone. Turn it off with **Hide the gallery "Show only" row**.
-- Scene, image and gallery pages show the studio as a **Studio:** line just above the performers, keeping the title area to the title, date and buttons, on the page's own background.
+- Scene, image and gallery pages show the studio as a **Studio:** line just above the performers, keeping the title area to the title, date and buttons, on the page's own background. Turn on **Show the studio's logo on the "Studio:" line** to have its logo there too.
 - In the edit dialog for several items, the chosen **Overwrite / Add / Remove** button is highlighted. Switching away from Remove empties the box, so what you picked to remove isn't added instead.
 
 **Suggested and Similar rows**
@@ -136,6 +136,7 @@ Under **Settings → Plugins → Modern UI**:
 | Show rating banner | Bring back the rating ribbon on card pictures. |
 | Hide titles | Pictures only, no titles, on every card. |
 | Hide the Donate button | Take Stash's Donate (heart) button off the top bar and the phone's More menu. |
+| Show the studio's logo on the "Studio:" line | Scene, image and gallery pages: the studio's logo instead of its name when it has one (bigger on wide screens); its name when it doesn't. Off: always the name. |
 | Show whole pictures | Fit the whole picture inside image, gallery and tag cards instead of cropping. |
 | Image and gallery card shape | `portrait` (default), `square`, `landscape` or `wide`. |
 | Cards per row on phones | `1` or `2` (default). Image grids show one extra. |

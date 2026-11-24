@@ -70,6 +70,7 @@
   }
 
   body.toggle("mui-show-details", !!cfg.showDetails);
+  body.toggle("mui-studio-logo", !!cfg.studioLogo);
   body.toggle("mui-show-popovers", !!cfg.showPopovers);
   body.toggle("mui-show-overlays", !!cfg.showOverlays);
   body.toggle("mui-hide-title", !!cfg.hideTitle);
@@ -992,14 +993,28 @@
         const spot = perfHeading || tabs.querySelector("." + k + "-details");
         if (!spot || !name) continue;
         const href = link.getAttribute("href");
-        if (line && line.dataset.href === href && (perfHeading ? line.nextElementSibling === perfHeading : line.parentElement === spot)) continue;
+        // the studio's logo too, when that's switched on and it has one
+        const logo = body.contains("mui-studio-logo") ? link.querySelector("img")?.getAttribute("src") || "" : "";
+        if (line && line.dataset.href === href && (line.dataset.logo || "") === logo &&
+            (perfHeading ? line.nextElementSibling === perfHeading : line.parentElement === spot)) continue;
         line?.remove();
         line = document.createElement("h6");
-        line.className = "mui-studio-line";
+        line.className = "mui-studio-line" + (logo ? " with-logo" : "");
         line.dataset.href = href;
+        line.dataset.logo = logo;
         const a = document.createElement("a");
         a.href = href;
-        a.textContent = name;
+        if (logo) {
+          // the logo instead of the name (the name on hover, and for screen readers)
+          const img = document.createElement("img");
+          img.src = logo;
+          img.alt = name;
+          img.className = "mui-studio-line-logo";
+          a.title = name;
+          a.append(img);
+        } else {
+          a.append(name);
+        }
         a.addEventListener("click", (e) => {
           if (e.metaKey || e.ctrlKey || e.shiftKey) return;
           e.preventDefault();

@@ -3191,6 +3191,24 @@ body.mui.mui-studio-moved :is(.scene-header-container, .image-header-container, 
 body.mui .mui-studio-line a {
   font-weight: 600;
 }
+/* "Show the studio's logo": the logo instead of the name (bigger on wider screens) */
+body.mui .mui-studio-line.with-logo a {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  vertical-align: middle;
+}
+body.mui .mui-studio-line-logo {
+  max-height: 48px;
+  max-width: 180px;
+  object-fit: contain;
+}
+@media (max-width: 767px) {
+  body.mui .mui-studio-line-logo { max-height: 28px; max-width: 120px; }
+}
+@media (min-width: 1200px) {
+  body.mui .mui-studio-line-logo { max-height: 64px; max-width: 240px; }
+}
 
 /* The title box (scene and image pages): no box, the page's own colour;
    the text stays where it was (same padding) */

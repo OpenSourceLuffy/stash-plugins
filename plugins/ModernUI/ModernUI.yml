@@ -1,6 +1,6 @@
 name: Modern UI
 description: Cleaner scene, performer, image, gallery, studio, group and tag cards, plus a mobile-friendly layout.
-version: "0.58"
+version: "0.59"
 ui:
   javascript:
     - modern-ui.js
@@ -8,6 +8,10 @@ ui:
     - modern-ui.css
 
 settings:
+  studioLogo:
+    displayName: "Show the studio's logo on the \"Studio:\" line"
+    description: "On scene, image and gallery pages, the \"Studio:\" line shows the studio's logo instead of its name when it has one (the name when it doesn't). Off: always the name."
+    type: BOOLEAN
   autoMute:
     displayName: Scenes start muted
     description: Every scene's video starts muted and stays muted until you unmute it (the speaker button, the volume slider or M). The next scene starts muted again.

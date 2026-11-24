@@ -2,6 +2,14 @@
 
 Newest first. Versions are what Stash shows under Settings → Plugins.
 
+## 0.59 (2026-11-24)
+
+- New setting **Show the studio's logo on the "Studio:" line** (off by default): on scene, image and
+  gallery pages, the "Studio:" line shows the studio's logo instead of its name again, since the studio
+  moved out of the title box - bigger on wide screens, smaller on phones (the name shows on hover).
+  Studios without a logo show their name as before. (GitHub
+  issue #10.)
+
 ## 0.58 (2026-11-16)
 
 - New setting **Hide the Donate button**: takes Stash's Donate (heart) button off the top bar and the phone's More menu.
