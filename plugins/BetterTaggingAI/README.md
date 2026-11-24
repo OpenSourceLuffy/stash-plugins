@@ -6,7 +6,7 @@ Everything runs on your own computer (an [Ollama](https://ollama.com) model plus
 program), so no picture ever leaves it.
 
 It's an add-on for [Better Organizing Tools](../BetterTaggingTools) and works best next to it (it then
-uses that plugin's **Tags to ignore**, **Special spellings** and gallery-name tags), but it also
+uses that plugin's **Top tags: tags to ignore**, **Naming: special spellings (tags too)** and gallery-name tags), but it also
 works on its own.
 
 > **Models: what comes with it, and what you can change**
@@ -17,7 +17,7 @@ works on its own.
 > | SFace (39 MB) | Recognising performers' faces | ✅ Included | No |
 > | NudeNet 320n (12 MB) | Body tags | ✅ Included | No |
 > | CLIP ViT-B/32 (350 MB) | Look-alike tags, galleries and suggestions | ⬇️ Downloaded by `setup.sh` (too big for GitHub) | No |
-> | Gemma 3 4B (3.3 GB) | Everything that says "AI": tags, titles, watermarks, hair and eye colour | ⬇️ You download it: `ollama pull gemma3:4b` ([ollama.com/library/gemma3](https://ollama.com/library/gemma3)) | **Yes**: set **AI: model** to any Ollama model that can see pictures (e.g. `gemma3:12b`, more accurate but slower). Only `gemma3:4b` has been tested. |
+> | Gemma 3 4B (3.3 GB) | Everything marked "(AI model)", and Ask AI: tags, titles, watermarks, hair and eye colour | ⬇️ You download it: `ollama pull gemma3:4b` ([ollama.com/library/gemma3](https://ollama.com/library/gemma3)) | **Yes**: set **Setup: AI model (in Ollama)** to any Ollama model that can see pictures (e.g. `gemma3:12b`, more accurate but slower). Only `gemma3:4b` has been tested. |
 >
 > The face helper's four models are fixed: the plugin's face fingerprints, look-alikes and body
 > tags are built around them, so they can't be swapped from the settings. See
@@ -66,18 +66,18 @@ scene by hand. (Pictures blurred; every name, title and tag is an example.)*
 The first time the add-on runs, a welcome says what it does, lists what's ready and what still needs
 setting up, and offers a tour: one feature per slide, each with a screenshot, where to find it and an
 **Open it** link (swipe, Back / Next, or the dots). **Remind me later** asks again the next day;
-**Don't show again** turns it off (setting **Welcome: don't show the welcome and tour**). The setup
+**Don't show again** turns it off (setting **Setup: hide the welcome and tour**). The setup
 page's **Show the welcome tour** opens it any time.
 
 When something isn't set up yet, the welcome offers **Set it up with me** instead: a setup guide with
 only the steps you still need (install the face helper, update it, scan your library's looks, install
-the AI model in Ollama, add Auto Seek), each with a screenshot, the commands to copy, where the add-on
+the AI model in Ollama, get the video model), each with a screenshot, the commands to copy, where the add-on
 looks for things (with the right address when Stash runs in Docker), the common problems for that step,
 and **Check again** to tick it off. When everything's done it offers the tour. The setup page's
 **Setup guide** button opens it too.
 
 Features that need something that isn't installed yet (the face helper and its models, Apple's
-Vision, CLIP's text model, the AI model in Ollama, Auto Seek's model, a look-alike scan) stay hidden
+Vision, CLIP's text model, the AI model in Ollama, the video model, a look-alike scan) stay hidden
 until it is - Review's tabs, the Search link, Ask AI for tags, faces, AI markers and the rest.
 
 ## Search by description
@@ -87,7 +87,7 @@ at the beach*, *kneeling on a bed*, *black and white photo*. Your words are turn
 fingerprint and compared with how every photo, scene and AI marker looks (the look-alike
 fingerprints), so it finds things no tag or title says. Toggle Photos / Scenes / Markers, and filter
 photos by their aesthetic score. It needs the face helper (with CLIP's text model, which `setup.sh`
-downloads) and "Look-alike tags: scan scenes and images".
+downloads) and "Tags: scan scenes and images for look-alikes (do this first)".
 
 Describe what's in the picture in plain English (CLIP knows English best); a few wordings are tried
 together ("a photo of …", and "a photo of a woman, …" when no person is named), near-identical
@@ -120,7 +120,8 @@ Tapping a tab goes back to the action you used last there.
 
 **Faces**
 - *Suggested*: strong face matches ("Is this … ?"): very alike, clearly ahead of every other
-  performer, and in a scene the best match in two or more frames. Yes also learns that face.
+  performer, and in a scene the best match in two or more frames (marker pictures count as frames).
+  Yes also learns that face.
 - *Check*: "Is [performer] in this?" when their face is known, faces were found, and none look like
   them. **✕ Remove** takes them off.
 - *New*: the same face in 3 or more items without a performer. **Is this [them]?** when a quarter or
@@ -132,22 +133,30 @@ Tapping a tab goes back to the action you used last there.
 
 **Tags**
 - *Suggested*: tags that 50% or more of the 20 closest look-alikes you've tagged have, and positions
-  seen in a scene's video (with the [Auto Seek](#positions-in-videos-optional-auto-seek) plugin), with
+  seen in a scene's video (with the [video model](#positions-in-videos-optional-video-model)), with
   the moments they were seen (tap the picture to jump there). When both point to the same tag it's one
   card, shown first; otherwise every fifth card is one from the video. Items with 3 tags or fewer
   also get body tags the body detector was nearly sure of (within 0.08 of what it needs to add one
-  itself), marked "just under the body detector's bar"; fewest tags first.
+  itself), marked "just under the body detector's bar"; fewest tags first. Markers come first: when one of a
+  scene's markers is suggested the same tag, the card is that marker's ("Tag this marker …?"), since a
+  marker shows more clearly what's going on; Yes tags the marker and the scene. A scene's markers count
+  too: a tag its marker pictures look like in 2 or more markers is suggested like any other (the
+  card shows the marker's picture and "seen in N of its markers"); a tag from one marker only is
+  suggested but never added by itself.
 - *Markers*: tags for each marker on its own: the tags its 20 closest look-alikes have (your tagged
   scenes and photos, and the markers you've tagged, never its own scene), and positions the video
   model sees in most of the marker's frames. Tags about the people (hair, ethnicity, tattoos, body type,
-  age) are left to the scene. A card plays the scene from the marker; **Yes** tags the marker. Every
+  age) are left to the scene. The scene's own tags count as a hint: a tag the scene has needs less
+  look-alike support and ranks higher ("its scene has this tag"), but never comes from the scene alone.
+  A card plays the scene from the marker; **Yes** tags the marker (and the scene, when it doesn't
+  have that tag yet: see "Markers: add their tags to their scenes"). Every
   marker you tag is learned from, so the suggestions get better as you go (they're worked out again
   every 15 minutes, or with **↻ Check for new suggestions**).
 - Poses (shown among *Suggested* for photos and *Markers* for markers, marked "pose: …"): body positions (**Face Down Ass Up**, **All Fours**, **Frog Pose**, **Kneeling**, **Squatting**,
   **Spread Legs**, **Legs Up**, **Bent Over**, **Lying on Stomach**, or your own list in the setting
-  **Poses: tags**) for photos and markers, learnt from the ones you tag: tag at least 3 with a pose
+  **Poses: pose tags to suggest**) for photos and markers, learnt from the ones you tag: tag at least 3 with a pose
   and the photos and markers closest to them are suggested, by body shape (Apple's body pose, on a
-  Mac; run **Poses: read body poses** first) and by look. Neither tool can tell these poses by
+  Mac; run **Tags: scan images' body poses for pose suggestions (Mac)** first) and by look. Neither tool can tell these poses by
   itself (on 700 test pictures Apple found a whole body in about 1 in 6, and CLIP's descriptions
   mostly found bottoms), so they're only ever suggestions. **Yes** adds another example; **No** is
   remembered and counts against the pose next time.
@@ -241,11 +250,15 @@ In a 1,287-page manga it found 60 of its 64 chapters with their titles.
 
 ## Tasks
 
-Under **Settings → Tasks → Plugin Tasks → Better Organizing AI Add-on (local AI)**. Each section starts with a
+Under **Settings → Tasks → Plugin Tasks → Better Organizing AI Add-on (local AI)**. Pressing a task first checks
+that what it needs is set up (if not, it says what's missing and opens the setup page), and a task
+that would take 10 minutes or more says roughly how long, with **Run now**, **Add to the nightly
+run**, **Don't show this again** and **Close**. Each section starts with a
 preview that only writes to the log; tasks only add, skip what's done, and carry on where they
 stopped if cancelled.
 
-- **AI tagging**: the model sees a picture (for a scene, 4 frames in one picture) and picks from your
+- **AI tagging**: the model sees a picture (for a scene, 4 frames in one picture,
+  or 4 of its marker pictures when it has markers) and picks from your
   250 most used tags, so it never invents tags; its picks are kept only when look-alikes back them up.
   Items with more than 5 tags skip the model.
 - **Look-alike tags**: **Scan scenes and images** fingerprints every item once (well under a second
@@ -272,6 +285,11 @@ stopped if cancelled.
   watermarks needs a second sighting; near misses of a studio or performer you have (letters that
   look alike, like 1/l and 0/o) count as that one. New studios go under a platform studio
   (**OnlyFans**, **Fansly**, **Patreon**, **Instagram**, **TikTok**), and matching performers are added.
+  The accounts' profile links go in the item's URLs too (from a watermark only when it's a studio or
+  performer you have, or was read in another item as well), with web links written in its title or
+  description (not a bare home page like "metadata provided by https://…").
+- **Links: add account and written links to scenes and images**: the quick, no-AI part of that for
+  every scene and photo (with a preview).
 - **Faces**: scan every item's faces once, learn performers' faces (profile pictures, then photos
   where they're alone), find who's in items without performers, and list performers who may be the
   same person. Confident matches can be added automatically.
@@ -279,7 +297,7 @@ stopped if cancelled.
   never using one picture twice; also from the Tags list (**••• → Most typical picture (AI)**). On a
   Mac, Apple's aesthetics score passes over blurry, dark or screenshot-like ones (also for AI marker
   pictures, which take a frame 3 or 6 seconds on, or 2 or 4 seconds before the marker, instead).
-- **Pictures: replace blurry or dark tag pictures** and **… marker pictures** (on a Mac): go back over
+- **Tag pictures: replace blurry or dark ones (Mac)** and **… marker pictures** (on a Mac): go back over
   the pictures tags and markers already have and swap the ones Apple scores low (blurry, dark,
   screenshots) for a clearly better one; the rest are left alone. A marker picture with nobody in it
   (a title card, a logo, a black or empty frame) counts as low too: people are looked for with Apple's
@@ -287,18 +305,47 @@ stopped if cancelled.
   **Preview** first shows what 40 random tags and markers would get.
   Vertical scenes' marker pictures are cut to a wide picture around the people (faces kept in), so
   cards and the marker row don't crop them in the middle; new AI markers get that too.
+- **Scene covers: replace low-scoring ones (Mac)** (on a Mac): a scene cover Apple scores low (blurry,
+  dark, mid-move, nobody in it) is compared with 9 frames from across the video, and the best becomes
+  the cover if it's clearly better and decent on its own. Only covers Stash generated (its frame 20%
+  into the video) are changed: a studio's or scraper's cover, or one you set, is recognised and left
+  alone. A vertical video's frames are cut to wide covers around the people, like AI marker pictures
+  (on a Mac; elsewhere a third of the way down); a cover Vertical Cover Stitcher made isn't one frame
+  of the video, so it's left alone like a scraped one. On 200 of the author's scenes, 1 in 6
+  covers scored low; about half of those got a better frame. The originals are kept in
+  `cover-originals` in Stash's config folder, and **Scene covers: put back the originals** restores
+  them. Each cover is checked once (until it changes), so it suits the [after-scan and nightly
+  jobs](#nightly-and-after-scan-jobs). **Preview** first shows 10 scenes' scores.
+  Stash doesn't record where a cover came from, so the task works it out: Stash's own covers are
+  recognised for certain; a cover on a scene linked to StashDB / ThePornDB, or one that isn't a frame
+  of the video, counts as **scraped or uploaded**; a frame of the video on a scene that isn't linked
+  counts as **picked by you** (in Stash's player). Those, and **organized** scenes' covers, are left
+  alone unless you turn on **Scene covers: also replace scraped or uploaded covers / … covers you
+  picked from the video / … organized scenes' covers**.
+- **Suggest profile pictures** (a performer's Edit page): their photos (best-scoring first) and
+  frames of their scenes, cut to a 2:3 portrait around their face. Only pictures where the face is
+  theirs count (their known faces from "Faces: learn performers' faces"; without those, pictures with
+  one face). With Apple's score (a Mac) the best 9 come first, next to the current picture's score;
+  otherwise the closest faces. **Look at more pictures** looks further and keeps the best. **Use this
+  picture** puts it in the form like Stash's Set image, so **Save** keeps it and **Cancel** doesn't.
+- **Suggest covers** (a scene's Edit tab, under Cover Image): 24 frames from across the video are
+  compared with Apple's score out of 100 (on a Mac) and the best 9 shown (not near copies of one shot), next to the current
+  cover's score; **Compare more frames** looks at 24 more in between and shows 9 more each time (up to 36), the best so far
+  (newcomers marked New). A vertical video's frames are cut to wide covers around the people; with [Vertical Stitcher](../VerticalStitcher) (1.4+) installed and turned on, stitched covers (several frames side by side, from the best frames and evenly spaced) are suggested above them too. **Use this cover** saves it straight away and **Undo** puts back the
+  cover from just before. Covers you choose here count as picked by you, so the covers task leaves
+  them alone. Without Apple's scores (e.g. Stash on Windows) the frames show in video order.
 - **Performer details**: fills empty hair and eye colour only when two looks at different photos agree.
-- **AI markers**: markers where each scene shifts (see [Positions in videos](#positions-in-videos-optional-auto-seek)),
+- **AI markers**: markers where each scene shifts (see [Positions in videos](#positions-in-videos-optional-video-model)),
   with their pictures, for every scene that has no markers yet. Scenes with markers are never touched.
   **Redo with the newest method** replaces the AI markers you already have (other markers are kept).
-- **Pictures: aesthetic score and labels** (on a Mac): every photo gets Apple's aesthetic score
+- **Image scores: add aesthetic scores and labels (Mac)** (on a Mac): every photo gets Apple's aesthetic score
   (0-100: sharp, well lit, well framed; a screenshot about 50, studio photos 85+) and what Apple's
   picture labels see in it (beach, bedroom, swimsuit, high heels...), saved as the image's custom
   fields `aesthetic` and `seen`. Filter by them in Stash itself: Images → Filter → Custom fields
   (e.g. `aesthetic` greater than 70, `seen` includes `beach`). Review → Tags → Suggested shows
   better-looking photos first (and says "looks 72/100"), and tag pictures reuse the scores. New
   images get them by themselves after a scan.
-- **Body tags: clothing from the look (quick)**: the clothing tags, and **Ass** whether it's
+- **Tags: add clothing tags from the look (quick)**: the clothing tags, and **Ass** whether it's
   bare or clothed (a picture that's about a butt sticking out: shorts, leggings, lingerie, bent over),
   from each photo's look-alike fingerprint alone, so the whole library takes under a minute. Ass only
   for women or no one named, never for drawings. On 400 photos not tagged Ass, about 4 in 5 it added
@@ -310,35 +357,46 @@ stopped if cancelled.
   Stash keeps its performers and tags, and the screenshot is kept in `screenshot-originals` in Stash's
   config folder; **Screenshots: put back the originals** undoes it. **Preview** lists them first. Needs
   the face helper.
-- **Poses: read body poses** (on a Mac): Apple's body pose for every photo (not drawings) and marker
+- **Markers: add their tags to their scenes**: gives each scene the tags its markers have and it
+  doesn't (never Scene Shift, excluded tags, or tags you took off that scene). New marker tags go on the
+  scene as you add them (setting "Markers: don't add a marker's tags to its scene" turns that off); this
+  task is for markers tagged before. **Preview** writes what it would add to the log.
+- **Tags: scan images' body poses for pose suggestions (Mac)** (on a Mac): Apple's body pose for every photo (not drawings) and marker
   picture, for the pose suggestions in **Review → Tags**. Well under a second each; done ones are skipped.
-- **Positions in videos**: with the [Auto Seek](#positions-in-videos-optional-auto-seek) plugin
-  installed, looks at 24 frames of every scene (about 4 s each) and suggests what it sees under
+- **Positions in videos**: with the [video model](#positions-in-videos-optional-video-model),
+  looks at 24 frames of every scene (about 4 s each) and suggests what it sees under
   **Review → Tags → Suggested**. It never tags by itself.
 
 ## New items after a scan
 
 Turn on what you want in the settings: AI tags, AI titles, studios from watermarks, faces. With
-**AI: wait until night for new items** on, new items get only the quick steps right after the scan
+**New items: wait until night for the AI model steps** on, new items get only the quick steps right after the scan
 (file-name tags, look-alike tags, body tags, faces; about a second each) and the AI model's steps run
-once at **AI: night time** (default 03:00), so a big scan doesn't hold Stash up for hours.
+once at **Schedules: night time** (default 03:00), so a big scan doesn't hold Stash up for hours.
 
-## Nightly jobs
+## Nightly and after-scan jobs
 
-The **Nightly jobs** page (🌙 on the AI setup page, or the link above the add-on's tasks; address
-`/ai-nightly`) picks what runs every night at the night time, while you're not using Stash:
+The **Nightly & after-scan jobs** page (🌙 on the AI setup page, or the link above the add-on's
+tasks; address `/ai-nightly`) has two lists - **Every night** (at the night time, while you're not
+using Stash) and **After a scan** (when a scan you start finishes). Each can hold:
 
 - **Stash's own tasks**: back up the database, scan, clean (skipped if a library folder is missing or
   empty that night, so an unmounted drive can't empty the library), identify, auto tag, generate,
   clean generated files and optimise the database. Scan, Identify, Auto Tag and Generate use the
   options you've chosen on Stash's Tasks page.
-- **Any plugin's tasks**, in the order you set (Up / Down): this add-on's scans, body tags, poses,
-  picture scores, AI markers, Better Organizing Tools' tasks, or another plugin's.
+- **Any plugin's tasks**: this add-on's scans, body tags, poses, picture scores, AI markers, AI
+  tagging and titles, Better Organizing Tools' tasks, or another plugin's.
 
-They run in this order: backup, scan, clean, identify, auto tag, your plugin tasks, generate, clean
-generated, optimise - Stash runs one job at a time, so each waits for the one before. **Run them now**
-starts them straight away, and **Last run** shows how each one went (finished, failed with the
-error, skipped and why). New items saved for tonight are always done.
+Each list runs in the order you give it, Stash's tasks included - move any job with ↑ Up / ↓ Down
+(for example Scan, Identify, AI markers, AI tagging, AI titles). Stash runs one job at a time, so each
+waits for the one before. **Run them now** starts a list straight away, and **Last run** shows how
+each job went (finished, failed with the error, skipped and why). New items saved for tonight are
+always done.
+
+**After a scan** works the same way, without Scan itself (it would start the list again). It runs
+when a scan you start finishes - not one the nightly run starts, as that list covers what comes next
+- and if several scans finish close together, once, about 30 seconds after the last. A cancelled
+scan doesn't start it.
 
 ## On other pages
 
@@ -364,13 +422,13 @@ error, skipped and why). New items saved for tonight are always done.
 > Docker on Linux or installed directly - and every usual Ollama address tried from there, with **Use
 > this address** to save the one that answers, or what to change when none does), the connection to Ollama, the installed models
 > (and which can see pictures), the face helper, which library folders can be opened, the scans,
-> tonight's run, a timed AI test, or a safe preview task. The task **Setup check:
-> write a report to the log** writes the same checks to the log.
+> tonight's run, a timed AI test, or a safe preview task. The task **Setup: check everything and write a
+> report** writes the same checks to the log.
 
 You need two things on the computer Stash runs on (or one it can reach). Each is optional; anything
 that needs a missing part says so in the log and does nothing.
 
-### 1. Ollama and the AI model (for everything that says "AI")
+### 1. Ollama and the AI model (for tasks marked "(AI model)", and Ask AI)
 
 1. Install [Ollama](https://ollama.com): on a Mac `brew install ollama` then
    `brew services start ollama`; on Linux `curl -fsSL https://ollama.com/install.sh | sh`; on
@@ -378,11 +436,11 @@ that needs a missing part says so in the log and does nothing.
 2. Download the model: `ollama pull gemma3:4b` (about 3.3 GB;
    [ollama.com/library/gemma3](https://ollama.com/library/gemma3)). Check it with
    `curl http://localhost:11434/api/tags`.
-3. Set **AI: Ollama address**: the default `http://host.docker.internal:11434` works for Stash in
+3. Set **Setup: Ollama address**: the default `http://host.docker.internal:11434` works for Stash in
    Docker Desktop on the same computer; use `http://localhost:11434` for Stash installed directly.
    For Stash in Docker on Linux, run the container with `network_mode: host` and use
    `http://127.0.0.1:11434` (Ollama and the face helper only listen on the computer itself).
-4. Run **AI tagging: preview on 10 items (no changes)**; the log shows what it would add, or what's
+4. Run **Tags: preview on 10 (AI model, no changes)**; the log shows what it would add, or what's
    missing.
 
 ### 2. The face helper (for faces, look-alikes and body tags)
@@ -447,6 +505,8 @@ Invoke-WebRequest http://127.0.0.1:11535/health -UseBasicParsing | Select-Object
 - Step 4 and the `tokenizers` package are only for **Search by description**; they came after the
   steps above were tested, so tell us how they go. Without them, everything else works and Search
   stays hidden.
+- **NVIDIA graphics card:** install `onnxruntime-gpu` instead of `onnxruntime` (with a CUDA setup it
+  supports) and the picture models run on the card; `http://127.0.0.1:11535/health` shows `"gpu": true`.
 - To start it at login, put a shortcut in your Startup folder (`Win + R`, `shell:startup`) whose
   target is the command from step 5: `"<dest>\venv\Scripts\pythonw.exe" "<dest>\face_helper.py"`.
 - With Stash running natively (not in Docker), the add-on looks for Ollama at
@@ -455,17 +515,23 @@ Invoke-WebRequest http://127.0.0.1:11535/health -UseBasicParsing | Select-Object
 
 ### 3. First runs
 
-Run **Look-alike tags: scan scenes and images** and **Faces: scan scenes and images** once (a while
+Run **Tags: scan scenes and images for look-alikes (do this first)** and **Faces: scan scenes and images** once (a while
 on a big library; cancel and rerun to carry on), then turn on the after-scan settings you want.
 
-## Positions in videos (optional, Auto Seek)
+## Positions in videos (optional, video model)
 
-If you have the **Auto Seek** plugin (it finds where the action starts in a scene), this add-on can
-use its model too: a CLIP model tuned on videos (MIT licence, about 90 MB, downloaded by Auto Seek
-itself, not by this add-on). Auto Seek only uses its "has it started" score; the same model also
-scores each frame for 10 sex positions. Once Auto Seek has downloaded it, this add-on keeps its own copy (the model,
-the runtime it runs on, and Auto Seek's code for reading frames) in `auto-seek-copy` in its folder,
-refreshed when Auto Seek updates, so positions and AI markers keep working if you remove Auto Seek.
+Positions in videos and AI markers use **Auto Seek's video model**: a CLIP model tuned on videos (MIT
+licence, about 90 MB). Auto Seek (a separate plugin that finds where the action starts) only uses its
+"has it started" score; the same model also scores each frame for 10 sex positions. **The Auto Seek
+plugin isn't needed**: run the task **Markers: download the video model (needed first)** once
+(Settings → Tasks → Markers & positions). Auto Seek's code (0.3.1, AGPL-3.0) ships with the add-on in
+[`video-model`](video-model); the model and the Alpine (Docker) runtimes come from this repository's
+[`extras/video-model`](../../extras/video-model), the other runtimes from Microsoft, each checked
+against its SHA-256 (if this repository can't be reached, the original addresses are tried). They're
+kept in `plugin-data/BetterTaggingAI/auto-seek` in Stash's config folder, so updating or reinstalling
+the add-on keeps them. If you do have the Auto
+Seek plugin, its model is used and copied there too. Everything else - marker pictures, Create
+Marker's picture, scene covers - only needs ffmpeg, never the video model.
 
 Tried on 60 scenes that were already tagged, four of those positions matched the tags well enough
 to suggest: when it said yes it was right 60–76% of the time, and it found 86–95% of the scenes
@@ -516,7 +582,7 @@ Each job uses the smallest model that does it well, so it all runs on an ordinar
   70–78%. Look-alike tags alone were 79–85% right for items like ones you've tagged.
 - **Watermarks:** asked for an account name directly, small models make one up, so the model only
   copies out the text it sees, the plugin picks the names out, and a name needs two frames to agree.
-- You can try another vision model with **AI: model**; only `gemma3:4b` has been tested.
+- You can try another vision model with **Setup: AI model (in Ollama)**; only `gemma3:4b` has been tested.
 - **Licences:** Gemma 3 is under Google's [Gemma terms](https://ai.google.dev/gemma/terms) (not
   included; `ollama pull gemma3:4b`). YuNet (MIT), SFace (Apache 2.0) and NudeNet 320n (AGPL-3.0)
   are in [`face-helper/models`](face-helper/models) with their licences; CLIP (MIT) is downloaded.
@@ -528,29 +594,29 @@ Under **Settings → Plugins → Better Organizing AI Add-on (local AI)**:
 
 | Setting | What it does |
 | --- | --- |
-| AI: tag new scenes and images automatically | AI-tag new items after a scan. |
-| AI: tag, title and find the studio of new scenes and images | All three AI steps for each new item after a scan. |
-| AI tagging: which items | `scenes`, `images` or both (empty): which items the AI model tags, in the tasks, after a scan and at night. |
-| AI titles: which items | `scenes`, `images` or both (empty): which new items get an AI title. |
-| AI: read watermarks on new photos | Studio (and performers) from the watermark of each new photo without a studio. |
-| AI: Ollama address | Default `http://host.docker.internal:11434`. |
-| AI: model | Default `gemma3:4b`. |
-| AI: tags to choose from | How many of your most used tags the model picks from. Default 250. |
-| AI: most tags per item | Default 6. |
-| AI: don't auto tag from file names first | Skip the file-name matching before the AI looks at an item. |
-| AI: include organized items | Also AI-tag items marked as organized. |
-| AI: body tags every night (older setting) | Now chosen on the Nightly jobs page; only counts until that page is first saved. |
-| Nightly jobs | Saved by the Nightly jobs page (`/ai-nightly`); easier to change there. |
-| AI: look-alike suggestions from (%) | Edit page "Tags from look-alikes" cut-off (default 20). The tasks only add at 50%+. |
-| AI: skip items with more tags than | Items with more tags (default 5) skip the AI model; body tags still run. 0 never skips. |
-| AI: wait until night for new items | New items get the quick steps after a scan; the AI model's steps wait for the night. |
-| AI: night time | When the saved AI work runs (HH:MM). Default 03:00. |
-| AI: time zone | Time zone of the night time, e.g. `America/New_York`. Default UTC. |
-| Faces: add confident matches automatically | Let the Faces tasks (and new scans) add confident matches. |
+| New items: tag them (AI model) | AI-tag new items after a scan. |
+| New items: tag, title and find their studio (AI model) | All three AI steps for each new item after a scan. |
+| Tags: scenes, images or both (AI model) | `scenes`, `images` or both (empty): which items the AI model tags, in the tasks, after a scan and at night. |
+| Titles: scenes, images or both (AI model) | `scenes`, `images` or both (empty): which new items get an AI title. |
+| New items: read watermarks on new images (AI model) | Studio (and performers) from the watermark of each new photo without a studio. |
+| Setup: Ollama address | Default `http://host.docker.internal:11434`. |
+| Setup: AI model (in Ollama) | Default `gemma3:4b`. |
+| Tags: how many of your tags the AI model chooses from | How many of your most used tags the model picks from. Default 250. |
+| Tags: most tags the AI model adds to one item | Default 6. |
+| Tags: don't auto tag from file names first | Skip the file-name matching before the AI looks at an item. |
+| Tags: include organized scenes and images | Also AI-tag items marked as organized. |
+| Nightly jobs / After-scan jobs | Saved by the Nightly & after-scan jobs page (`/ai-nightly`); easier to change there. |
+| Tags: look-alike suggestions from (%) | Edit page "Tags from look-alikes" cut-off (default 20). The tasks only add at 50%+. |
+| Tags: skip items with more tags than (AI model) | Items with more tags (default 5) skip the AI model; body tags still run. 0 never skips. |
+| New items: wait until night for the AI model steps | New items get the quick steps after a scan; the AI model's steps wait for the night. |
+| Schedules: night time | When the saved AI work runs (HH:MM). Default 03:00. |
+| Schedules: time zone | Time zone of the night time, e.g. `America/New_York`. Default UTC. |
+| New items: add confident face matches | Let the Faces tasks (and new scans) add confident matches. |
 | Faces: likeness needed to add automatically (%) | Default 50 (images 5 more). |
 | Faces: likeness needed to suggest (%) | Default 36. |
-| Faces: helper address | Default `http://host.docker.internal:11535`. |
+| Setup: face helper address | Default `http://host.docker.internal:11535`. |
 | Markers: tag for AI markers | The tag markers added with **Markers → ✨ AI markers** get (Stash needs one). Default *Scene Shift*. |
+| Markers: don't add a marker's tags to its scene | Off (default): a tag you give a marker that its scene doesn't have goes on the scene too. |
 
 AI settings set in Better Organizing Tools before the AI had its own plugin still count until you
 change them here.

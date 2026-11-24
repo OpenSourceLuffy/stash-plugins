@@ -33,7 +33,7 @@ def main():
         c.night_runner_main(sys.argv[2])
         return
     if sys.argv[1:2] == ["--night-track"]:  # follows tonight's queued jobs, notes how they went
-        c.night_track_main(sys.argv[2])
+        c.night_track_main(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else "night")
         return
     payload = json.loads(sys.stdin.read())
     conn = payload.get("server_connection", {})
@@ -127,7 +127,8 @@ def main():
             print(json.dumps({"output": c.run_face_reject(plugin_dir, args["performer"], args.get("key"))}))
         elif mode == "face_review":
             print(json.dumps({"output": c.run_face_review(stash, plugin_dir, args.get("performer"),
-                                                          int(args.get("limit") or 40), args.get("skip") or [])}))
+                                                          int(args.get("limit") or 40), args.get("skip") or [],
+                                                          bool(args.get("favourites")))}))
         elif mode == "tag_review":
             print(json.dumps({"output": c.run_tag_review(stash, plugin_dir, args.get("tag"),
                                                          int(args.get("limit") or 40), args.get("skip") or [],
@@ -144,6 +145,18 @@ def main():
             c.run_video_markers_redo(stash, plugin_dir)
         elif mode == "video_markers_all":
             c.run_video_markers_all(stash, plugin_dir)
+        elif mode in ("marker_tags_to_scenes", "marker_tags_to_scenes_preview"):
+            c.run_marker_tags_to_scenes(stash, plugin_dir, preview=mode.endswith("preview"))
+        elif mode == "face_card_picture":
+            print(json.dumps({"output": c.run_face_card_picture(stash, plugin_dir, args["kind"], args["id"], args.get("at"), args.get("emb"))}))
+        elif mode == "profile_ideas":
+            print(json.dumps({"output": c.run_profile_ideas(stash, plugin_dir, args["id"], args.get("more") or 0)}))
+        elif mode in ("item_links", "item_links_preview"):
+            c.run_item_links(stash, plugin_dir, preview=mode.endswith("preview"))
+        elif mode == "task_check":
+            print(json.dumps({"output": c.run_task_check(stash, plugin_dir, args.get("task") or "")}))
+        elif mode == "task_add_nightly":
+            print(json.dumps({"output": c.run_task_add_nightly(stash, plugin_dir, args.get("task") or "")}))
         elif mode == "add_markers":
             print(json.dumps({"output": c.run_add_markers(stash, args["scene"], args.get("markers") or [])}))
         elif mode == "marker_suggest":
@@ -262,8 +275,24 @@ def main():
             c.run_performer_details(stash, plugin_dir, preview=True, limit=10)
         elif mode == "perf_details_one":
             print(json.dumps({"output": c.run_performer_details_one(stash, plugin_dir, args["id"])}))
+        elif mode == "cover_ideas":
+            print(json.dumps({"output": c.run_cover_ideas(stash, plugin_dir, args["id"], args.get("more") or 0)}))
+        elif mode == "cover_use":
+            print(json.dumps({"output": c.run_cover_use(stash, plugin_dir, args["id"], args["at"], args.get("stitch"))}))
+        elif mode == "cover_undo":
+            print(json.dumps({"output": c.run_cover_undo(stash, plugin_dir, args["id"])}))
+        elif mode == "video_model_get":
+            c.run_get_video_model(stash, plugin_dir)
+        elif mode == "better_covers":
+            c.run_better_covers(stash, plugin_dir)
+        elif mode == "better_covers_preview":
+            c.run_better_covers(stash, plugin_dir, preview=True, limit=10)
+        elif mode == "restore_covers":
+            c.run_restore_covers(stash, plugin_dir)
         elif mode == "nightly_jobs":
             c.run_nightly_jobs(stash, plugin_dir)
+        elif mode == "after_scan_jobs":
+            c.run_job_list(stash, plugin_dir, "scan")
         elif mode == "nightly_info":
             print(json.dumps({"output": c.run_nightly_info(stash, plugin_dir)}))
         elif mode == "nightly_save":

@@ -1,6 +1,6 @@
 name: Better Organizing AI Add-on (local AI)
 description: Local AI for Stash - nothing leaves your computer. Tags scenes and images from your own tag list (checked against the items you've already tagged that look most alike), writes titles, recognises performers' faces, finds a scene's studio from the account in its watermark, adds body tags and hair / eye colour, and tidies up studios and galleries. A Review page to accept or undo suggestions with a swipe, "Ask AI" buttons while editing, and tasks for the whole library or new items. Runs on Ollama and a small local helper, on a Mac or any ordinary computer, with no NVIDIA graphics card or online service needed. An add-on for Better Organizing Tools that also works on its own.
-version: "1.7.1"
+version: "1.8"
 url: https://github.com/OpenSourceLuffy/stash-plugins/tree/main/plugins/BetterTaggingAI
 exec:
   - python
@@ -17,7 +17,7 @@ ui:
 
 hooks:
   - name: New scenes and images
-    description: 'When "AI: tag new scenes and images automatically" or "AI: tag, title and find the studio of new scenes and images" is on, new scenes and images are queued and a background job does them once the scan is done.'
+    description: 'When "New items: tag them (AI model)" or "New items: tag, title and find their studio (AI model)" is on, new scenes and images are queued and a background job does them once the scan is done.'
     triggeredBy:
       - Scene.Create.Post
       - Image.Create.Post
@@ -28,294 +28,362 @@ hooks:
       - SceneMarker.Update.Post
 
 tasks:
-  - name: "Setup check: write a report to the log"
-    description: Checks everything the add-on needs (Ollama and the model, the face helper and its models, scans, settings, library access) and writes what's working and how to fix what isn't to the log. The page "AI setup & troubleshooting" (address /ai-setup, also linked above these tasks) shows the same with more help.
+  # --- Setup & schedules ---
+  - name: "Setup: check everything and write a report"
+    description: "Checks Ollama, the face helper, the scans and the settings, and writes what works and how to fix the rest to the log. The setup page (/ai-setup) shows the same with more help."
     defaultArgs:
-      mode: diagnose_log
-  - name: "Nightly jobs: run now"
-    description: Runs the jobs chosen on the Nightly jobs page (address /ai-nightly, linked from the AI setup page) now instead of at the night time - Stash's own tasks (scan, auto tag, generate...) and plugin tasks, queued in order. How each one went shows on that page.
+      mode: "diagnose_log"
+  - name: "Schedules: run the nightly jobs now"
+    description: "Runs your Every night list now instead of at the night time. Choose its jobs on the Nightly & after-scan jobs page (/ai-nightly)."
     defaultArgs:
-      mode: nightly_jobs
-  - name: "AI: run tonight's new items now"
-    description: With "AI - wait until night for new items" on, new scenes and images get the quick steps right after a scan and wait for the AI model's steps (AI tags, studios from watermarks, AI titles) until the night time. This runs those now (it also runs by itself at night).
+      mode: "nightly_jobs"
+  - name: "Schedules: run the after-scan jobs now"
+    description: "Runs your After a scan list now. It also runs by itself when a scan you start finishes (choose its jobs on /ai-nightly)."
     defaultArgs:
-      mode: night_run
-  - name: "AI tagging: preview on 10 items (no changes)"
-    description: Shows 10 random scenes/images to the local AI model (Ollama) and writes the tags it (and auto tagging from the file path) would add to the log, without changing anything. Try this first.
+      mode: "after_scan_jobs"
+  - name: "Schedules: run tonight's waiting steps for new items now"
+    description: "With \"wait until night for new items\" on: does the AI steps saved for tonight (AI tags, watermarks, titles) now."
     defaultArgs:
-      mode: ai_preview
-  - name: "AI tagging: items with no tags"
-    description: Uses the local AI model (Ollama) to tag scenes and images that have no tags yet, choosing from your most used tags. First adds the performers, studio and tags whose names are in each file's path (like Stash's Auto Tag). Organized items are skipped unless you change that in the settings.
+      mode: "night_run"
+  # --- Tags ---
+  - name: "Tags: scan scenes and images for look-alikes (do this first)"
+    description: "Makes a picture fingerprint of every scene and image, once (under a second each). Look-alike tags, Search and Review need it. Needs the face helper; stop and rerun to carry on."
     defaultArgs:
-      mode: ai_untagged
-  - name: "AI tagging: everything not done yet"
-    description: Uses the local AI model (Ollama) on every scene and image it hasn't looked at before, after auto tagging each one from its file path (only ever adds). Can take many hours on a big library; it can be stopped and run again, and carries on where it left off.
+      mode: "looks_scan"
+  - name: "Tags: tag scenes and images with no tags (AI model)"
+    description: "The local AI model tags scenes and images that have no tags, choosing from your most used tags (after adding names found in the file path). Only adds."
     defaultArgs:
-      mode: ai_all
-  - name: "Look-alike tags: scan scenes and images"
-    description: Makes a picture fingerprint of every scene (its cover and 4 frames from its preview) and image, once (well under a second each; cancel and run again to carry on). After that, tags are learned from the items you've tagged that look most alike - your own tags, the way you use them. The AI tagging tasks then only keep the AI's picks that look-alikes back up, and add tags look-alikes are sure of. Needs the face helper (see the README).
+      mode: "ai_untagged"
+  - name: "Tags: tag all scenes and images not done yet (AI model)"
+    description: "The same for every scene and image the AI hasn't looked at. Hours on a big library; stop it and run it again to carry on."
     defaultArgs:
-      mode: looks_scan
-  - name: "Look-alike tags: preview on 10 items (no changes)"
-    description: Picks 10 random scenes/images with no tags and writes the tags their look-alikes suggest to the log (sure ones and less sure ones, with how sure), without changing anything.
+      mode: "ai_all"
+  - name: "Tags: tag scenes and images with no tags (look-alikes)"
+    description: "Gives untagged scenes and images the tags their look-alikes are sure of. Quick, no AI model; only adds."
     defaultArgs:
-      mode: looks_preview
-  - name: "Look-alike tags: items with no tags"
-    description: Gives scenes and images with no tags the tags their look-alikes are sure of (no AI model needed, well under a second each). Only adds; skips organized items unless "AI - include organized items" is on. Tags you later remove from most items they were added to aren't added any more.
+      mode: "looks_untagged"
+  - name: "Tags: add body tags to scenes and images not done yet"
+    description: "Adds what's shown (Tits, Ass, Pussy, Cock) and sizes from the performers to items not done yet. Needs the face helper's body model; stop and rerun to carry on."
     defaultArgs:
-      mode: looks_untagged
-  - name: "Tag pictures: preview the most typical ones (no changes)"
-    description: Writes the picture each tag would get to the log - the scene or photo that looks most like everything else with that tag (from the look-alike fingerprints) - without changing anything.
+      mode: "body_all"
+  - name: "Tags: add clothing tags from the look (quick)"
+    description: "Clothing tags, and Ass for butts sticking out, for every photo from its look-alike fingerprint - minutes for the whole library. Near-misses go to Review."
     defaultArgs:
-      mode: typical_preview
-  - name: "Tag pictures: most typical one for tags without a picture"
-    description: Gives every tag that has no picture the scene or photo that looks most like everything else with that tag, never one another tag already has (if there's no unused one, it gets none). Tags used on fewer than 3 fingerprinted items get the usual pick (Better Organizing Tools' rules) instead.
+      mode: "body_looks"
+  - name: "Tags: redo body tags on all scenes and images"
+    description: "Checks every scene and image again, organized and done ones too - e.g. after making a body tag or adding performers' sizes. Only adds."
     defaultArgs:
-      mode: typical_missing
-  - name: "Tag pictures: most typical one for every tag (replaces existing ones)"
-    description: Gives EVERY tag that's on at least 3 fingerprinted items its most typical scene or photo, one no other tag has - including tags whose picture you chose yourself. Tags without a typical picture of their own keep theirs. Old pictures can't be brought back, so make a backup first.
+      mode: "body_redo"
+  - name: "Tags: scan images' body poses for pose suggestions (Mac)"
+    description: "On a Mac: reads the body pose in each photo and marker picture, for pose suggestions in Review. Quick; done ones are skipped."
     defaultArgs:
-      mode: typical_all
-  - name: "Body tags: preview on 10 items (no changes)"
-    description: Picks 10 random scenes/images and writes to the log the body tags each would get - what's shown (Tits, Ass, Pussy, Cock) and, for that part, the size the performer is usually tagged with (or their cup size), natural/fake from their details, and Defined Abs/Muscular when a belly is shown and that's usual for them - without changing anything. Needs the face helper's body-part model (setup.sh --body).
+      mode: "pose_scan"
+  - name: "Tags: preview on 10 (AI model, no changes)"
+    description: "Writes the tags the AI would add to 10 random items to the log. Changes nothing - try this first."
     defaultArgs:
-      mode: body_preview
-  - name: "Body tags: scenes and images"
-    description: Adds body tags to every scene and image not done yet that has no body tag yet (only adds; a size is only added when that part is shown and the item has no size tag yet). Scenes take a few seconds (4 frames), images under one; cancel and run again to carry on. AI tagging (and new items after a scan) adds them too.
+      mode: "ai_preview"
+  - name: "Tags: preview on 10 (look-alikes, no changes)"
+    description: "Writes the tags look-alikes suggest for 10 untagged items to the log. Changes nothing."
     defaultArgs:
-      mode: body_all
-  - name: "Body tags: clothing from the look (quick)"
-    description: For every photo (not drawings), the clothing tags and Ass - clothed or not, when the picture is about a butt sticking out - from its look-alike fingerprint alone, no detector, so the whole library takes minutes. Ass only for women or no one named. Ones nearly there go to Review → Tags → Suggested. Needs "Look-alike tags - scan scenes and images" first.
+      mode: "looks_preview"
+  - name: "Tags: preview body tags on 10 (no changes)"
+    description: "Writes the body tags 10 random items would get to the log. Changes nothing."
     defaultArgs:
-      mode: body_looks
-  - name: "Body tags: preview clothing from the look (no changes)"
-    description: The same for every photo, writing to the log what would be added (the first 40) and how many, without changing anything.
+      mode: "body_preview"
+  - name: "Tags: preview clothing tags from the look (no changes)"
+    description: "Writes the clothing tags the quick task would add to the log. Changes nothing."
     defaultArgs:
-      mode: body_looks_preview
-  - name: "Body tags: check everything again"
-    description: Checks EVERY scene and image again - organized ones too, and ones done before - e.g. after making a new body tag or tagging performers' sizes. Only adds, like the task above. Items without performers get the parts shown but no sizes. Takes a while; cancel and run it again to carry on where it stopped.
-    defaultArgs:
-      mode: body_redo
-  - name: "Positions in videos: look at scenes"
-    description: Uses the Auto Seek plugin's model (it must be installed, with its model downloaded) on 24 frames of every scene not looked at yet, a few seconds each, to see which positions are in it. Nothing is tagged; what it sees is suggested under Review, Tags, Suggested, for you to approve. Only the four positions it gets right most of the time are suggested. You can cancel and run it again to carry on.
-    defaultArgs:
-      mode: video_scan
-  - name: "AI markers: preview on 5 scenes (no changes)"
-    description: Picks 5 random scenes without markers and writes to the log the markers each would get (where the scene shifts), without changing anything. Needs the Auto Seek plugin. Try this first.
-    defaultArgs:
-      mode: video_markers_preview
-  - name: "AI markers: scenes without markers"
-    description: Gives every scene that has no markers yet a marker where the action starts and at each big shift, named by its time and the scene's title, with its picture (no Generate needed), under the tag from "Markers - tag for AI markers" (Scene Shift unless changed). Scenes with markers are never touched. Up to a minute per long scene, so a big library takes hours; cancel and run it again to carry on. Needs the Auto Seek plugin.
-    defaultArgs:
-      mode: video_markers_all
-  - name: "AI markers: redo with the newest method"
-    description: For every scene that has AI markers (tagged Scene Shift, or the tag in "Markers - tag for AI markers"), replaces those markers with new ones from the newest way of finding shifts. Other markers are kept. Changes you made to AI markers by hand are lost. A minute or two per scene; cancel and run it again to carry on.
-    defaultArgs:
-      mode: video_markers_redo
-  - name: "Poses: read body poses"
-    description: On a Mac, Apple's body pose for every photo (not drawings) and marker picture, for pose suggestions (Review → Tags → Suggested and Markers). Quick (well under a second each); done ones are skipped, so run it again after adding photos or markers.
-    defaultArgs:
-      mode: pose_scan
-  - name: "Pictures: preview better tag and marker pictures (no changes)"
-    description: On a Mac, scores 40 random tags' and markers' pictures with Apple's aesthetics score and writes to the log which low ones (blurry, dark, screenshots) would be replaced and how much better the new ones score, without changing anything.
-    defaultArgs:
-      mode: better_pictures_preview
-  - name: "Pictures: replace blurry or dark tag pictures"
-    description: On a Mac, every tag picture Apple's aesthetics score puts low (blurry, dark, a screenshot) is replaced by a clearly better one, picked the usual way (most typical first, never one another tag has). Others are left alone. Scores are remembered, so running it again only looks at new or changed pictures.
-    defaultArgs:
-      mode: better_tag_pictures
-  - name: "Pictures: replace blurry, dark or empty marker pictures"
-    description: On a Mac, every marker picture that's blurry, dark, a title card or logo, or has nobody in it (Apple's aesthetics score and person check, and the body-part detector for close-ups) is replaced by a clearly better frame from a few seconds into the marker or just before it. Others are left alone. Scores are remembered, so running it again only looks at new or changed pictures.
-    defaultArgs:
-      mode: better_marker_pictures
-  - name: "Pictures: aesthetic score and labels"
-    description: On a Mac, gives every photo an aesthetic score 0-100 (Apple's - sharp, well lit, well framed; a screenshot about 50, studio photos 85+) and what Apple sees in it (beach, bedroom, swimsuit...), saved as the image's custom fields "aesthetic" and "seen" so you can filter by them (Images → Filter → Custom fields). Review shows better-looking photos first. New images get them by themselves; done ones are skipped.
-    defaultArgs:
-      mode: picture_facts
-  - name: "Screenshots: preview cropping to the photo (no changes)"
-    description: Lists the images that are phone screenshots of a post (Instagram, OnlyFans, Reddit...) and the photo each would be cut down to, without changing anything. Needs the face helper.
-    defaultArgs:
-      mode: screenshot_crop_preview
-  - name: "Screenshots: crop to the photo"
-    description: Every image that's a phone screenshot of a post is cut down to the photo in it, so it looks right and tags better. The file is replaced at the same path (Stash keeps its performers and tags); the screenshot is kept in screenshot-originals in Stash's config folder. Images checked before are skipped.
-    defaultArgs:
-      mode: screenshot_crop
-  - name: "Screenshots: put back the originals"
-    description: Puts back every screenshot the crop task cut down, from the copies in screenshot-originals.
-    defaultArgs:
-      mode: screenshot_restore
-  - name: "AI titles: preview on 10 items (no changes)"
-    description: Picks 10 random scenes/images without a title and writes the title each would get to the log - from the file name when that makes a good one, else from the local AI model (Ollama) - without changing anything. Try this first.
-    defaultArgs:
-      mode: ai_titles_preview
-  - name: "AI titles: scenes without a title"
-    description: Gives every scene without a title one - from the file name when that makes a good one, else the local AI model's best idea after looking at a few frames (plus its performers, studio and tags). Titles you already have are never changed. Takes a few seconds per scene; skips organized scenes unless "AI - include organized items" is on.
-    defaultArgs:
-      mode: ai_titles_scenes
-  - name: "AI titles: images without a title"
-    description: The same for images (camera photos, screenshots...). Takes a few seconds per image, so a big library can take hours; you can cancel it under Settings → Tasks and run it again later to carry on.
-    defaultArgs:
-      mode: ai_titles_images
-  - name: "Studios from accounts: preview on 10 scenes (no changes)"
-    description: Picks 10 random scenes without a studio and writes to the log which OnlyFans / Fansly / Patreon / Instagram / TikTok account each comes from and the studio it would get, without changing anything. Try this first.
-    defaultArgs:
-      mode: handle_studios_preview
-  - name: "Studios from accounts: also read watermarks with the AI"
-    description: Gives scenes without a studio a studio for the OnlyFans / Fansly / Patreon / Instagram / TikTok account they come from - from links in the file name, title, details or URLs, and from the watermark and on-screen text the local AI model (Ollama) reads in up to 6 frames (it only counts if two frames agree). Existing studios whose name is in the watermark are used first; otherwise a studio is made for the account, under a parent studio for the platform. Account names (and names in the watermark) that match a performer add that performer. About 5-15 seconds per scene; scenes already checked are skipped next time. Scenes that have a studio never get a different one.
-    defaultArgs:
-      mode: handle_studios
-  - name: "Studios from watermarks: preview on 10 photos without a studio (no changes)"
-    description: Picks 10 random photos without a studio and writes to the log which account or studio the local AI model reads in each one's watermark and the studio it would get, without changing anything. Try this first.
-    defaultArgs:
-      mode: photo_studios_preview
-  - name: "Studios from watermarks: photos without a studio, not in a gallery"
-    description: Gives photos without a studio that aren't in a gallery a studio for the OnlyFans / Fansly / Patreon / Instagram / TikTok account (or the existing studio) whose watermark the local AI model reads in them, plus performers whose name or account it reads. A brand-new account only gets a studio once it's been read in a second photo or scene. A few seconds per photo, so a big library takes hours; you can cancel it under Settings → Tasks and run it again to carry on (photos already read are skipped). Photos that have a studio never get a different one.
-    defaultArgs:
-      mode: photo_studios
-  - name: "Studios from watermarks: photos without a studio, galleries too"
-    description: The same for every photo without a studio, including the ones in galleries (comic pages and sets rarely have an account watermark, so this mostly adds time).
-    defaultArgs:
-      mode: photo_studios_all
-
-  - name: "Faces: learn performers' faces"
-    description: Turns each performer's profile picture (and a few photos where they're the only performer) into a face fingerprint for the tasks below and the "Find performers by face" button. Only new or changed performers are looked at, so it's quick after the first time; the other face tasks do this first anyway. Needs the face helper (see the README).
-    defaultArgs:
-      mode: faces_learn
+      mode: "body_looks_preview"
+  # --- Faces ---
   - name: "Faces: scan scenes and images"
-    description: Finds the faces in every scene (6 frames) and image once and remembers them, so "Might also be in" on performer pages and "learn from what you've tagged" are quick. A few seconds per scene and well under one per image; you can cancel it and run it again to carry on. Changed files are looked at again.
+    description: "Finds the faces in every scene and image once, for matching and \"Might also be in\". Stop it and run it again to carry on."
     defaultArgs:
-      mode: faces_scan
-  - name: "Faces: learn from what you've tagged"
-    description: Learns more of each performer's faces from scenes and images where they're the only performer - only faces that look like their profile picture, up to 12 each - so matching gets better at other angles and lighting. Matches you accept with "Find performers by face" or "Might also be in" are learned straight away.
+      mode: "faces_scan"
+  - name: "Faces: learn performers' faces"
+    description: "Learns each performer's face from their profile picture and solo photos. Quick after the first time."
     defaultArgs:
-      mode: faces_learn_tagged
+      mode: "faces_learn"
+  - name: "Faces: learn more from what you've tagged"
+    description: "Learns more of each performer's faces (other angles and lighting) from scenes and photos where they're alone."
+    defaultArgs:
+      mode: "faces_learn_tagged"
+  - name: "Faces: find performers in scenes without any"
+    description: "Finds who's in scenes without performers: adds confident matches if \"add confident matches automatically\" is on, else lists them in the log."
+    defaultArgs:
+      mode: "faces_scenes"
+  - name: "Faces: find performers in images without any"
+    description: "The same for images."
+    defaultArgs:
+      mode: "faces_images"
   - name: "Faces: find performers who may be the same person"
-    description: Lists the pairs of performers whose faces are most alike in the log - sometimes one person under two names (e.g. a stage name and an account name), sometimes just look-alikes, so check them. Nothing is changed; merge them in Stash if they're one person.
+    description: "Lists performers whose faces are most alike in the log (one person under two names, or just look-alikes). Changes nothing."
     defaultArgs:
-      mode: faces_duplicates
-  - name: "Faces: preview on 10 items (no changes)"
-    description: Picks 10 random scenes/images without performers and writes to the log who the people in them look like, without changing anything.
+      mode: "faces_duplicates"
+  - name: "Faces: preview on 10 (no changes)"
+    description: "Writes who the people in 10 random items without performers look like to the log. Changes nothing."
     defaultArgs:
-      mode: faces_preview
-  - name: "Faces: scenes without performers"
-    description: Looks at 6 frames of every scene without performers and finds the performers they look like. With "Faces - add confident matches automatically" on, confident matches are added (a high likeness, and the closest match in at least two frames); otherwise the suggestions are only written to the log.
+      mode: "faces_preview"
+  # --- Markers & positions ---
+  - name: "Markers: download the video model (needed first)"
+    description: "Downloads Auto Seek's video model (about 100 MB, checked against its SHA-256) into Stash's config folder, so AI markers and positions work without the Auto Seek plugin. Only needed once."
     defaultArgs:
-      mode: faces_scenes
-  - name: "Faces: images without performers"
-    description: The same for images.
+      mode: "video_model_get"
+  - name: "Markers: add AI markers to scenes without markers"
+    description: "Adds markers where each scene's action starts and shifts, with pictures. Scenes that have markers aren't touched. Needs the video model (the task above); up to a minute per scene."
     defaultArgs:
-      mode: faces_images
-  - name: "Performer details: preview on 10 performers (no changes)"
-    description: Picks 10 performers with no hair or eye colour and writes what the AI sees in their pictures to the log, without changing anything.
+      mode: "video_markers_all"
+  - name: "Markers: redo AI markers with the newest method"
+    description: "Replaces existing AI markers with new ones; other markers are kept. Changes you made to AI markers by hand are lost."
     defaultArgs:
-      mode: perf_details_preview
+      mode: "video_markers_redo"
+  - name: "Markers: add their tags to their scenes"
+    description: "Gives each scene the tags its markers have and it doesn't (not Scene Shift, excluded tags, or tags you took off the scene). New marker tags go on the scene as you add them; this is for markers tagged before."
+    defaultArgs:
+      mode: "marker_tags_to_scenes"
+  - name: "Markers: scan scenes for positions (for Review)"
+    description: "Looks at every scene with the video model and suggests the positions it sees in Review (nothing is tagged). Stop and rerun to carry on."
+    defaultArgs:
+      mode: "video_scan"
+  - name: "Markers: preview AI markers on 5 scenes (no changes)"
+    description: "Writes the markers 5 random scenes would get to the log. Changes nothing."
+    defaultArgs:
+      mode: "video_markers_preview"
+  - name: "Markers: preview adding their tags to scenes (no changes)"
+    description: "Writes the tags each scene would get from its markers to the log. Changes nothing."
+    defaultArgs:
+      mode: "marker_tags_to_scenes_preview"
+  # --- Titles ---
+  - name: "Titles: title scenes without one (AI model)"
+    description: "Gives scenes without a title one - from the file name if it makes a good one, else from the AI. Existing titles are never changed."
+    defaultArgs:
+      mode: "ai_titles_scenes"
+  - name: "Titles: title images without one (AI model)"
+    description: "The same for images. A few seconds each, so a big library takes hours."
+    defaultArgs:
+      mode: "ai_titles_images"
+  - name: "Titles: preview on 10 (AI model, no changes)"
+    description: "Writes the titles 10 random items would get to the log. Changes nothing."
+    defaultArgs:
+      mode: "ai_titles_preview"
+  # --- Studios & links ---
+  - name: "Studios: find scenes' studios from accounts and watermarks"
+    description: "Gives scenes without a studio the account they come from (OnlyFans, Fansly, Instagram...) - from links, and the watermark the AI reads. Adds matching performers. 5-15 s per scene."
+    defaultArgs:
+      mode: "handle_studios"
+  - name: "Studios: find images' studios from watermarks (not in galleries)"
+    description: "Gives photos without a studio, outside galleries, the studio whose watermark the AI reads, and matching performers. A few seconds per photo."
+    defaultArgs:
+      mode: "photo_studios"
+  - name: "Studios: find images' studios from watermarks (galleries too)"
+    description: "The same, including photos in galleries (these rarely have a watermark, so it mostly adds time)."
+    defaultArgs:
+      mode: "photo_studios_all"
+  - name: "Links: add account and written links to scenes and images"
+    description: "Puts the account links in each item's file name, title, description or links (OnlyFans, Fansly, Patreon, Instagram, TikTok profiles) and web links written in its title or description in its URLs. No AI, quick. The studios tasks add the accounts they read in watermarks too."
+    defaultArgs:
+      mode: "item_links"
+  - name: "Studios: preview on 10 scenes (no changes)"
+    description: "Writes the account and studio 10 random scenes without a studio would get to the log. Changes nothing."
+    defaultArgs:
+      mode: "handle_studios_preview"
+  - name: "Studios: preview on 10 images (no changes)"
+    description: "Writes the studio the AI reads in 10 random photos' watermarks to the log. Changes nothing."
+    defaultArgs:
+      mode: "photo_studios_preview"
+  - name: "Links: preview (no changes)"
+    description: "Writes the links each scene and photo would get to the log. Changes nothing."
+    defaultArgs:
+      mode: "item_links_preview"
+  # --- Pictures ---
+  - name: "Tag pictures: pick the most typical for tags without one"
+    description: "Gives tags without a picture the scene or photo that looks most like the rest of that tag - never one another tag has."
+    defaultArgs:
+      mode: "typical_missing"
+  - name: "Tag pictures: pick the most typical for every tag (replaces yours)"
+    description: "The same for every tag, replacing pictures you chose too. Old pictures can't be brought back - back up first."
+    defaultArgs:
+      mode: "typical_all"
+  - name: "Tag pictures: replace blurry or dark ones (Mac)"
+    description: "On a Mac: swaps tag pictures Apple scores low (blurry, dark, screenshots) for clearly better ones."
+    defaultArgs:
+      mode: "better_tag_pictures"
+  - name: "Marker pictures: replace blurry, dark or empty ones (Mac)"
+    description: "On a Mac: swaps marker pictures that are blurry, dark or show nobody for a better frame from the marker."
+    defaultArgs:
+      mode: "better_marker_pictures"
+  - name: "Image scores: add aesthetic scores and labels (Mac)"
+    description: "On a Mac: gives every photo a 0-100 aesthetic score and what's in it (beach, bedroom...) as custom fields you can filter by. New photos get them by themselves."
+    defaultArgs:
+      mode: "picture_facts"
+  - name: "Tag pictures: preview the most typical (no changes)"
+    description: "Writes the picture each tag would get to the log. Changes nothing."
+    defaultArgs:
+      mode: "typical_preview"
+  - name: "Tag & marker pictures: preview replacing blurry ones (Mac, no changes)"
+    description: "Writes which tag and marker pictures would be replaced, and how much better, to the log. Changes nothing."
+    defaultArgs:
+      mode: "better_pictures_preview"
+  # --- Scene covers ---
+  - name: "Scene covers: replace low-scoring ones (Mac)"
+    description: "On a Mac: a cover Stash made that Apple scores low (blurry, dark, nobody in it) is swapped for the best of 9 frames from the video, if clearly better. Scraped, picked and organized covers are left alone (see the settings). Originals are kept."
+    defaultArgs:
+      mode: "better_covers"
+  - name: "Scene covers: put back the originals"
+    description: "Puts back every scene cover the task above replaced."
+    defaultArgs:
+      mode: "restore_covers"
+  - name: "Scene covers: preview on 10 (Mac, no changes)"
+    description: "Writes each of 10 random scenes' cover score, and the better frame it would get, to the log. Changes nothing."
+    defaultArgs:
+      mode: "better_covers_preview"
+  # --- Screenshots ---
+  - name: "Screenshots: crop to the photo"
+    description: "Cuts phone screenshots of posts (Instagram, OnlyFans, Reddit...) down to the photo in them. Originals are kept in screenshot-originals."
+    defaultArgs:
+      mode: "screenshot_crop"
+  - name: "Screenshots: put back the originals"
+    description: "Puts back every screenshot the crop task cut down."
+    defaultArgs:
+      mode: "screenshot_restore"
+  - name: "Screenshots: preview cropping (no changes)"
+    description: "Lists the screenshots that would be cropped, and to what. Changes nothing."
+    defaultArgs:
+      mode: "screenshot_crop_preview"
+  # --- Performer details ---
   - name: "Performer details: fill in empty hair and eye colour"
-    description: The local AI model looks at each performer's profile picture and photos where they're alone, twice with different photos, and fills in their hair and eye colour where both looks agree - only if the field is empty. Tattoos and piercings are offered by the "Ask AI for details" button when you edit a performer, for you to check. Height, measurements and the like can't be seen in a picture; use Stash's scrapers for those.
+    description: "The AI fills in empty hair and eye colours from performers' pictures, where two looks at them agree."
     defaultArgs:
-      mode: perf_details
+      mode: "perf_details"
+  - name: "Performer details: preview on 10 (no changes)"
+    description: "Writes what the AI sees for 10 performers to the log. Changes nothing."
+    defaultArgs:
+      mode: "perf_details_preview"
 
 settings:
+  # --- Setup ---
+  aiOllamaUrl:
+    displayName: "Setup: Ollama address"
+    description: "Where Ollama runs. Empty: found by itself (host.docker.internal:11434 with Stash in Docker, else 127.0.0.1:11434)."
+    type: STRING
+  aiModel:
+    displayName: "Setup: AI model (in Ollama)"
+    description: "An Ollama vision model. Default gemma3:4b (about 5 s a picture on an Apple M4); bigger ones are slower."
+    type: STRING
+  faceHelperUrl:
+    displayName: "Setup: face helper address"
+    description: "Where the face helper runs. Empty: found by itself (host.docker.internal:11535 with Stash in Docker, else 127.0.0.1:11535)."
+    type: STRING
   welcomeOff:
-    displayName: "Welcome: don't show the welcome and tour"
-    description: On after you pick "Don't show again" (or finish the tour). Turn it off to see the welcome again; the tour is also on the setup page (Show the welcome tour).
+    displayName: "Setup: hide the welcome and tour"
+    description: "Hide the welcome and tour. The tour is also on the setup page."
     type: BOOLEAN
-  aiMarkerTag:
-    displayName: "Markers: tag for AI markers"
-    description: The tag given to AI markers (Markers → AI markers on a scene's page, and the AI markers task); Stash needs every marker to have one. It's made the first time if you don't have it. Default Scene Shift.
+  # --- New items ---
+  aiAuto:
+    displayName: "New items: tag them (AI model)"
+    description: "The AI model tags scenes and images as a scan adds them."
+    type: BOOLEAN
+  aiNewAll:
+    displayName: "New items: tag, title and find their studio (AI model)"
+    description: "As a scan adds items, the AI also gives them a title and finds a scene's studio from the accounts and watermarks it shows."
+    type: BOOLEAN
+  aiNewPhotoStudios:
+    displayName: "New items: read watermarks on new images (AI model)"
+    description: "As a scan adds photos without a studio, the AI reads their watermark for the studio and performers."
+    type: BOOLEAN
+  faceAutoAssign:
+    displayName: "New items: add confident face matches"
+    description: "New items, and the Faces tasks, get the performers they're confident about. Off: suggestions only."
+    type: BOOLEAN
+  aiNightly:
+    displayName: "New items: wait until night for the AI model steps"
+    description: "After a scan, do only the quick steps (about a second each) and save the AI model's steps for the night, so scans finish quickly."
+    type: BOOLEAN
+  # --- Tags & titles ---
+  aiTagKinds:
+    displayName: "Tags: scenes, images or both (AI model)"
+    description: "Scenes, images, or both (empty) - for the AI tagging tasks, new items and the nightly run."
     type: STRING
-  poseTags:
-    displayName: "Poses: tags"
-    description: "The pose tags suggested from your examples (Review → Tags → Suggested and Markers), comma-separated; only ones you have are used. Tag at least 3 photos or markers with each. Default: Face Down Ass Up, All Fours, Frog Pose, Kneeling, Squatting, Spread Legs, Legs Up, Bent Over, Lying on Stomach."
+  aiTitleKinds:
+    displayName: "Titles: scenes, images or both (AI model)"
+    description: "Which new items get an AI title: scenes, images, or both (empty)."
     type: STRING
+  aiTagCount:
+    displayName: "Tags: how many of your tags the AI model chooses from"
+    description: "The AI picks from this many of your most used tags. Default 250."
+    type: NUMBER
+  aiMaxTags:
+    displayName: "Tags: most tags the AI model adds to one item"
+    description: "The most tags the AI adds to one item. Default 6."
+    type: NUMBER
+  aiSkipTagged:
+    displayName: "Tags: skip items with more tags than (AI model)"
+    description: "Items with more tags than this skip the AI (body tags still run). Default 5; 0 never skips."
+    type: NUMBER
+  aiIncludeOrganized:
+    displayName: "Tags: include organized scenes and images"
+    description: "Also AI-tag items marked as organized (skipped by default)."
+    type: BOOLEAN
+  aiNoAutoTag:
+    displayName: "Tags: don't auto tag from file names first"
+    description: "Don't first add the performers, studio and tags named in the file path."
+    type: BOOLEAN
+  aiLookSuggest:
+    displayName: "Tags: look-alike suggestions from (%)"
+    description: "On the edit page, show a look-alike tag when at least this share of the most alike items have it. Default 20 (tasks only add at 50 or more)."
+    type: NUMBER
   tagSynonyms:
     displayName: "Tags: synonyms"
-    description: Words that mean the same in tag names, for Review → Tags → Similar (merge and sub-tag suggestions). Separate with ; or new lines. "Oral = Blowjob" makes them the same thing; "Blowjob < Oral" puts Blowjob under Oral. Common ones (Tits = Boobs = Breasts, Doggy Style = Doggystyle, Blowjob < Oral...) are built in, and every tag's aliases count too.
+    description: "Words that mean the same, for Review \u2192 Tags \u2192 Similar. Separate with ; - \"Oral = Blowjob\" (the same), \"Blowjob < Oral\" (under it). Common ones are built in."
     type: STRING
-  faceAutoAssign:
-    displayName: "Faces: add confident matches automatically"
-    description: Lets the "Faces" tasks add performers they're confident about, and checks new scenes and images after a scan too. When off, the tasks only write suggestions to the log and you pick matches yourself with "Find performers by face" while editing.
-    type: BOOLEAN
+  # --- Faces ---
   faceAutoMin:
     displayName: "Faces: likeness needed to add automatically (%)"
-    description: How alike a face must be to a performer's to be added without asking (images need 5 more, as one photo is less to go on than a scene's frames). It must also be clearly ahead of anyone else who looks similar. Default 50. Higher is stricter.
+    description: "How alike a face must be to be added without asking. Default 50; higher is stricter."
     type: NUMBER
   faceSuggestMin:
     displayName: "Faces: likeness needed to suggest (%)"
-    description: How alike a face must be to show up as a suggestion. Default 36 (about where the face model says "probably the same person").
+    description: "How alike a face must be to be suggested. Default 36."
     type: NUMBER
-  faceHelperUrl:
-    displayName: "Faces: helper address"
-    description: "Where the face helper runs, as seen from Stash. Empty: http://host.docker.internal:11535 when Stash runs in Docker (the helper on the same computer), else http://127.0.0.1:11535."
+  # --- Markers & poses ---
+  aiMarkerTag:
+    displayName: "Markers: tag for AI markers"
+    description: "The tag AI markers get. Default Scene Shift (made if you don't have it)."
     type: STRING
-  aiAuto:
-    displayName: "AI: tag new scenes and images automatically"
-    description: Have the local AI model tag scenes and images as they're added by a scan.
+  markerTagsStayOnMarker:
+    displayName: "Markers: don't add a marker's tags to its scene"
+    description: "Off: a tag you give a marker that its scene doesn't have is added to the scene too."
     type: BOOLEAN
-  aiNewAll:
-    displayName: "AI: tag, title and find the studio of new scenes and images"
-    description: "When a scan adds a scene or image, the local AI model does all three: tags it (like \"AI: tag new scenes and images automatically\"), finds a scene's studio and performers from the accounts and studio watermarks it shows (like the \"Studios from accounts\" tasks), and gives it a title if it has none (from the file name, else the AI). Runs in the background once the scan is done; a few seconds to a minute per item."
-    type: BOOLEAN
-  aiTagKinds:
-    displayName: "AI tagging: which items"
-    description: "Which items the AI model tags - in the AI tagging tasks, for new items after a scan and in the nightly run: scenes, images, or both (empty means both). The quick steps (tags from file names, look-alike tags, body tags, faces) still run on all of them."
+  poseTags:
+    displayName: "Poses: pose tags to suggest"
+    description: "Pose tags to suggest, comma-separated - only ones you have, with 3 or more photos each. Default: Face Down Ass Up, All Fours, Frog Pose, Kneeling, Squatting, Spread Legs, Legs Up, Bent Over, Lying on Stomach."
     type: STRING
-  aiTitleKinds:
-    displayName: "AI titles: which items"
-    description: "Which new items get an AI title after a scan and in the nightly run: scenes, images, or both (empty means both). The \"AI titles: scenes / images without a title\" tasks still do what they say."
-    type: STRING
-  aiNewPhotoStudios:
-    displayName: "AI: read watermarks on new photos"
-    description: "When a scan adds a photo without a studio, the local AI model reads its watermark and gives it the studio and performers it finds (like the \"Studios from watermarks\" tasks). A few seconds per photo; with \"AI: wait until night for new items\" on, it's done in tonight's run."
+  # --- Scene covers ---
+  coverReplaceScraped:
+    displayName: "Scene covers: also replace scraped or uploaded covers"
+    description: "Off: the covers task leaves covers from Identify, a scraper or an upload alone (scenes linked to StashDB / ThePornDB, or a cover that isn't a frame of the video)."
     type: BOOLEAN
-  aiNightly:
-    displayName: "AI: wait until night for new items"
-    description: "After a scan, new scenes and images only get the quick steps straight away (tags from file names, studios from links in them, look-alike tags, body tags and faces - about a second each, no AI model). The AI model's steps (AI tags, studios from watermarks, AI titles) are saved and done once at night, so scans finish quickly and other tasks aren't held up. Off: everything right after the scan."
+  coverReplacePicked:
+    displayName: "Scene covers: also replace covers you picked from the video"
+    description: "Off: a cover you chose in Stash's player (a frame of the video other than Stash's own) is left alone."
     type: BOOLEAN
+  coverReplaceOrganized:
+    displayName: "Scene covers: also replace organized scenes' covers"
+    description: "Off: scenes marked organized keep their cover."
+    type: BOOLEAN
+  # --- Schedules (set on the jobs page) ---
   aiNightTime:
-    displayName: "AI: night time"
-    description: When the saved AI work runs, as HH:MM (24-hour). Default 03:00.
+    displayName: "Schedules: night time"
+    description: "Set on the Nightly & after-scan jobs page (/ai-nightly). HH:MM, default 03:00."
     type: STRING
   aiTimeZone:
-    displayName: "AI: time zone"
-    description: The time zone of the night time, e.g. America/New_York or Europe/London. Default UTC (Stash's Docker container usually runs on UTC).
+    displayName: "Schedules: time zone"
+    description: "Set on the Nightly & after-scan jobs page (/ai-nightly). E.g. America/New_York."
     type: STRING
-  aiOllamaUrl:
-    displayName: "AI: Ollama address"
-    description: "Where Ollama runs, as seen from Stash. Empty: http://host.docker.internal:11434 when Stash runs in Docker (Ollama on the same computer), else http://127.0.0.1:11434."
-    type: STRING
-  aiModel:
-    displayName: "AI: model"
-    description: An Ollama vision model. Default gemma3:4b (install it with "ollama pull gemma3:4b") - about 5 seconds a picture on an Apple M4. Bigger models (e.g. qwen2.5vl:7b) can be more detailed but are much slower.
-    type: STRING
-  aiTagCount:
-    displayName: "AI: tags to choose from"
-    description: The model picks only from your most used tags - this many of them. Default 250.
-    type: NUMBER
-  aiMaxTags:
-    displayName: "AI: most tags per item"
-    description: The most tags the model adds to one scene or image. Default 6.
-    type: NUMBER
-  aiNoAutoTag:
-    displayName: "AI: don't auto tag from file names first"
-    description: Before the AI looks at an item, the plugin normally adds the performers, studio and tags whose names are in its file path (the same matching as Stash's Auto Tag). Turn this on to skip that.
-    type: BOOLEAN
-  aiIncludeOrganized:
-    displayName: "AI: include organized items"
-    description: Also AI-tag scenes and images you've marked as organized (they're skipped by default).
-    type: BOOLEAN
-  aiNightBody:
-    displayName: "AI: body tags every night (older setting)"
-    description: Now picked on the Nightly jobs page (address /ai-nightly) as the task "Body tags - scenes and images", with any other jobs you want each night. This switch only counts until that page is first saved.
-    type: BOOLEAN
   nightJobs:
-    displayName: "Nightly jobs (set on the Nightly jobs page)"
-    description: What runs each night, saved by the Nightly jobs page (address /ai-nightly) - easier to change there than here.
+    displayName: "Schedules: nightly jobs (set on the jobs page)"
+    description: "Set on the Nightly & after-scan jobs page (/ai-nightly)."
     type: STRING
-  aiLookSuggest:
-    displayName: "AI: look-alike suggestions from (%)"
-    description: On the edit page, "Tags from look-alikes" shows a tag when at least this share of the most alike items you've tagged have it. Default 20 - lower shows more (and more wrong ones); you choose what to add. The tasks only ever add tags at 50% or more.
-    type: NUMBER
-  aiSkipTagged:
-    displayName: "AI: skip items with more tags than"
-    description: Scenes and images that already have more tags than this (counting ones added from the file name just before) don't go through the AI model - they're well tagged already, and it saves time. Body tags still run. Default 5; 0 never skips. Ask AI for tags on the edit page always asks.
-    type: NUMBER
+  afterScanJobs:
+    displayName: "Schedules: after-scan jobs (set on the jobs page)"
+    description: "Set on the Nightly & after-scan jobs page (/ai-nightly)."
+    type: STRING

@@ -22,6 +22,25 @@ by side.
 
 Horizontal videos are never touched.
 
+### Which frames
+
+Frames come from the video's own content, spread out from start to end, leaving out:
+
+- **End cards**: TikTok's and Instagram's (a dark screen with their logo and the account, 4-5
+  seconds), and a creator's logo card on black. They're found by what they look like: after a cut,
+  dark, flat frames that hardly change until the end.
+- **The last 2 seconds**, where phone screen recordings show Control Center being pulled down.
+
+### With Better Organizing AI
+
+If the [Better Organizing AI add-on](../BetterTaggingAI) is installed (in the same plugins folder)
+and its face helper runs on a Mac, each frame is the best-looking of three from its part of the video,
+by Apple's aesthetics score (frames with people preferred; text screens, blurry or dark frames score
+low). The AI add-on also knows which covers this plugin made, and its cover tasks leave them alone. Its
+**Suggest covers** button (a scene's Edit tab) also offers stitched covers for vertical scenes, made
+with this plugin's code, so you can pick the frames yourself.
+Neither is needed: on its own, this plugin uses evenly spaced frames.
+
 ## Settings
 
 | Setting | What it does |
@@ -37,6 +56,8 @@ Horizontal videos are never touched.
 
 ## Notes
 
+- Each cover it sets is noted in Stash's config folder (`plugin-data/vertical_stitcher/stitched.json`,
+  a tiny grey copy) for the AI add-on.
 - It replaces the scene's current cover. Scraping or identifying the scene later
   may replace it again with the site's own cover.
 - Covers are 1280×720 JPEGs.

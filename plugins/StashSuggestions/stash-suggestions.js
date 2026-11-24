@@ -465,7 +465,15 @@
     const LOOKALIKE_MIN = 4;       // look-alike score (out of ~10+) to count at all
     const LOOKALIKES = 15;         // closest look-alike performers to pull photos from
     const CANDIDATES = 500;        // images fetched per match type before scoring
-    const FIELDS = "id title paths { thumbnail } tags { id } performers { id } galleries { id }";
+    const LOOKS_GOOD_POINTS = 3;   // Apple's aesthetics score (0-100, Better Organizing AI): 100 = +3, 50 = 0, 0 = -3
+    const FIELDS = "id title paths { thumbnail } tags { id } performers { id } galleries { id } custom_fields";
+    // A photo's aesthetics score, saved by Better Organizing AI as the custom
+    // field "aesthetic" (on a Mac); none without it, and then it doesn't count
+    const aesthetic = (x) => {
+      const a = Number(x && x.custom_fields && x.custom_fields.aesthetic);
+      return Number.isFinite(a) && x.custom_fields.aesthetic !== "" ? a : null;
+    };
+    const looksGood = (x) => (aesthetic(x) === null ? 0 : ((aesthetic(x) - 50) / 50) * LOOKS_GOOD_POINTS);
     const PERF_FIELDS = `id name image_count tags { id } ${lookFields()}`;
 
     const esc = (t) => String(t ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -591,7 +599,8 @@
           return { x, score: tags * TAG_POINTS + galleries * GALLERY_POINTS + lookPoints + alikePoints(x.id) };
         })
         .filter((r) => r.score > 0)
-        .map((r) => ({ x: r.x, k: r.score + Math.random() * 0.5 }))
+        // (better-looking photos higher, among the matches)
+        .map((r) => ({ x: r.x, k: r.score + looksGood(r.x) + Math.random() * 0.5 }))
         .sort((a, b) => b.k - a.k)
         .map((r) => r.x);
       scored.forEach((x) => seen.add(x.id));
@@ -626,6 +635,8 @@
             if (step >= steps.length) break;
             const list = await findImages(steps[step], FILL_PAGE, page, sort);
             if (list.length < FILL_PAGE) { step++; page = 1; } else page++;
+            // (the best-looking of each batch first)
+            list.sort((a, b) => (aesthetic(b) ?? 50) - (aesthetic(a) ?? 50));
             for (const x of list) {
               if (seen.has(x.id) || samePerformer(x)) continue;
               seen.add(x.id);

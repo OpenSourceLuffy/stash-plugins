@@ -61,6 +61,8 @@ def main():
             c.run_title_case(stash, dry_run=False)
         elif mode == "titlecase_preview":
             c.run_title_case(stash, dry_run=True)
+        elif mode in ("naming", "naming_preview"):
+            c.run_naming(stash, plugin_dir, preview=mode.endswith("preview"))
         elif mode == "handle_studios_text":
             c.run_handle_studios(stash, plugin_dir, use_ai=False)
         elif mode == "title_ideas":

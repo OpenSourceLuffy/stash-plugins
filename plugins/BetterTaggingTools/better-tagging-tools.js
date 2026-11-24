@@ -241,7 +241,7 @@
     return (d.plugins || []).some((p) => p.id === "BetterTaggingAI" && p.enabled);
   });
   const isBody = (t) => BODY_TAGS.has(String((t && t.name) || "").trim().toLowerCase());
-  // "Tags to ignore" (this plugin's setting): never suggested either
+  // "Top tags: tags to ignore" (this plugin's setting): never suggested either
   const ignoredNames = cached(30000, async () => {
     const d = await gql("{ configuration { plugins } }");
     const mine = (d.configuration.plugins || {})[PLUGIN_ID] || {};
@@ -909,7 +909,7 @@
       body = h(
         "div",
         { className: "text-muted" },
-        "This studio has no tags yet. Add some on its Edit page, or run \"Tag studios with their top tags\" under Settings → Tasks."
+        "This studio has no tags yet. Add some on its Edit page, or run \"Top tags: tag studios with their top tags\" under Settings → Tasks."
       );
     else
       body = h(
@@ -1658,24 +1658,35 @@
   // put them, only hidden or shown.
   const TASK_GROUPS = [
     ["toptags", "Top tags", "Performers, studios and galleries get their most used tags; a studio's items get its tags",
-      ["Preview top tags (no changes)", "Tag performers with their top tags", "Tag studios with their top tags",
-       "Tag galleries with their top tags", "Preview studio tags on their items (no changes)",
-       "Tag studios' items with the studio's tags"]],
-    ["titles", "Titles", "Titles from file names",
-      ["Preview titles from file names (no changes)", "Fill in titles from file names", "Redo titles made from file names"]],
-    ["studios", "Studios from accounts", "Studios for the OnlyFans / Fansly / Patreon / Instagram / TikTok account in a scene's file name or links",
-      ["Studios from accounts: from file names and links only"]],
-    ["dates", "Dates", "Dates from file names",
-      ["Preview dates from file names (no changes)", "Fill in dates from file names"]],
+      ["Top tags: tag performers with their top tags",
+       "Top tags: tag studios with their top tags",
+       "Top tags: tag galleries with their top tags",
+       "Top tags: tag studios' items with the studio's tags",
+       "Top tags: preview (no changes)",
+       "Top tags: preview studio tags on their items (no changes)"]],
+    ["titles", "Titles & dates", "Titles and dates from file names",
+      ["Titles: fill in titles from file names",
+       "Titles: redo titles made from file names",
+       "Dates: fill in dates from file names",
+       "Titles: preview from file names (no changes)",
+       "Dates: preview from file names (no changes)"]],
+    ["studios", "Studios", "Studios for the OnlyFans / Fansly / Instagram... account in a scene's file name or links (no AI)",
+      ["Studios: find scenes' studios from file names and links"]],
     ["pictures", "Tag pictures", "Give tags a picture from your library",
-      ["Give tags without a picture one from your library", "Give tags that share a picture their own",
-       "Give every tag a new picture (replaces existing ones)"]],
-    ["descs", "Tag descriptions", "Descriptions from StashDB, the E-Hentai wiki and Danbooru",
-      ["Preview tag descriptions on 30 tags (no changes)", "Fill in empty tag descriptions"]],
-    ["tidy", "Tidy up tags", "Capitalisation and gallery-name tags",
-      ["Preview tag name capitalisation (no changes)", "Capitalise tag names", "Tag gallery images with the gallery's name",
-       "Preview gallery tags, performers and studio on images (no changes)",
-       "Tag gallery images with the gallery's tags, performers and studio"]],
+      ["Tag pictures: give tags without one a picture from your library",
+       "Tag pictures: give tags that share a picture their own",
+       "Tag pictures: give every tag a new one (replaces yours)"]],
+    ["descs", "Naming & descriptions", "Naming conventions, tag capitalisation and tag descriptions",
+      ["Naming: apply to performers, studios, galleries and titles",
+       "Naming: capitalise tag names",
+       "Tag descriptions: fill in empty ones",
+       "Naming: preview (no changes)",
+       "Naming: preview tag capitalisation (no changes)",
+       "Tag descriptions: preview on 30 tags (no changes)"]],
+    ["tidy", "Gallery images", "Tag gallery images with the gallery's name, tags, performers and studio",
+      ["Gallery images: tag them with the gallery's name",
+       "Gallery images: add the gallery's tags, performers and studio",
+       "Gallery images: preview the gallery's tags, performers and studio (no changes)"]],
   ];
   const GROUP_OF = new Map();
   TASK_GROUPS.forEach(([key], g) => TASK_GROUPS[g][3].forEach((name) => GROUP_OF.set(name, key)));
@@ -1733,16 +1744,54 @@
     }
   }
 
+
+  // ---- Settings → Plugins: the settings in sections ------------------------
+  // Stash lists plugin settings alphabetically by their internal key; each row's
+  // id is plugin-<id>-<key>, so they're put in sections by display order alone
+  // (CSS order - Stash's own elements aren't moved), under headings.
+  const SETTING_SECTIONS = [
+    ["Top tags", ["topTagCount", "minUses", "skipImages", "excludeTags", "noAutoRefresh", "studioTopTags", "galleryTopTags"]],
+    ["New items", ["titlesNewItems", "datesNewItems", "autoTagNew", "galleryNameTags", "galleryTagParent"]],
+    ["Titles", ["titlesKeepNames", "titlesNoGallery"]],
+    ["Tags", ["autoTagPictures", "titleCaseNewTags", "maxSuggestions"]],
+    ["Naming", ["namingPerformers", "namingStudios", "namingGalleries", "namingTitles", "namingNew", "titleCaseSpellings"]],
+  ];
+  function arrangeSettings() {
+    const rowOf = (k) => {
+      let e = document.getElementById(`plugin-${PLUGIN_ID}-${k}`);
+      while (e && e.parentElement && !e.parentElement.classList.contains("plugin-settings")) e = e.parentElement;
+      return e && e.parentElement ? e : null;
+    };
+    const first = rowOf("topTagCount");
+    const box = first && first.parentElement;
+    if (!box || box.dataset.btArranged === "1") return;
+    box.dataset.btArranged = "1";
+    box.classList.add("bt-settings-arranged");
+    SETTING_SECTIONS.forEach(([title, keys], i) => {
+      const head = document.createElement("div");
+      head.className = "bt-settings-head";
+      head.style.order = String(i * 100);
+      head.textContent = title;
+      box.appendChild(head);
+      keys.forEach((k, j) => {
+        const row = rowOf(k);
+        if (row) row.style.order = String(i * 100 + j + 1);
+      });
+    });
+    [...box.children].forEach((c) => { if (!c.style.order) c.style.order = "9000"; });
+  }
+
   let groupTimer = null;
   new MutationObserver(() => {
     clearTimeout(groupTimer);
     groupTimer = setTimeout(() => {
       groupTasks();
       ignoreSuggestions();
+      arrangeSettings();
     }, 100);
   }).observe(document.body, { childList: true, subtree: true });
 
-  // ---- Settings → Plugins: suggestions under "Tags to ignore" -------------
+  // ---- Settings → Plugins: suggestions under "Top tags: tags to ignore" -------------
   // Big tags that look like housekeeping (their name, or that they group
   // other tags; with Better Organizing AI also that their items don't look
   // alike). Tapping one adds it to the setting.

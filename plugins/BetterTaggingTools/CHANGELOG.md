@@ -4,6 +4,41 @@ Newest first. Versions are what Stash shows under Settings → Plugins. Better O
 [Better Organizing AI Add-on](../BetterTaggingAI) share their code (`btt_core.py`), so some versions
 only bring the other plugin's changes.
 
+## 2.4 (2026-11-24)
+
+- **Naming conventions** for performers, studios, galleries and scene / image titles, like tags'
+  capitalisation: a style for each (**Naming: ...** settings, in a new Naming section) - Title Case,
+  Capitalise Every Word or Sentence case, or off (the default). Spaces are tidied, capitals are never
+  lowered (except small words in the middle of a Title Case title: "Relaxing By The Pool" → "Relaxing
+  by the Pool"), and Special spellings win, along with built-in ones (POV, JOI, WIP, BF, OnlyFans,
+  ManyVids, TikTok...). Performers keep name particles as written (Lena de Vries) and get Mary-Jane,
+  O'Neil; account names (studios under OnlyFans, Fansly...; handles with _, @ or a dot) are left alone,
+  as are small words in romanised Japanese titles and text that was garbled before.
+- New tasks: **Naming: apply to performers, studios, galleries and titles** and its preview. With
+  **Naming: apply to new performers, studios and galleries** on, new ones get their style at once.
+- Titles the plugins set (from file names, and the AI add-on's) follow the titles' style.
+- **Tasks and settings renamed consistently** (like the AI add-on's): each starts with its group or
+  section - Top tags, Titles, Dates, Studios, Tag pictures, Naming, Tag descriptions, Gallery images;
+  New items, Titles, Tags, Naming - with previews last in each group ("Preview top tags (no
+  changes)" is now "Top tags: preview (no changes)"). "Special spellings" is in the Naming section (it
+  applies to tags too). Settings keep their values, and nightly / after-scan lists saved with the old
+  task names still find them.
+
+## 2.3.3 (2026-11-23)
+
+- Shared code updated for the AI add-on's after-scan jobs.
+- Windows: names with accents or in other alphabets come out right in the log and from the page
+  (UTF-8 pipes, not the console's code page); no console windows flash up for ffmpeg; record files
+  are saved with a retry when another task is reading them; the night timer check uses exact types.
+- Fixed: the plugins' file locks didn't work with Stash in Docker Desktop on a Mac (the plugins
+  folder is shared into the container, where locks aren't kept), so records updated at the same
+  moment - auto tags, queues, picture records - could overwrite each other. Locks are now kept in
+  the computer's own temporary folder.
+- **Tidier settings and tasks**: the settings are in sections (Top tags, New items, Titles, Tags)
+  instead of Stash's alphabetical order; tasks are in 6 groups, main task first and previews after;
+  descriptions are a sentence or two (about half as long).
+- Fixed: the description of "Don't title images after their gallery" was cut off at "Beach Trip".
+
 ## 2.3.2 (2026-11-21)
 
 - Shared code updated for the AI add-on's nightly jobs.

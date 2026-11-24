@@ -41,7 +41,7 @@ tags** is shown as well.
 - The rows update as soon as you change the tags, galleries, performers or studio in the form. Adding a
   suggested tag narrows the next suggestions.
 - Tags already on the item aren't suggested.
-- **Tags to ignore** are never suggested, and aren't used for **Goes with**.
+- **Top tags: tags to ignore** are never suggested, and aren't used for **Goes with**.
 - With [Better Organizing AI](../BetterTaggingAI) installed, body tags (the ones its body-part detector
   adds from what's shown, and their size tags) are left out of every row: they're neither suggested
   nor used for **Goes with**.
@@ -69,14 +69,14 @@ that the photo's look-alikes are in.
 
 ## Top tags for performers, studios and galleries
 
-The **Tag performers with their top tags** task counts the tags on every performer's scenes,
+The **Top tags: tag performers with their top tags** task counts the tags on every performer's scenes,
 images and galleries and adds their most used ones (10 by default) to the performer.
-**Tag studios with their top tags** does the same for studios, and **Tag galleries with their top
+**Top tags: tag studios with their top tags** does the same for studios, and **Tag galleries with their top
 tags** gives each gallery the most used tags of its photos (gallery-name tags never count).
 
 - After that, whenever you save a change to the tags or performers of a scene, image or gallery,
   the performers in it are recounted. Batch edits are handled once at the end, in a background job.
-  Turn on **Refresh studios' top tags on edit** and **Refresh galleries' top tags on edit** to keep
+  Turn on **Top tags: refresh studios' on edit** and **Top tags: refresh galleries' on edit** to keep
   studios and galleries up to date the same way.
 - Performers only get tags that fit their gender: a woman isn't given male body or "(Male)"
   tags because her scenes have them, nor a man female body tags. (Only for performers marked
@@ -87,7 +87,7 @@ tags** gives each gallery the most used tags of its photos (gallery-name tags ne
 
 ### Tags to ignore
 
-Under the **Tags to ignore** setting, the plugin suggests tags that look like housekeeping rather than
+Under the **Top tags: tags to ignore** setting, the plugin suggests tags that look like housekeeping rather than
 what's shown: ones named like a note or a process ("Categories", "Site_Process", "To Review"...) or
 that group other tags. With [Better Organizing AI](../BetterTaggingAI), "its items don't look alike" backs
 a suggestion up. Hover for how many items each is on and why; tap to add it to the list.
@@ -103,7 +103,7 @@ a suggestion up. Hover for how many items each is on and why; tap to add it to t
 
 ## Tag descriptions
 
-**Fill in empty tag descriptions** gives every tag without a description one, looking in order at:
+**Tag descriptions: fill in empty ones** gives every tag without a description one, looking in order at:
 the stash-box the tag is linked to (StashDB, ThePornDB...), StashDB by exact name or alias, the
 E-Hentai wiki (comic and doujinshi tags), and Danbooru's wiki (only its general tags, not artists or
 characters). **Preview tag descriptions on 30 tags** shows what it would write first.
@@ -114,7 +114,7 @@ characters). **Preview tag descriptions on 30 tags** shows what it would write f
 
 ## Gallery-name tags
 
-Turn on **Tag gallery images with the gallery's name** and every photo in a gallery gets a tag
+Turn on **New items: tag gallery images with the gallery's name** and every photo in a gallery gets a tag
 named after it (its title, or the zip or folder name). New galleries, renamed ones, scanned
 photos and photos you move into a gallery are kept up to date. Run the **Tag gallery images with
 the gallery's name** task once for the galleries you already have.
@@ -135,9 +135,9 @@ plugin added and any you added by hand).
 - **One studio:** **Tag all items with this studio's tags…** on the studio's page. The window lists
   each of the studio's tags and how many items would get it; untick any you don't want, and choose
   scenes, images and/or galleries.
-- **Every studio:** the **Tag studios' items with the studio's tags** task (run **Preview studio
+- **Every studio:** the **Top tags: tag studios' items with the studio's tags** task (run **Preview studio
   tags on their items** first to see what it would add in the log).
-- Only a studio's own items, not its sub-studios'. Nothing is removed. **Tags to ignore** are
+- Only a studio's own items, not its sub-studios'. Nothing is removed. **Top tags: tags to ignore** are
   never copied.
 - A top tag can be one only some of the studio's items have, so check the list before adding.
 
@@ -150,7 +150,7 @@ image has none yet.
   the gallery's image list (or the gallery's **⋮** menu).
 - **Several:** select them in the Galleries list and use **Tag images with their gallery's tags,
   performers & studio** in its **…** menu.
-- **Every gallery:** the task **Tag gallery images with the gallery's tags, performers and studio**,
+- **Every gallery:** the task **Gallery images: add the gallery's tags, performers and studio**,
   with **Preview gallery tags, performers and studio on images** to check first.
 - It only adds: nothing is taken off, and a studio an image already has is kept.
 - Tags this plugin added to a gallery as its top tags (counted from its images) aren't copied back
@@ -160,10 +160,10 @@ image has none yet.
 
 ## Tag pictures
 
-The **Give tags without a picture one from your library** task gives every tag without a picture
+The **Tag pictures: give tags without one a picture from your library** task gives every tag without a picture
 the photo that's most "about" that tag (the one with the fewest other tags, then the highest
 rated). If there's no photo, it uses a scene screenshot, then a marker or gallery cover. Turn
-on **Give tags a picture automatically** to do the same whenever a tag without a picture gets used.
+on **Tags: give tags a picture automatically** to do the same whenever a tag without a picture gets used.
 Tags that already have a picture are never changed.
 
 **A picture is never used for two tags.** Related tags often share their best photo, so
@@ -206,13 +206,13 @@ time doesn't move the video you're watching.
 
 ### Pictures for tags that share one
 
-Already have tags sharing a picture? **Give tags that share a picture their own** fixes them: in
+Already have tags sharing a picture? **Tag pictures: give tags that share a picture their own** fixes them: in
 each group the rarest tag keeps the picture and the others get a new one. The first run compares
 every tag's picture once, which can take a few minutes.
 
 ### A fresh picture for every tag
 
-**Give every tag a new picture (replaces existing ones)** gives *every* tag a different picture
+**Tag pictures: give every tag a new one (replaces yours)** gives *every* tag a different picture
 from the one it has now, picked the same way (unique, rarest tags first). This includes pictures
 you set yourself, and the old ones can't be brought back, so make a backup first
 (**Settings → Tasks → Backup**). A tag with no other picture available keeps the one it has.
@@ -222,7 +222,7 @@ you set yourself, and the old ones can't be brought back, so make a backup first
 Stash's **Auto Tag** adds performers, studios and tags whose names appear in a file's path. This plugin
 uses it in three more places:
 
-- **New performers, studios and tags** (setting **Auto tag new performers, studios and tags**): when
+- **New performers, studios and tags** (setting **New items: auto tag new performers, studios and tags**): when
   one is created, by hand, by a scraper or by another plugin, Stash's Auto Tag runs for just that one
   across your library. No need to remember to run the whole task.
 - **Auto tag this (from file name)** in the ⋮ menu of a scene, image or gallery page (a gallery: the
@@ -273,8 +273,8 @@ Only full dates count, so a lone year (`1998_IMG_0004`) or a month (`01-January`
 are dates in the future. When it can't tell the day from the month (`05-06-2014`), the file is left alone.
 A date you've already set is never changed.
 
-- **Fill in dates from file names** (task), with **Preview dates from file names** to check first.
-- **Fill in dates of new scenes, images and galleries** (setting): new items from a scan get their date.
+- **Dates: fill in dates from file names** (task), with **Preview dates from file names** to check first.
+- **New items: fill in dates from file names** (setting): new items from a scan get their date.
 - **Auto tag this / Auto tag selected** (and the AI add-on) fill in empty dates too.
 
 ## Titles from file names
@@ -292,20 +292,20 @@ Scenes, images and galleries without a title can get one made from their file na
 
 - Taken out: `[ids]` and `[site names]`, `(1)`, dates (they go in the date field), resolutions and
   codecs (`1080p`, `4K`, `HEVC`), download-site names, and a performer's or studio's name when
-  it's its own `-` part or starts the name. Turn on **Keep performer and studio names in titles**
+  it's its own `-` part or starts the name. Turn on **Titles: keep performer and studio names**
   to keep names (`Jane Doe - Beach Day`); a name repeated as its own part is still only kept once.
 - Underscores and dots become spaces, and `CamelCaseNames` and `name12` are split up. All-lowercase
-  or ALL-CAPS names are capitalised like tags (using **Special spellings**).
+  or ALL-CAPS names are capitalised like tags (using **Naming: special spellings (tags too)**).
 - Names that are only a camera or app name (`IMG_…`, screen recordings, `FullSizeRender`), a random
   id (UUIDs, hashes, TikTok-style ids) or a performer's name get no title from it. A title you've
   already set is never changed.
 - An **image** whose file name makes no title gets one from its **gallery** instead: the gallery's
   name and the image's place in it (in path order), e.g. `Beach Trip #12`; a zip's `.zip` / `.cbz`
   is left off. In several galleries, the zip or folder gallery is used first, else the smallest.
-  Turn on **Don't title images after their gallery** to leave such images without a title.
-- **Fill in titles from file names** (task), with **Preview titles from file names** to check first.
-- **Fill in titles of new scenes, images and galleries** (setting): new items from a scan get a title.
-- **Redo titles made from file names** (task): after changing **Keep performer and studio names in
+  Turn on **Titles: don't title images after their gallery** to leave such images without a title.
+- **Titles: fill in titles from file names** (task), with **Preview titles from file names** to check first.
+- **New items: fill in titles from file names** (setting): new items from a scan get a title.
+- **Titles: redo titles made from file names** (task): after changing **Keep performer and studio names in
   titles**, makes the titles this plugin set again with the new setting. Titles you typed or scraped
   are left alone.
 - **Auto tag this / Auto tag selected** (and the AI add-on) fill in empty titles too.
@@ -327,8 +327,8 @@ Keeps tag names capitalised the same way: `dating app` becomes `Dating App`, whi
 stay lowercase in the middle of a name (`behind the scenes` → `Behind the Scenes`).
 
 - **Preview tag name capitalisation**: lists the renames in the log without changing anything. Run this first.
-- **Capitalise tag names**: renames every tag that needs it.
-- Turn on **Capitalise new tags automatically** to capitalise tags as soon as they're created (from the tag picker, a scraper, another plugin…).
+- **Naming: capitalise tag names**: renames every tag that needs it.
+- Turn on **Tags: capitalise new tags automatically** to capitalise tags as soon as they're created (from the tag picker, a scraper, another plugin…).
 
 | Before | After | Why |
 | --- | --- | --- |
@@ -337,9 +337,37 @@ stay lowercase in the middle of a name (`behind the scenes` → `Behind the Scen
 | `T-shirt` | `T-shirt` | Hyphenated words count as one word. |
 | `POV`, `McKenzie` | unchanged | Capitals already there are never lowered. |
 | `3rd person` | `3rd Person` | Words starting with a number are left alone. |
-| `cnn` | `CNN` | With `CNN` in **Special spellings**. |
+| `cnn` | `CNN` | With `CNN` in **Naming: special spellings (tags too)**. |
 
 Stash treats tag names that differ only in case as the same tag, so renaming never creates duplicates.
+
+## Naming conventions
+
+The same idea for everything else: choose a style for **performers**, **studios**, **galleries** and
+**scene and image titles** in the settings (Naming section) - `Title Case`, `Capitalise Every Word`
+or `Sentence case` - or leave it empty to leave those names alone (the default).
+
+- **Preview naming conventions** lists every rename in the log; **Naming: apply to performers,
+  studios, galleries and titles** does them. With **Naming: apply to new performers, studios and
+  galleries** on, new ones get their style as soon as they're created.
+- Titles the plugins set (from file names, and the AI add-on's AI titles) follow the titles' style.
+- Capitals are never lowered (`BANGBROS`, `McKenzie`), except a small word in the middle of a Title
+  Case title: `Relaxing By The Pool` → `Relaxing by the Pool`. Spaces are tidied.
+- **Naming: special spellings (tags too)** win, along with ones it knows: POV, JOI, WIP, BF, GF, ASMR, VR, OnlyFans,
+  ManyVids, TikTok, FansDB and so on (`great pov!` → `Great POV!`, `(onlyfans)` → `(OnlyFans)`).
+- Performers keep particles as written (`lena de vries` → `Lena de Vries`) and get `Mary-Jane` and
+  `O'Neil`. Account names are left alone: studios under OnlyFans, Fansly and the other platforms, and
+  names like `lily_rose` or `x-art.com`. So are small words in romanised Japanese titles (`to wa`,
+  `ni`) and text that was garbled before it reached Stash.
+
+| Kind | Style | Before | After |
+| --- | --- | --- | --- |
+| Scene title | Title Case | `relaxing By The Pool with friends` | `Relaxing by the Pool with Friends` |
+| Scene title | Title Case | `the girl next door: a pov story` | `The Girl Next Door: A POV Story` |
+| Gallery | Title Case | `one piece` | `One Piece` |
+| Performer | Capitalise Every Word | `lena de vries` | `Lena de Vries` |
+| Studio | Title Case | `sunset lane` | `Sunset Lane` |
+| Title | Sentence case | `relaxing by the pool` | `Relaxing by the pool` |
 
 ## Tasks
 
@@ -354,24 +382,24 @@ Under **Settings → Plugins → Better Organizing Tools**:
 
 | Setting | What it does |
 | --- | --- |
-| Top tags per performer, studio or gallery | How many tags to add to each. Default 10. |
-| Minimum uses | A tag must be on at least this many of the performer's, studio's or gallery's items. Default 3. |
-| Don't count images | Count only scenes and galleries for performers and studios. |
-| Tags to ignore | Comma-separated tags never added as top tags or suggested while editing, e.g. `Organized, To Review`. Doesn't affect Auto Tag. |
-| Don't refresh on edit | Only update top tags when you run the tasks. |
-| Refresh studios' top tags on edit | Recount a studio when tags or the studio change on its scenes, images or galleries. |
-| Refresh galleries' top tags on edit | Recount a gallery when its photos' tags change or photos move into it. |
-| Tag gallery images with the gallery's name | See above. |
-| Parent tag for gallery-name tags | Optional; files the gallery-name tags under one tag, e.g. `Galleries`. |
-| Give tags a picture automatically | See above. |
-| Capitalise new tags automatically | See "Tag names" above. |
-| Auto tag new performers, studios and tags | See "Auto tag" above. |
-| Fill in dates of new scenes, images and galleries | See "Dates from file names" above. |
-| Fill in titles of new scenes, images and galleries | See "Titles from file names" above. |
-| Don't title images after their gallery | Leave images whose file name makes no title without one, instead of `Gallery name #12`. |
-| Keep performer and studio names in titles | Leave names in titles made from file names. |
-| Special spellings | Comma-separated words or tag names to always write exactly as given when capitalising, e.g. `CNN, POV, HD, iPhone`. |
-| Suggested tags to show | The most suggestions per row. Default 15. |
+| Top tags: how many per performer, studio or gallery | How many tags to add to each. Default 10. |
+| Top tags: minimum uses | A tag must be on at least this many of the performer's, studio's or gallery's items. Default 3. |
+| Top tags: don't count images | Count only scenes and galleries for performers and studios. |
+| Top tags: tags to ignore | Comma-separated tags never added as top tags or suggested while editing, e.g. `Organized, To Review`. Doesn't affect Auto Tag. |
+| Top tags: don't refresh on edit | Only update top tags when you run the tasks. |
+| Top tags: refresh studios' on edit | Recount a studio when tags or the studio change on its scenes, images or galleries. |
+| Top tags: refresh galleries' on edit | Recount a gallery when its photos' tags change or photos move into it. |
+| New items: tag gallery images with the gallery's name | See above. |
+| New items: parent tag for gallery-name tags | Optional; files the gallery-name tags under one tag, e.g. `Galleries`. |
+| Tags: give tags a picture automatically | See above. |
+| Tags: capitalise new tags automatically | See "Tag names" above. |
+| New items: auto tag new performers, studios and tags | See "Auto tag" above. |
+| New items: fill in dates from file names | See "Dates from file names" above. |
+| New items: fill in titles from file names | See "Titles from file names" above. |
+| Titles: don't title images after their gallery | Leave images whose file name makes no title without one, instead of `Gallery name #12`. |
+| Titles: keep performer and studio names | Leave names in titles made from file names. |
+| Naming: special spellings (tags too) | Comma-separated words or tag names to always write exactly as given when capitalising, e.g. `CNN, POV, HD, iPhone`. |
+| Tags: suggestions to show when editing | The most suggestions per row. Default 15. |
 
 ## Requirements and notes
 

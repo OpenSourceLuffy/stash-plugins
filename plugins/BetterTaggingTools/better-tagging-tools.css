@@ -236,3 +236,8 @@ body > .react-select__menu-portal {
 .scrape-dialog .pts-ai-note {
   display: none !important;
 }
+
+/* Settings → Plugins: the settings in sections */
+.plugin-settings.bt-settings-arranged { display: flex; flex-direction: column; }
+.bt-settings-head { margin: 1.4rem 0 .2rem; padding: 0 0 .3rem 35px; border-bottom: 1px solid rgba(128,128,128,.35);
+  font-size: .8rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; opacity: .85; }

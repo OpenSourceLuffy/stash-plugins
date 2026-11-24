@@ -1,0 +1,4 @@
+683e3cb6c65f197ff78bc3c3da45e365682c32d5e7c739497b08aa2205654ca0  auto-seek-clip3-v2.onnx
+1d1f351097f96aae6b3e8e0e8ed04500830cda45529addcbb5b5eb5b2227287c  onnxruntime-alpine-3.23-aarch64.tar.gz
+99fdc41382c08f5afeb9f067d2e236fe435103366bc8b9d23233f4793ee8f297  onnxruntime-alpine-3.23-armv7.tar.gz
+0534728cbec0ee55f04a57487b362c70f132951d9cc3d93b1ab4cb46ff5a3dd5  onnxruntime-alpine-3.23-x86_64.tar.gz
