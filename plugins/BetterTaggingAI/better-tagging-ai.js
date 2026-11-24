@@ -806,34 +806,440 @@
     });
   }
 
+  // ---- Scene edit: "Suggest covers" under Cover Image --------------------
+  // Frames from across the video, each with Apple's score (0-100) where the
+  // face helper runs on a Mac - best first - or, without it (e.g. Windows),
+  // the same frames in video order. "Use this cover" saves it straight away;
+  // the old cover is kept, so Undo (or the "put back" task) restores it.
+  const COVER_KIND = { stash: "made by Stash", scraped: "scraped or uploaded", picked: "picked from the video", stitched: "made by Vertical Stitcher" };
+  const coverClock = (t) => { t = Math.max(0, Math.round(t)); const m = Math.floor(t / 60), sec = t % 60, hr = Math.floor(m / 60);
+    return (hr ? hr + ":" + String(m % 60).padStart(2, "0") : m) + ":" + String(sec).padStart(2, "0"); };
+  const scoreClass = (v) => (v == null ? "" : v >= 65 ? " good" : v >= 50 ? " ok" : " low");
+
+  // The best covers, but not several of the same shot (as the add-on picks
+  // them each round): each one has to differ from those before it by
+  // COVER_APART (tiny grey pictures, "sig"), lowered when there aren't enough.
+  const COVER_APART = 22;
+  const COVER_SHOW_MAX = 36;  // suggestions shown at most (9 more each "Compare more frames")
+  const sigBytes = (b64) => { try { return Uint8Array.from(atob(b64 || ""), (c) => c.charCodeAt(0)); } catch (e) { return null; } };
+  const COVER_WINDOW = 25;  // variety among covers scoring this close to the best
+  function variedCovers(list, n) {
+    const sigs = list.map((x) => sigBytes(x.sig));
+    const apart = (a, b) => { let t = 0; for (let i = 0; i < a.length; i++) t += Math.abs(a[i] - b[i]); return t / a.length; };
+    const top = Math.max(-1, ...list.map((x) => x.score ?? -1));
+    const idx = list.map((_, i) => i);
+    const near = idx.filter((i) => list[i].score == null || list[i].score >= top - COVER_WINDOW);
+    const mid = idx.filter((i) => !near.includes(i) && list[i].score >= top - 1.4 * COVER_WINDOW);
+    const far = idx.filter((i) => !near.includes(i) && !mid.includes(i));
+    const picked = [];
+    const fill = (pool, bar) => {
+      for (const i of pool) {
+        if (picked.length >= n) return;
+        if (picked.includes(i)) continue;
+        const g = sigs[i];
+        if (g && g.length && picked.some((j) => sigs[j] && sigs[j].length === g.length && apart(g, sigs[j]) < bar)) continue;
+        picked.push(i);
+      }
+    };
+    for (const bar of [COVER_APART, COVER_APART * 0.7, COVER_APART * 0.4]) { fill(near, bar); fill(mid, bar); }
+    [near, mid, far].forEach((pool) => fill(pool, 0));
+    return picked.sort((a, b) => a - b).map((i) => list[i]);
+  }
+
+
+  function mountCoverIdeas(group, id) {
+    const wrap = document.createElement("div");
+    wrap.className = "bta-covers";
+    wrap.dataset.scene = id;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn btn-secondary bta-covers-go";
+    btn.textContent = "✨ Suggest covers";
+    btn.title = "Frames from across the video to use as the cover" + "";
+    const panel = document.createElement("div");
+    panel.className = "bta-covers-panel";
+    wrap.append(btn, panel);
+    group.appendChild(wrap);
+    let round = 0;
+    let kept = [];     // the frames shown: the best so far (with scores), else the latest round
+    let compared = 0;  // frames compared in all
+    const preview = () => group.querySelector("img.scene-cover");
+    // (Stash's cover address only changes once a second: make sure the new picture shows)
+    const fresh = (url) => url + (url.includes("?") ? "&" : "?") + "bta=" + Date.now();
+    // the new cover in the form: shown at once, and Stash's own copy of the
+    // scene refreshed, so the form keeps showing it when it redraws
+    async function showCover(url) {
+      if (preview()) preview().src = fresh(url);
+      try { await api.utils.StashService.getClient().refetchQueries({ include: "active" }); } catch (e) { /* shown already */ }
+      const img = preview();
+      if (img && !img.src.includes((url.split("?")[1] || "").split("&")[0])) img.src = fresh(url);
+    }
+    const status = (text, extra) => {
+      let st = panel.querySelector(".bta-covers-status");
+      if (!st) { st = document.createElement("div"); st.className = "bta-covers-status"; panel.prepend(st); }
+      st.textContent = text;
+      if (extra) st.appendChild(extra);
+    };
+    function undoButton() {
+      const u = document.createElement("button");
+      u.type = "button";
+      u.className = "btn btn-link btn-sm";
+      u.textContent = "Undo - put the old cover back";
+      u.addEventListener("click", () => {
+        u.disabled = true;
+        ask({ mode: "cover_undo", id }).then((r) => {
+          showCover(r.screenshot);
+          status("✓ The old cover is back.");
+          panel.querySelectorAll(".bta-cover.chosen").forEach((c) => c.classList.remove("chosen"));
+        }).catch((e) => { status("Couldn't undo: " + e.message); u.disabled = false; });
+      });
+      return u;
+    }
+    function show(r) {
+      panel.innerHTML = "";
+      const cur = r.current || {};
+      compared = (round ? compared : 0) + (r.looked || r.frames.length);
+      let fresh = 0;
+      // each "Compare more frames" shows 9 more (up to 36): the best so far,
+      // varied; without scores, the new frames join the ones shown
+      const showing = Math.min(COVER_SHOW_MAX, 9 * (round + 1));
+      if (r.scored && round) {
+        const all = kept.map((x) => ({ ...x, isNew: false }));
+        r.frames.forEach((fr) => { if (!all.some((x) => Math.abs(x.at - fr.at) < 1)) all.push({ ...fr, isNew: true }); });
+        all.sort((a, b) => (b.score ?? -1) - (a.score ?? -1));
+        kept = variedCovers(all, showing);
+        fresh = kept.filter((x) => x.isNew).length;
+      } else if (round) {
+        const all = kept.map((x) => ({ ...x, isNew: false }));
+        r.frames.forEach((fr) => { if (!all.some((x) => Math.abs(x.at - fr.at) < 1)) all.push({ ...fr, isNew: true }); });
+        kept = all.slice(-COVER_SHOW_MAX).sort((a, b) => a.at - b.at);
+        fresh = kept.filter((x) => x.isNew).length;
+      } else {
+        kept = r.frames.map((x) => ({ ...x, isNew: false }));
+      }
+      r = { ...r, frames: kept };
+      status((cur.score != null ? `Current cover: ${cur.score}/100` : "Current cover") +
+        (cur.kind ? ` · ${COVER_KIND[cur.kind] || cur.kind}` : "") +
+        (r.scored ? ` · the best ${r.frames.length} of ${compared} frames compared` +
+            (round ? (fresh ? ` (${fresh} new)` : " (none of the new ones were better)") : "")
+          : " · scores need the face helper on a Mac, so frames are in video order") +
+        (r.vertical ? " · a vertical video: frames cut to wide covers around the people" : ""));
+      const grid = document.createElement("div");
+      grid.className = "bta-covers-grid";
+      // with Vertical Stitcher: stitched covers first, in a row of their own
+      const sgrid = document.createElement("div");
+      sgrid.className = "bta-covers-grid bta-covers-stitched";
+      const grids = () => [grid, sgrid];
+      const makeCard = (fr, i, into) => {
+        const card = document.createElement("div");
+        card.className = "bta-cover";
+        const img = document.createElement("img");
+        img.src = "data:image/jpeg;base64," + fr.image;
+        img.alt = "Frame at " + coverClock(fr.at);
+        img.loading = "lazy";
+        const meta = document.createElement("div");
+        meta.className = "bta-cover-meta";
+        const t = document.createElement("span");
+        t.textContent = fr.stitch ? fr.stitch.map(coverClock).join(" + ") : coverClock(fr.at);
+        meta.appendChild(t);
+        if (fr.score != null) {
+          const sc = document.createElement("span");
+          sc.className = "bta-cover-score" + scoreClass(fr.score);
+          sc.textContent = (i === 0 && r.scored && !fr.stitch ? "Best · " : "") + fr.score + "/100";
+          if (fr.isNew) {
+            const nw = document.createElement("span");
+            nw.className = "bta-cover-new";
+            nw.textContent = "New";
+            meta.appendChild(nw);
+          }
+          if (cur.score != null && fr.score > cur.score) sc.title = `${fr.score - cur.score} more than the current cover`;
+          meta.appendChild(sc);
+        }
+        const use = document.createElement("button");
+        use.type = "button";
+        use.className = "btn btn-primary btn-sm";
+        use.textContent = fr.stitch ? "Use this stitched cover" : "Use this cover";
+        use.addEventListener("click", () => {
+          grids().forEach((g) => g.querySelectorAll("button").forEach((b) => (b.disabled = true)));
+          use.textContent = "Saving…";
+          ask({ mode: "cover_use", id, at: fr.at, ...(fr.stitch ? { stitch: fr.stitch } : {}) }).then((res) => {
+            showCover(res.screenshot);
+            panel.querySelectorAll(".bta-cover.chosen").forEach((c) => c.classList.remove("chosen"));
+            card.classList.add("chosen");
+            // the suggestions fold away; they can be opened again
+            const shown = [grid, sgrid, more, panel.querySelector(".bta-covers-head")].filter(Boolean);
+            shown.forEach((el) => (el.style.display = "none"));
+            status(fr.stitch ? `✓ Stitched cover saved (${fr.stitch.map(coverClock).join(" + ")}). `
+              : `✓ Cover saved (the frame at ${coverClock(fr.at)}). `, res.backup ? undoButton() : null);
+            const again = document.createElement("button");
+            again.type = "button";
+            again.className = "btn btn-link btn-sm";
+            again.textContent = "Show the suggestions again";
+            again.addEventListener("click", () => { shown.forEach((el) => (el.style.display = "")); again.remove(); });
+            panel.querySelector(".bta-covers-status").appendChild(again);
+          }).catch((e) => status("Couldn't save it: " + e.message))
+            .finally(() => { grids().forEach((g) => g.querySelectorAll("button").forEach((b) => (b.disabled = false))); use.textContent = fr.stitch ? "Use this stitched cover" : "Use this cover"; });
+        });
+        card.append(img, meta, use);
+        into.appendChild(card);
+      };
+      if ((r.stitched || []).length) {
+        const head = document.createElement("div");
+        head.className = "bta-covers-head";
+        head.textContent = "Stitched like Vertical Stitcher" + (r.scored ? " - from the best frames, and evenly spaced" : " - evenly spaced") + ":";
+        r.stitched.forEach((fr, i) => makeCard(fr, i, sgrid));
+        panel.append(head, sgrid);
+      }
+      r.frames.forEach((fr, i) => makeCard(fr, i, grid));
+      panel.appendChild(grid);
+      if (!r.frames.length) status("No frames could be taken from this video.");
+      const more = document.createElement("button");
+      more.type = "button";
+      more.className = "btn btn-secondary btn-sm bta-covers-more";
+      more.textContent = r.scored ? "Compare more frames" : "More frames";
+      more.addEventListener("click", () => { round += 1; load(); });
+      panel.appendChild(more);
+    }
+    function load() {
+      btn.disabled = true;
+      btn.textContent = "Looking through the video…";
+      panel.querySelectorAll("button").forEach((b) => (b.disabled = true));
+      ask({ mode: "cover_ideas", id, more: round })
+        .then(show)
+        .catch((e) => { panel.innerHTML = ""; status("Couldn't get frames: " + e.message); })
+        .finally(() => { btn.disabled = false; btn.textContent = "✨ Suggest covers again"; });
+    }
+    btn.addEventListener("click", () => { round = 0; load(); });
+  }
+
+  function checkCovers() {
+    const m = location.pathname.match(TITLE_PAGE);
+    if (!m || m[1] !== "scenes") return;
+    const label = document.querySelector('#scene-edit-details label[for="cover_image"]');
+    const group = label && label.closest(".form-group");
+    if (!group) return;
+    const have = group.querySelector(":scope > .bta-covers");
+    if (have && have.dataset.scene === m[2]) return;
+    if (have) have.remove();
+    mountCoverIdeas(group, m[2]);
+  }
+
+  // ---- Performer edit: "Suggest profile pictures" ---------------------------
+  // Their photos and scene frames cut to a portrait around their face (known
+  // faces only, else pictures with one face), best Apple score first on a
+  // Mac, else closest face. "Use this picture" puts it in Stash's own form
+  // through its Set image file picker, so it shows at once, Save keeps it and
+  // Cancel drops it.
+  const PERFORMER_PAGE = /^\/performers\/(\d+)/;
+
+  async function putInPerformerForm(form, b64) {
+    const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    const file = new File([bytes], "profile.jpg", { type: "image/jpeg" });
+    const scope = form.parentElement || document;
+    const setBtn = [...scope.querySelectorAll("button")].find((b) => /set image/i.test(b.textContent || ""));
+    if (!setBtn) throw new Error("Stash's Set image button wasn't found");
+    setBtn.click();
+    let input = null;
+    for (let i = 0; i < 30 && !input; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+      input = document.querySelector('#set-image-popover input[type="file"]');
+    }
+    if (!input) throw new Error("Stash's Set image menu didn't open");
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    input.files = dt.files;
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 50));
+    if (document.querySelector("#set-image-popover")) setBtn.click(); // (close the menu)
+  }
+
+  function mountProfileIdeas(form, id) {
+    const wrap = document.createElement("div");
+    wrap.className = "bta-covers bta-profiles";
+    wrap.dataset.performer = id;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn btn-secondary bta-covers-go";
+    btn.textContent = "✨ Suggest profile pictures";
+    btn.title = "Their photos and scene frames, cut to a portrait around their face";
+    const panel = document.createElement("div");
+    panel.className = "bta-covers-panel";
+    wrap.append(btn, panel);
+    form.parentElement.insertBefore(wrap, form);
+    let round = 0, kept = [], compared = 0;
+    const status = (text, extra) => {
+      let st = panel.querySelector(".bta-covers-status");
+      if (!st) { st = document.createElement("div"); st.className = "bta-covers-status"; panel.prepend(st); }
+      st.textContent = text;
+      if (extra) st.appendChild(extra);
+    };
+    function show(r) {
+      panel.innerHTML = "";
+      compared = (round ? compared : 0) + (r.looked || 0);
+      const all = (round ? kept.map((x) => ({ ...x, isNew: false })) : []);
+      r.pictures.forEach((x) => { if (!all.some((y) => y.key === x.key)) all.push({ ...x, isNew: !!round }); });
+      if (r.scored) all.sort((a, b) => (b.score ?? -1) - (a.score ?? -1));
+      kept = r.scored ? all.slice(0, 9) : all.slice(-9);
+      const fresh = kept.filter((x) => x.isNew).length;
+      const cur = r.current || {};
+      status((cur.score != null ? `Current picture: ${cur.score}/100 · ` : "") +
+        (kept.length ? (r.scored ? `the best ${kept.length} of ${compared} pictures looked at` : `${kept.length} pictures, closest face first (scores need the face helper on a Mac)`) +
+          (round && r.scored ? (fresh ? ` (${fresh} new)` : " (none of the new ones were better)") : "")
+          : `no pictures with ${r.known ? "their face" : "one face (their face isn't known yet: run \"Faces: learn performers' faces\")"} in ${compared} looked at`));
+      const grid = document.createElement("div");
+      grid.className = "bta-covers-grid";
+      kept.forEach((x, i) => {
+        const card = document.createElement("div");
+        card.className = "bta-cover";
+        const img = document.createElement("img");
+        img.src = "data:image/jpeg;base64," + x.image;
+        img.alt = "From " + x.from;
+        img.loading = "lazy";
+        const meta = document.createElement("div");
+        meta.className = "bta-cover-meta";
+        const from = document.createElement("a");
+        from.href = x.link;
+        from.target = "_blank";
+        from.textContent = x.from.length > 28 ? x.from.slice(0, 27) + "…" : x.from;
+        from.title = x.from;
+        meta.appendChild(from);
+        if (x.isNew) { const nw = document.createElement("span"); nw.className = "bta-cover-new"; nw.textContent = "New"; meta.appendChild(nw); }
+        if (x.score != null) {
+          const sc = document.createElement("span");
+          sc.className = "bta-cover-score" + scoreClass(x.score);
+          sc.textContent = (i === 0 && r.scored ? "Best · " : "") + x.score + "/100";
+          if (x.match != null) sc.title = `face ${x.match}% like theirs`;
+          meta.appendChild(sc);
+        } else if (x.match != null) {
+          const m = document.createElement("span");
+          m.className = "bta-cover-score";
+          m.textContent = `face ${x.match}%`;
+          meta.appendChild(m);
+        }
+        const use = document.createElement("button");
+        use.type = "button";
+        use.className = "btn btn-primary btn-sm";
+        use.textContent = "Use this picture";
+        use.addEventListener("click", () => {
+          const f = document.querySelector("form#performer-edit");
+          if (!f) { status("The edit form is closed - open Edit again."); return; }
+          putInPerformerForm(f, x.image).then(() => {
+            grid.querySelectorAll(".bta-cover.chosen").forEach((c) => c.classList.remove("chosen"));
+            card.classList.add("chosen");
+            grid.style.display = "none";
+            more.style.display = "none";
+            status("✓ In the form - press Save to keep it (Cancel drops it). ");
+            const again = document.createElement("button");
+            again.type = "button";
+            again.className = "btn btn-link btn-sm";
+            again.textContent = "Show the suggestions again";
+            again.addEventListener("click", () => { grid.style.display = ""; more.style.display = ""; again.remove(); });
+            panel.querySelector(".bta-covers-status").appendChild(again);
+          }).catch((e) => status("Couldn't put it in the form: " + e.message));
+        });
+        card.append(img, meta, use);
+        grid.appendChild(card);
+      });
+      panel.appendChild(grid);
+      const more = document.createElement("button");
+      more.type = "button";
+      more.className = "btn btn-secondary btn-sm bta-covers-more";
+      more.textContent = "Look at more pictures";
+      more.style.display = r.more ? "" : "none";
+      more.addEventListener("click", () => { round += 1; load(); });
+      panel.appendChild(more);
+    }
+    function load() {
+      btn.disabled = true;
+      btn.textContent = "Looking for their face…";
+      panel.querySelectorAll("button").forEach((b) => (b.disabled = true));
+      ask({ mode: "profile_ideas", id, more: round })
+        .then(show)
+        .catch((e) => { panel.innerHTML = ""; status("Couldn't get pictures: " + e.message); })
+        .finally(() => { btn.disabled = false; btn.textContent = "✨ Suggest profile pictures again"; });
+    }
+    btn.addEventListener("click", () => { round = 0; load(); });
+  }
+
+  function checkProfiles() {
+    const m = location.pathname.match(PERFORMER_PAGE);
+    const form = m && document.querySelector("form#performer-edit");
+    const have = document.querySelector(".bta-profiles");
+    if (!form) { if (have) have.remove(); return; }
+    if (have && have.dataset.performer === m[1] && have.nextElementSibling === form) return;
+    if (have) have.remove();
+    mountProfileIdeas(form, m[1]);
+  }
+
   // ---- Settings → Tasks: this plugin's tasks in sections --------------------
   // Same idea as Better Organizing Tools: a heading above each group of tasks
   // that shows / hides them (closed to start with; remembered per browser).
   const TASK_GROUPS = [
-    ["ai-night", "Tonight's run", "The AI work saved for the night time, started now",
-      ["AI: run tonight's new items now"]],
-    ["ai-tags", "AI tagging", "Tag scenes and images with the local AI model",
-      ["AI tagging: preview on 10 items (no changes)", "AI tagging: items with no tags", "AI tagging: everything not done yet"]],
-    ["ai-looks", "Look-alike tags", "Tags learned from the items you've tagged that look most alike",
-      ["Look-alike tags: scan scenes and images", "Look-alike tags: preview on 10 items (no changes)",
-       "Look-alike tags: items with no tags"]],
-    ["ai-pictures", "Tag pictures", "Each tag's most typical scene or photo as its picture",
-      ["Tag pictures: preview the most typical ones (no changes)", "Tag pictures: most typical one for tags without a picture",
-       "Tag pictures: most typical one for every tag (replaces existing ones)"]],
-    ["ai-body", "Body tags", "What's shown (Tits, Ass, Pussy, Cock) and sizes from the performers",
-      ["Body tags: preview on 10 items (no changes)", "Body tags: scenes and images", "Body tags: check everything again"]],
-    ["ai-titles", "AI titles", "Titles for scenes and images without one",
-      ["AI titles: preview on 10 items (no changes)", "AI titles: scenes without a title", "AI titles: images without a title"]],
-    ["ai-studios", "Studios from accounts", "Studio and performers from the accounts and studio watermarks a scene or photo shows",
-      ["Studios from accounts: preview on 10 scenes (no changes)", "Studios from accounts: also read watermarks with the AI",
-       "Studios from watermarks: preview on 10 photos without a studio (no changes)", "Studios from watermarks: photos without a studio, not in a gallery",
-       "Studios from watermarks: photos without a studio, galleries too"]],
-    ["ai-faces", "Faces", "Who the people in scenes and images look like, from your performers' pictures",
-      ["Faces: learn performers' faces", "Faces: scan scenes and images", "Faces: learn from what you've tagged",
-       "Faces: find performers who may be the same person", "Faces: preview on 10 items (no changes)",
-       "Faces: scenes without performers", "Faces: images without performers"]],
+    ["ai-setup", "Setup & schedules", "The setup check, and your nightly and after-scan jobs, run now",
+      ["Setup: check everything and write a report",
+       "Schedules: run the nightly jobs now",
+       "Schedules: run the after-scan jobs now",
+       "Schedules: run tonight's waiting steps for new items now"]],
+    ["ai-tags", "Tags", "Tags from the AI model, look-alikes and the body detector, and poses (scan look-alikes first)",
+      ["Tags: scan scenes and images for look-alikes (do this first)",
+       "Tags: tag scenes and images with no tags (AI model)",
+       "Tags: tag all scenes and images not done yet (AI model)",
+       "Tags: tag scenes and images with no tags (look-alikes)",
+       "Tags: add body tags to scenes and images not done yet",
+       "Tags: add clothing tags from the look (quick)",
+       "Tags: redo body tags on all scenes and images",
+       "Tags: scan images' body poses for pose suggestions (Mac)",
+       "Tags: preview on 10 (AI model, no changes)",
+       "Tags: preview on 10 (look-alikes, no changes)",
+       "Tags: preview body tags on 10 (no changes)",
+       "Tags: preview clothing tags from the look (no changes)"]],
+    ["ai-faces", "Faces", "Who's in scenes and images, from your performers' faces",
+      ["Faces: scan scenes and images",
+       "Faces: learn performers' faces",
+       "Faces: learn more from what you've tagged",
+       "Faces: find performers in scenes without any",
+       "Faces: find performers in images without any",
+       "Faces: find performers who may be the same person",
+       "Faces: preview on 10 (no changes)"]],
+    ["ai-markers", "Markers & positions", "AI markers where scenes shift, marker tags, and positions in videos",
+      ["Markers: download the video model (needed first)",
+       "Markers: add AI markers to scenes without markers",
+       "Markers: redo AI markers with the newest method",
+       "Markers: add their tags to their scenes",
+       "Markers: scan scenes for positions (for Review)",
+       "Markers: preview AI markers on 5 scenes (no changes)",
+       "Markers: preview adding their tags to scenes (no changes)"]],
+    ["ai-titles", "Titles", "Titles from the AI model for scenes and images without one",
+      ["Titles: title scenes without one (AI model)",
+       "Titles: title images without one (AI model)",
+       "Titles: preview on 10 (AI model, no changes)"]],
+    ["ai-studios", "Studios & links", "Studios, performers and links from accounts and watermarks",
+      ["Studios: find scenes' studios from accounts and watermarks",
+       "Studios: find images' studios from watermarks (not in galleries)",
+       "Studios: find images' studios from watermarks (galleries too)",
+       "Links: add account and written links to scenes and images",
+       "Studios: preview on 10 scenes (no changes)",
+       "Studios: preview on 10 images (no changes)",
+       "Links: preview (no changes)"]],
+    ["ai-pictures", "Pictures", "Tag and marker pictures, and images' aesthetic scores",
+      ["Tag pictures: pick the most typical for tags without one",
+       "Tag pictures: pick the most typical for every tag (replaces yours)",
+       "Tag pictures: replace blurry or dark ones (Mac)",
+       "Marker pictures: replace blurry, dark or empty ones (Mac)",
+       "Image scores: add aesthetic scores and labels (Mac)",
+       "Tag pictures: preview the most typical (no changes)",
+       "Tag & marker pictures: preview replacing blurry ones (Mac, no changes)"]],
+    ["ai-covers", "Scene covers", "Better-looking scene covers (Apple's scores, on a Mac), and putting the old ones back",
+      ["Scene covers: replace low-scoring ones (Mac)",
+       "Scene covers: put back the originals",
+       "Scene covers: preview on 10 (Mac, no changes)"]],
+    ["ai-screens", "Screenshots", "Cut phone screenshots of posts down to the photo",
+      ["Screenshots: crop to the photo",
+       "Screenshots: put back the originals",
+       "Screenshots: preview cropping (no changes)"]],
     ["ai-perf", "Performer details", "Hair and eye colour from performers' pictures",
-      ["Performer details: preview on 10 performers (no changes)", "Performer details: fill in empty hair and eye colour"]],
+      ["Performer details: fill in empty hair and eye colour",
+       "Performer details: preview on 10 (no changes)"]],
   ];
   const OPEN_KEY = "bta-task-groups-open";
   const GROUP_NAMES = new Set(TASK_GROUPS.flatMap((g) => g[3]));
@@ -889,6 +1295,193 @@
     }
   }
 
+  // ---- Settings → Tasks: a check before a task starts ----------------------
+  // Pressing one of this add-on's tasks first asks the add-on whether what it
+  // needs is set up (the AI model, the face helper, Apple's scores, the video
+  // model, the look-alike scan) - if not, it points to the setup page - and
+  // roughly how long it will take. A long one (10 minutes or more) gets a
+  // warning: Run now, Add to the nightly run, Don't show this again (for that
+  // task, in this browser), or Close. Quick, ready tasks just start.
+  const NOWARN_KEY = "bta-task-nowarn";
+  // (the tasks were renamed in 1.8: choices saved with the old names still count)
+  const TASK_RENAMES = {"Setup check: write a report to the log": "Setup: check everything and write a report", "Nightly jobs: run now": "Schedules: run the nightly jobs now", "After-scan jobs: run now": "Schedules: run the after-scan jobs now", "AI: run tonight's new items now": "Schedules: run tonight's waiting steps for new items now", "Look-alike tags: scan scenes and images": "Tags: scan scenes and images for look-alikes (do this first)", "AI tagging: items with no tags": "Tags: tag scenes and images with no tags (AI model)", "AI tagging: everything not done yet": "Tags: tag all scenes and images not done yet (AI model)", "Look-alike tags: items with no tags": "Tags: tag scenes and images with no tags (look-alikes)", "Body tags: scenes and images": "Tags: add body tags to scenes and images not done yet", "Body tags: clothing from the look (quick)": "Tags: add clothing tags from the look (quick)", "Body tags: check everything again": "Tags: redo body tags on all scenes and images", "Poses: read body poses": "Tags: scan images' body poses for pose suggestions (Mac)", "AI tagging: preview on 10 items (no changes)": "Tags: preview on 10 (AI model, no changes)", "Look-alike tags: preview on 10 items (no changes)": "Tags: preview on 10 (look-alikes, no changes)", "Body tags: preview on 10 items (no changes)": "Tags: preview body tags on 10 (no changes)", "Body tags: preview clothing from the look (no changes)": "Tags: preview clothing tags from the look (no changes)", "Faces: learn from what you've tagged": "Faces: learn more from what you've tagged", "Faces: scenes without performers": "Faces: find performers in scenes without any", "Faces: images without performers": "Faces: find performers in images without any", "Faces: preview on 10 items (no changes)": "Faces: preview on 10 (no changes)", "Video model: download it (for AI markers and positions)": "Markers: download the video model (needed first)", "AI markers: scenes without markers": "Markers: add AI markers to scenes without markers", "AI markers: redo with the newest method": "Markers: redo AI markers with the newest method", "Positions in videos: look at scenes": "Markers: scan scenes for positions (for Review)", "AI markers: preview on 5 scenes (no changes)": "Markers: preview AI markers on 5 scenes (no changes)", "Markers: preview adding their tags to their scenes (no changes)": "Markers: preview adding their tags to scenes (no changes)", "AI titles: scenes without a title": "Titles: title scenes without one (AI model)", "AI titles: images without a title": "Titles: title images without one (AI model)", "AI titles: preview on 10 items (no changes)": "Titles: preview on 10 (AI model, no changes)", "Studios from accounts: also read watermarks with the AI": "Studios: find scenes' studios from accounts and watermarks", "Studios from watermarks: photos without a studio, not in a gallery": "Studios: find images' studios from watermarks (not in galleries)", "Studios from watermarks: photos without a studio, galleries too": "Studios: find images' studios from watermarks (galleries too)", "Links: add account and written links to scenes and photos": "Links: add account and written links to scenes and images", "Studios from accounts: preview on 10 scenes (no changes)": "Studios: preview on 10 scenes (no changes)", "Studios from watermarks: preview on 10 photos without a studio (no changes)": "Studios: preview on 10 images (no changes)", "Tag pictures: most typical one for tags without a picture": "Tag pictures: pick the most typical for tags without one", "Tag pictures: most typical one for every tag (replaces existing ones)": "Tag pictures: pick the most typical for every tag (replaces yours)", "Pictures: replace blurry or dark tag pictures": "Tag pictures: replace blurry or dark ones (Mac)", "Pictures: replace blurry, dark or empty marker pictures": "Marker pictures: replace blurry, dark or empty ones (Mac)", "Pictures: aesthetic score and labels": "Image scores: add aesthetic scores and labels (Mac)", "Tag pictures: preview the most typical ones (no changes)": "Tag pictures: preview the most typical (no changes)", "Pictures: preview better tag and marker pictures (no changes)": "Tag & marker pictures: preview replacing blurry ones (Mac, no changes)", "Scene covers: replace low-scoring ones": "Scene covers: replace low-scoring ones (Mac)", "Scene covers: preview on 10 scenes (no changes)": "Scene covers: preview on 10 (Mac, no changes)", "Screenshots: preview cropping to the photo (no changes)": "Screenshots: preview cropping (no changes)", "Performer details: preview on 10 performers (no changes)": "Performer details: preview on 10 (no changes)"};
+  const noWarn = () => {
+    try { return new Set(JSON.parse(localStorage.getItem(NOWARN_KEY) || "[]").map((t) => TASK_RENAMES[t] || t)); } catch (e) { return new Set(); }
+  };
+  const setNoWarn = (task) => { try { const n = noWarn(); n.add(task); localStorage.setItem(NOWARN_KEY, JSON.stringify([...n])); } catch (e) { /* this time only */ } };
+  const howLong = (sec) => {
+    const m = Math.max(1, Math.round(sec / 60));
+    if (m < 60) return `about ${m} minute${m === 1 ? "" : "s"}`;
+    const hr = Math.floor(m / 60), rest = m % 60;
+    if (hr >= 24) return `about ${Math.round(hr / 24 * 10) / 10} days`;
+    return `about ${hr} hour${hr === 1 ? "" : "s"}` + (rest >= 5 && hr < 10 ? ` ${rest} min` : "");
+  };
+  const n0 = (n) => Number(n || 0).toLocaleString();
+  let taskBypass = false;
+
+  function gateDialog() {
+    let wrap = document.getElementById("bta-gate");
+    if (wrap) wrap.remove();
+    wrap = document.createElement("div");
+    wrap.id = "bta-gate";
+    wrap.className = "bta-gate";
+    wrap.innerHTML = '<div class="bta-gate-box" role="dialog" aria-modal="true" aria-labelledby="bta-gate-title">' +
+      '<button type="button" class="bta-gate-x" aria-label="Close">✕</button><h4 id="bta-gate-title"></h4><div class="bta-gate-body"></div>' +
+      '<div class="bta-gate-actions"></div></div>';
+    const close = () => { wrap.remove(); document.removeEventListener("keydown", esc, true); };
+    const esc = (e) => { if (e.key === "Escape") close(); };
+    document.addEventListener("keydown", esc, true);
+    wrap.addEventListener("click", (e) => { if (e.target === wrap) close(); });
+    wrap.querySelector(".bta-gate-x").addEventListener("click", close);
+    document.body.appendChild(wrap);
+    const button = (label, cls, onClick) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "btn btn-sm " + cls;
+      b.textContent = label;
+      b.addEventListener("click", onClick);
+      wrap.querySelector(".bta-gate-actions").appendChild(b);
+      return b;
+    };
+    return { wrap, close, button, title: wrap.querySelector("h4"), body: wrap.querySelector(".bta-gate-body") };
+  }
+
+  async function taskGate(task, runBtn) {
+    const run = () => { taskBypass = true; try { runBtn.click(); } finally { taskBypass = false; } };
+    let dlg = null;
+    const slow = setTimeout(() => {
+      dlg = gateDialog();
+      dlg.title.textContent = task;
+      dlg.body.textContent = "Checking what this task needs…";
+      dlg.button("Close", "btn-secondary", dlg.close);
+    }, 400);
+    let r;
+    try {
+      r = await ask({ mode: "task_check", task });
+    } catch (e) {
+      clearTimeout(slow);
+      if (dlg) dlg.close();
+      run(); // (the check itself failed: don't stand in the way)
+      return;
+    }
+    clearTimeout(slow);
+    if (dlg && !document.body.contains(dlg.wrap)) return; // closed while checking
+    const missing = (r.needs || []).filter((n) => !n.ok);
+    if (!missing.length && (!r.long || noWarn().has(task))) {
+      if (dlg) dlg.close();
+      run();
+      return;
+    }
+    if (dlg) dlg.close();
+    dlg = gateDialog();
+    dlg.title.textContent = task;
+    const p = (text, cls) => { const el = document.createElement("p"); if (cls) el.className = cls; el.textContent = text; dlg.body.appendChild(el); return el; };
+    if (missing.length) {
+      p("This task needs something that isn't set up yet:");
+      const ul = document.createElement("ul");
+      missing.forEach((m) => {
+        const li = document.createElement("li");
+        const b = document.createElement("b");
+        b.textContent = m.what;
+        li.append(b, document.createTextNode(m.fix ? " - " + m.fix : ""));
+        ul.appendChild(li);
+      });
+      dlg.body.appendChild(ul);
+      p("The setup page walks you through it, step by step.", "bta-gate-note");
+      dlg.button("Open the setup page", "btn-primary", () => { dlg.close(); goTo("/ai-setup"); });
+      dlg.button("Close", "btn-secondary", dlg.close);
+      return;
+    }
+    const what = [r.scenes ? `${n0(r.scenes)} scene${r.scenes === 1 ? "" : "s"}` : "",
+      r.items ? `${n0(r.items)} ${r.noun || "photos"}` : ""].filter(Boolean).join(" and ");
+    p(`This could take a while: ${howLong(r.seconds)}` + (what ? ` for ${what} still to do.` : "."));
+    p("It runs in the background (Settings → Tasks shows its progress). You can cancel it there and run it again later - it carries on where it stopped.", "bta-gate-note");
+    const chk = document.createElement("label");
+    chk.className = "bta-gate-check";
+    chk.innerHTML = '<input type="checkbox"> Don’t show this again for this task';
+    dlg.body.appendChild(chk);
+    const remember = () => { if (chk.querySelector("input").checked) setNoWarn(task); };
+    dlg.button("Run now", "btn-primary", () => { remember(); dlg.close(); run(); });
+    const night = dlg.button(r.nightly ? `In the nightly run (${r.night_time})` : `Add to the nightly run (${r.night_time})`, "btn-secondary", () => {
+      remember();
+      night.disabled = true;
+      night.textContent = "Adding…";
+      ask({ mode: "task_add_nightly", task })
+        .then((x) => { night.classList.add("bta-gate-done"); night.textContent = `✓ Added - it runs tonight at ${x.night_time}`; setTimeout(dlg.close, 2500); })
+        .catch((e) => { night.disabled = false; night.textContent = "Couldn't add it: " + e.message; });
+    });
+    if (r.nightly) night.disabled = true;
+    dlg.button("Close", "btn-secondary", dlg.close);
+  }
+
+  document.addEventListener("click", (e) => {
+    if (taskBypass || !location.pathname.startsWith("/settings")) return;
+    const btn = e.target instanceof Element && e.target.closest(".setting button");
+    const row = btn && btn.closest(".setting");
+    const h3 = row && row.querySelector(":scope > div > h3");
+    if (!h3 || !GROUP_NAMES.has(h3.textContent.trim())) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation();
+    taskGate(h3.textContent.trim(), btn);
+  }, true);
+
+  // ---- Settings → Plugins: this add-on's settings in sections --------------
+  // Stash lists plugin settings alphabetically by their internal key, which
+  // scatters related ones. Each setting row's id is plugin-<id>-<key>, so they
+  // are put in sections here by display order alone (CSS order; Stash's own
+  // elements aren't moved) under headings; the night time and job lists are
+  // set on the jobs page, so they're replaced by a link to it.
+  const SETTING_SECTIONS = [
+    ["Setup", ["aiOllamaUrl", "aiModel", "faceHelperUrl", "welcomeOff"]],
+    ["New items", ["aiAuto", "aiNewAll", "aiNewPhotoStudios", "faceAutoAssign", "aiNightly"]],
+    ["Tags & titles", ["aiTagKinds", "aiTagCount", "aiMaxTags", "aiSkipTagged", "aiIncludeOrganized", "aiNoAutoTag", "aiLookSuggest", "tagSynonyms", "aiTitleKinds"]],
+    ["Faces", ["faceAutoMin", "faceSuggestMin"]],
+    ["Markers & poses", ["aiMarkerTag", "markerTagsStayOnMarker", "poseTags"]],
+    ["Scene covers", ["coverReplaceScraped", "coverReplacePicked", "coverReplaceOrganized"]],
+  ];
+  const SETTINGS_ON_JOBS_PAGE = ["aiNightTime", "aiTimeZone", "nightJobs", "afterScanJobs"];
+  function arrangeSettings() {
+    if (!location.pathname.startsWith("/settings")) return;
+    const rowOf = (k) => {
+      let e = document.getElementById(`plugin-${PLUGIN_ID}-${k}`);
+      while (e && e.parentElement && !e.parentElement.classList.contains("plugin-settings")) e = e.parentElement;
+      return e && e.parentElement ? e : null;
+    };
+    const first = rowOf("aiModel");
+    const box = first && first.parentElement;
+    if (!box || box.dataset.btaArranged === "1") return;
+    box.dataset.btaArranged = "1";
+    box.classList.add("bta-settings-arranged");
+    const head = (text, order, extra) => {
+      const d = document.createElement("div");
+      d.className = "bta-settings-head";
+      d.style.order = String(order);
+      d.textContent = text;
+      if (extra) d.appendChild(extra);
+      box.appendChild(d);
+    };
+    SETTING_SECTIONS.forEach(([title, keys], i) => {
+      head(title, i * 100);
+      keys.forEach((k, j) => {
+        const row = rowOf(k);
+        if (row) row.style.order = String(i * 100 + j + 1);
+      });
+    });
+    // anything not listed (e.g. a new setting): at the end, still visible
+    [...box.children].forEach((c) => { if (!c.style.order) c.style.order = "9000"; });
+    SETTINGS_ON_JOBS_PAGE.forEach((k) => {
+      const row = rowOf(k);
+      if (row) row.style.display = "none";
+    });
+    const a = document.createElement("a");
+    a.href = "/ai-nightly";
+    a.className = "bta-settings-jobs";
+    a.textContent = "🌙 Night time, time zone and what runs at night and after a scan: on the Nightly & after-scan jobs page";
+    a.addEventListener("click", (e) => { e.preventDefault(); goTo("/ai-nightly"); });
+    head("Schedules", SETTING_SECTIONS.length * 100, a);
+  }
+
   // "Setup & troubleshooting" links: above this add-on's tasks (Settings →
   // Tasks) and under its settings (Settings → Plugins)
   function setupLinks() {
@@ -910,7 +1503,7 @@
       n.href = "/ai-nightly";
       n.className = "bta-setup-link";
       n.dataset.where = "tasks-night";
-      n.innerHTML = '<span aria-hidden="true">🌙</span> <b>Nightly jobs</b><span> - pick which tasks (Stash\'s and plugins\') run every night</span>';
+      n.innerHTML = '<span aria-hidden="true">🌙</span> <b>Nightly &amp; after-scan jobs</b><span> - pick which tasks (Stash\'s and plugins\') run every night and after a scan</span>';
       n.addEventListener("click", (e) => { e.preventDefault(); goTo("/ai-nightly"); });
       first.parentElement.insertBefore(n, first);
     }
@@ -929,10 +1522,13 @@
     titleTimer = setTimeout(() => {
       titleTimer = null;
       checkTitles();
+      checkCovers();
+      checkProfiles();
       checkPerformerForm();
       checkPerformerPage();
       groupTasks();
       setupLinks();
+      arrangeSettings();
     }, 200);
   }).observe(document.body, { childList: true, subtree: true });
 
@@ -973,7 +1569,7 @@
         const s = (n) => (n === 1 ? "" : "s");
         const notes = [];
         if (same) notes.push(`${same} already had ${same === 1 ? "it" : "theirs"}`);
-        if (few) notes.push(`${few} ${few === 1 ? "is" : "are"} on too few scanned items (run "Look-alike tags: scan scenes and images")`);
+        if (few) notes.push(`${few} ${few === 1 ? "is" : "are"} on too few scanned items (run "Tags: scan scenes and images for look-alikes (do this first)")`);
         if (taken) notes.push(`${taken} had no typical picture of ${taken === 1 ? "its" : "their"} own left`);
         if (changed) Toast.success(`Most typical picture set for ${changed} tag${s(changed)}` + (notes.length ? ` (${notes.join("; ")})` : ""));
         else if (same && !few && !taken) Toast.success(ids.length === 1 ? "This tag already has its most typical picture" : "These tags already have their most typical pictures");
@@ -1016,7 +1612,7 @@
     faces: {
       label: "Faces",
       param: "performer",
-      load: (only, skip) => ask({ mode: "face_review", performer: only || null, limit: 40, skip }),  // (never kept)
+      load: (only, skip) => ask({ mode: "face_review", performer: only || null, limit: 40, skip, favourites: (new URLSearchParams(location.search).get("fav") === "1") }),  // (never kept)
       keyOf: (it) => `${it.kind}:${it.id}:${it.performer}`,
       yes: async (it) => {
         await setOnItem(it, "performer_ids", it.performer, "ADD");
@@ -1046,20 +1642,28 @@
       keyOf: (it) => `${it.kind}:${it.id}:${it.tag}`,
       yes: (it) => setOnItem(it, "tag_ids", it.tag, "ADD"),
       no: (it) => ask({ mode: "tag_review_answer", key: `${it.kind}:${it.id}`, tag: it.tag, no: true }),
-      undoYes: (it) => setOnItem(it, "tag_ids", it.tag, "REMOVE"),
+      undoYes: async (it) => {
+        await setOnItem(it, "tag_ids", it.tag, "REMOVE");
+        if (it.for_scene) {
+          // (the scene didn't have it: Stash's hook added it, maybe a moment later)
+          const off = () => setOnItem({ kind: "scene", id: it.scene }, "tag_ids", it.tag, "REMOVE");
+          await off();
+          setTimeout(off, 4000);
+        }
+      },
       undoNo: (it) => ask({ mode: "tag_review_answer", key: `${it.kind}:${it.id}`, tag: it.tag, no: false }),
       avatar: (it) => `/tag/${it.tag}/image`,
       page: (it) => `/tags/${it.tag}`,
-      question: (it) => ["Tag it ", h("b", null, it.name), "?"],
+      question: (it) => [it.kind === "marker" ? "Tag this marker " : "Tag it ", h("b", null, it.name), "?"],
       meta: (it, pct) => [it.near ? `${pct(it.score)} sure · ${it.near} of its 20 closest look-alikes have it` : "",
         it.frames ? `seen in ${it.frames} of ${it.looked} video frames` + (it.times && it.times.length ? ` · at ${it.times.map(clock).join(", ")}` : "") : "",
-        it.why || "", it.aesthetic != null ? `looks ${it.aesthetic}/100` : ""]
+        it.scene_has ? "its scene has this tag" : "", it.why || "", it.aesthetic != null ? `looks ${it.aesthetic}/100` : ""]
         .filter(Boolean).join(" · "),
       tileMeta: (it, pct) => [it.near ? `${pct(it.score)} · ${it.near}/20 look-alikes` : "",
-        it.frames ? `▶ ${it.frames}/${it.looked} frames` : "", it.why ? "near-miss" : ""].filter(Boolean).join(" · "),
+        it.frames ? `▶ ${it.frames}/${it.looked} frames` : "", it.scene_has ? "scene has it" : "", it.why ? "near-miss" : ""].filter(Boolean).join(" · "),
       extra: (it) => ` · has ${it.tags} tag${it.tags === 1 ? "" : "s"}`,
       noLabel: "✕ No", yesLabel: "✓ Yes, add", noStamp: "NO",
-      empty: "No confident tags left. New ones show up after \"Look-alike tags: scan scenes and images\" and as you tag more.",
+      empty: "No confident tags left. New ones show up after \"Tags: scan scenes and images for look-alikes (do this first)\" and as you tag more.",
       filterLabel: "Just one tag",
     },
     // what's already on items that might not belong: a tag look-alikes say
@@ -1229,11 +1833,11 @@
       meta: (it) => it.why || "",
       tileMeta: (it, pct) => pct(it.score),
       loading: "Comparing body shapes and looks…",
-      empty: "No pose suggestions. They come from photos and markers you tag with a pose (Face Down Ass Up, All Fours, Kneeling… - set in the add-on's settings), and need \"Poses: read body poses\" (on a Mac)." },
+      empty: "No pose suggestions. They come from photos and markers you tag with a pose (Face Down Ass Up, All Fours, Kneeling… - set in the add-on's settings), and need \"Tags: scan images' body poses for pose suggestions (Mac)\" (on a Mac)." },
     tags_similar: { ...REVIEW_MODES.tagtidy, base: "tagtidy", label: "Similar", card: true, tidyMode: "tag_pairs",
       empty: "No tags to merge or nest. Tags named alike, or nested in name (\"Solo Female\" / \"Solo\"), show up here." },
     tags_new: { ...REVIEW_MODES.tagtidy, base: "tagtidy", label: "New", card: true, tidyMode: "tag_groups",
-      empty: "No groups of look-alike pictures without a tag. They need \"Look-alike tags: scan scenes and images\"." },
+      empty: "No groups of look-alike pictures without a tag. They need \"Tags: scan scenes and images for look-alikes (do this first)\"." },
     studios_add: { ...REVIEW_MODES.studios, base: "studios", label: "Suggested", card: true, studioKinds: ["join"],
       empty: "No scenes or photos to add to a studio you have. New ones show up as galleries and folders get studios." },
     studios_check: { ...REVIEW_MODES.studios, base: "studios", label: "Check", card: true, studioKinds: ["merge", "delete"],
@@ -1241,7 +1845,7 @@
     studios_new: { ...REVIEW_MODES.studios, base: "studios", label: "New", card: true, studioKinds: ["add"],
       empty: "No account names waiting. New ones show up after \"Studios from watermarks\" runs." },
     galleries_add: { ...REVIEW_MODES.galleries, base: "galleries", label: "Suggested", card: true, galleryKinds: ["gjoin", "gdetails"],
-      empty: "No photos or details to add to a gallery. Look-alike suggestions need \"Look-alike tags: scan scenes and images\"." },
+      empty: "No photos or details to add to a gallery. Look-alike suggestions need \"Tags: scan scenes and images for look-alikes (do this first)\"." },
     galleries_check: { ...REVIEW_MODES.check, base: "check", label: "Check", checkOnly: "g",
       empty: "No photo looks out of place in its gallery." },
     galleries_new: { ...REVIEW_MODES.galleries, base: "galleries", label: "New", card: true, galleryKinds: ["gnew"],
@@ -2309,6 +2913,7 @@
     const grp = rGroups.find((g) => g.actions.includes(tabKey)) || groupOf(tabKey);
     React.useEffect(() => { try { localStorage.setItem("bta-review-" + grp.key, tabKey); } catch (e) { /* fine */ } }, [tabKey]);
     const only = params.get(M.param) || "";
+    const favOnly = tab === "faces" && params.get("fav") === "1"; // Faces: favourite performers only
     const [queue, setQueue] = React.useState([]);
     const [state, setState] = React.useState({ loading: true });
     const [total, setTotal] = React.useState(0);
@@ -2317,6 +2922,11 @@
     const [drag, setDrag] = React.useState(null); // { dx } while swiping
     const [busy, setBusy] = React.useState(false);
     const [zoom, setZoom] = React.useState(null);
+    // Faces: each card's picture is the frame where the face was seen best,
+    // cut around it (a scene's cover may not show them at all) - made by the
+    // add-on for the card on top and the next ones, then kept
+    const [cardPics, setCardPics] = React.useState({});
+    const picAsked = React.useRef(new Set());
     // Swipe (one at a time) or List (all of them as a grid); remembered
     const [view, setViewState] = React.useState(() => {
       try { const v = localStorage.getItem("bta-review-view"); return v === "list" || v === "batch" ? v : "swipe"; } catch (e) { return "swipe"; }
@@ -2404,11 +3014,11 @@
       } finally {
         loadingMore.current = false;
       }
-    }, [only, tabKey]);
+    }, [only, tabKey, favOnly]);
 
     React.useEffect(() => {
       const mem = reviewMemory;
-      if (mem && mem.tab === tabKey && mem.only === only && Date.now() - mem.at < 30 * 60 * 1000) {
+      if (mem && mem.tab === tabKey && mem.only === only && !!mem.fav === favOnly && Date.now() - mem.at < 30 * 60 * 1000) {
         seen.current = new Set(mem.seen);
         setQueue(mem.queue);
         setCounts(mem.counts);
@@ -2422,16 +3032,16 @@
       setCounts({ yes: 0, no: 0, skip: 0 });
       setUndo([]);
       load(true);
-    }, [only, tabKey]);
+    }, [only, tabKey, favOnly]);
 
     // remember where you are (for coming back from a performer's / tag's page)
     React.useEffect(() => {
       if (state.loading) return;
-      reviewMemory = { tab: tabKey, only, queue, counts, undo, total, seen: [...seen.current], at: Date.now() };
+      reviewMemory = { tab: tabKey, only, fav: favOnly, queue, counts, undo, total, seen: [...seen.current], at: Date.now() };
     }, [queue, counts, undo, total, state.loading]);
 
     // (for a moment after switching tabs the old tab's cards are still here)
-    const shown = queue.filter((it) => (tab === "tags" ? it.tag != null && (tabKey === "tags_poses" ? !!it.pose : !it.pose && (tabKey === "tags_markers") === (it.kind === "marker")) : tab === "new" ? it.sig != null && !it.st && !it.gal && !it.tp && !it.tg
+    const shown = queue.filter((it) => (tab === "tags" ? it.tag != null && (tabKey === "tags_poses" ? !!it.pose : !it.pose && (tabKey === "tags_markers") === (it.kind === "marker" && !it.for_scene)) : tab === "new" ? it.sig != null && !it.st && !it.gal && !it.tp && !it.tg
       : tab === "studios" ? !!it.st : tab === "galleries" ? !!it.gal : tab === "tagtidy" ? !!(it.tp || it.tg)
       : tab === "check" ? it.what != null : it.kind != null && it.performer != null));
     const cur = shown[0];
@@ -2439,6 +3049,26 @@
     React.useEffect(() => {
       if (!state.loading && queue.length < 6 && total > 0) load(false);
     }, [queue.length]);
+    const faceCard = (it) => tab === "faces" && it && it.performer != null && (it.kind === "scene" || it.kind === "image");
+    const picOf = (it) => (faceCard(it) && cardPics[keyOf(it)]) || it.picture;
+    React.useEffect(() => {
+      // the card on top and the next two (Swipe), or what's shown (List)
+      const want = (view === "swipe" ? shown.slice(0, 3) : shown.slice(0, 40)).filter((it) => faceCard(it) && !picAsked.current.has(keyOf(it)));
+      let live = true;
+      (async () => {
+        for (const it of want) {
+          if (!live) return;
+          const k = keyOf(it);
+          if (picAsked.current.has(k)) continue;
+          picAsked.current.add(k);
+          try {
+            const r = await ask({ mode: "face_card_picture", kind: it.kind, id: it.id, at: it.best_at, emb: it.emb });
+            if (r && r.image) setCardPics((m) => ({ ...m, [k]: "data:image/jpeg;base64," + r.image }));
+          } catch (e) { /* the card keeps its picture */ }
+        }
+      })();
+      return () => { live = false; };
+    }, [tab, view, cur && keyOf(cur), shown.length]);
 
     // answer the card on top (Swipe), or any card (List)
     async function answer(kind, it, confirmed) {
@@ -2616,7 +3246,7 @@
 
     // Batch view: the groups, then the chosen group's suggestions (all of them)
     const batchLoad = (gid, fresh) => (M.batchLoad ? M.batchLoad(gid, fresh) : tab === "faces"
-      ? ask({ mode: "face_review", performer: gid, limit: 400 })
+      ? ask({ mode: "face_review", performer: gid, limit: 400, favourites: (new URLSearchParams(location.search).get("fav") === "1") })
       : tab === "check" ? ask({ mode: "check", group: gid, limit: gid ? 400 : 1, fresh: !!fresh, only: M.checkOnly })
       : ask({ mode: "tag_review", tag: gid, limit: 400, fresh: !!fresh }));
     React.useEffect(() => {
@@ -2653,7 +3283,7 @@
         setGroup(null);
         setBatch({ state: "loading" });
       }
-    }, [tabKey, only]);
+    }, [tabKey, only, favOnly]);
 
     async function checkBatchAnswer(kind) {
       const items = batch.items;
@@ -2770,7 +3400,7 @@
       const s0 = start.current;
       start.current = null;
       if (s0 && !s0.moved && cur && e.target.closest && e.target.closest(".bta-fr-pic")) {
-        setZoom(cur);
+        setZoom({ ...cur, picture: picOf(cur) });
         return;
       }
       if (!s0 || !s0.moved) return;
@@ -2967,8 +3597,8 @@
             const k = keyOf(it);
             const saving = working.has(k);
             return h("div", { key: k, className: "bta-fr-tile" + (saving ? " saving" : "") },
-              h("button", { type: "button", className: "bta-fr-tile-pic", title: "See it big", onClick: () => setZoom(it) },
-                h("img", { src: it.picture, alt: "", loading: "lazy", draggable: false }),
+              h("button", { type: "button", className: "bta-fr-tile-pic", title: "See it big", onClick: () => setZoom({ ...it, picture: picOf(it) }) },
+                h("img", { src: picOf(it), alt: "", loading: "lazy", draggable: false }),
                 (it.kind === "scene" || it.kind === "marker") && h("span", { className: "bta-fr-tile-kind" }, it.kind === "marker" ? "▶ Marker " + clock(it.start) : "▶ Scene")),
               h("button", { type: "button", className: "bta-fr-tile-who", title: `See ${it.name}'s page`,
                 onClick: () => { reviewReturn = M.page(it); goTo(M.page(it)); } },
@@ -2997,7 +3627,7 @@
           onPointerDown: onDown, onPointerMove: onMove, onPointerUp: onUp, onPointerCancel: () => { start.current = null; setDrag(null); },
         },
           h("div", { className: "bta-fr-pic" },
-            h("img", { src: cur.picture, alt: "", draggable: false, key: keyOf(cur) }),
+            h("img", { src: picOf(cur), alt: "", draggable: false, key: keyOf(cur) }),
             h("span", { className: "bta-fr-stamp bta-fr-yes", style: { opacity: Math.max(0, tint) } }, M.yesStamp || "YES"),
             h("span", { className: "bta-fr-stamp bta-fr-no", style: { opacity: Math.max(0, -tint) } }, M.noStamp)),
           h("div", { className: "bta-fr-who" },
@@ -3053,7 +3683,16 @@
           done ? ` · ${counts.yes} added, ${counts.no} no` : ""),
         h("div", { className: "bta-fr-tools" },
           undo.length > 0 && h("button", { type: "button", className: "bta-fr-chip", disabled: busy, onClick: takeBack }, "↶ Undo"),
-          only && h("button", { type: "button", className: "bta-fr-chip", onClick: () => goTo(`${REVIEW_PAGE}?mode=${tabKey}`) },
+          tab === "faces" && h("button", {
+            type: "button", className: "bta-fr-chip" + (favOnly ? " on" : ""), "aria-pressed": favOnly,
+            title: favOnly ? "Showing suggestions for your favourite performers only" : "Show suggestions for your favourite performers only",
+            onClick: () => {
+              const q = new URLSearchParams(location.search);
+              if (favOnly) q.delete("fav"); else q.set("fav", "1");
+              goTo(`${location.pathname}?${q.toString()}`);
+            },
+          }, favOnly ? "★ Favourites only" : "☆ Favourites only"),
+          only && h("button", { type: "button", className: "bta-fr-chip", onClick: () => goTo(`${REVIEW_PAGE}?mode=${tabKey}` + (favOnly ? "&fav=1" : "")) },
             tab === "faces" ? "All performers" : "All tags"))),
       state.note && h("div", { className: "bta-fr-note" }, state.note),
       bodyEl,
@@ -3123,18 +3762,18 @@
   // ---- Setup & troubleshooting page (/ai-setup) ----------------------------
   const SETUP_PAGE = "/ai-setup";
   const COMMON = [
-    ["\"Can't reach Ollama\"", "Ollama isn't running, or Stash can't see it. On a Mac: brew services start ollama (or open the Ollama app). Stash in Docker Desktop reaches it at http://host.docker.internal:11434; Stash installed directly at http://localhost:11434; Stash in Docker on Linux needs network_mode: host and http://127.0.0.1:11434. Set it under AI: Ollama address."],
-    ["\"Ollama doesn't have the model\"", "On the computer running Ollama: ollama pull gemma3:4b (about 3.3 GB). If you set AI: model to something else, pull that one, and make sure it can see pictures."],
+    ["\"Can't reach Ollama\"", "Ollama isn't running, or Stash can't see it. On a Mac: brew services start ollama (or open the Ollama app). Stash in Docker Desktop reaches it at http://host.docker.internal:11434; Stash installed directly at http://localhost:11434; Stash in Docker on Linux needs network_mode: host and http://127.0.0.1:11434. Set it under Setup: Ollama address."],
+    ["\"Ollama doesn't have the model\"", "On the computer running Ollama: ollama pull gemma3:4b (about 3.3 GB). If you set Setup: AI model (in Ollama) to something else, pull that one, and make sure it can see pictures."],
     ["\"Can't reach the face helper\" / faces and look-alikes do nothing", "Install it: from the add-on's folder run sh face-helper/setup.sh. On a Mac it starts at login; check it with curl http://127.0.0.1:11535/health. Keep it out of Documents, Desktop and Downloads on a Mac (programs started at login can't read those)."],
     ["setup.sh fails installing onnxruntime", "Your newest Python is too new for ONNX Runtime. Install an older one (brew install python@3.13) and run PYTHON=python3.13 sh face-helper/setup.sh."],
     ["\"The face helper is too old\"", "A newer add-on needs a newer helper: run sh face-helper/setup.sh again. It updates in place and keeps nothing you'd lose."],
     ["Tasks stop working after about an hour, or say \"Done\" having skipped everything", "The task's login runs out. Generate an API key under Settings → Security; the add-on uses it from then on."],
     ["Full-size pictures or videos won't open, but thumbnails do", "Stash lost its link to your library drive (often a network drive after it disconnected or the computer slept). Reconnect the drive, then restart Stash (e.g. docker restart stash)."],
-    ["Look-alike tags, Similar galleries or Review → Tags show nothing", "Run \"Look-alike tags: scan scenes and images\" under Settings → Tasks. New items get their fingerprint as they're scanned; cancel and rerun to carry on."],
+    ["Look-alike tags, Similar galleries or Review → Tags show nothing", "Run \"Tags: scan scenes and images for look-alikes (do this first)\" under Settings → Tasks. New items get their fingerprint as they're scanned; cancel and rerun to carry on."],
     ["No face matches", "Run \"Faces: learn performers' faces\" (it uses their profile pictures - give performers a clear, front-facing one), then \"Faces: scan scenes and images\"."],
-    ["The AI is slow, or other tasks wait for hours", "Stash runs one task at a time and the AI takes seconds per item. Turn on AI: wait until night for new items so the slow steps run once at night; the first request after a while is slower while the model loads."],
+    ["The AI is slow, or other tasks wait for hours", "Stash runs one task at a time and the AI takes seconds per item. Turn on New items: wait until night for the AI model steps so the slow steps run once at night; the first request after a while is slower while the model loads."],
     ["AI tags are wrong", "A small model guesses; the add-on only keeps its picks that your look-alikes agree with. Tag more items yourself (the add-on learns from them), use Review to accept or turn down suggestions, and use the previews before the tasks."],
-    ["New items aren't done at night", "The night timer runs inside Stash and stops when Stash restarts; the next scan starts it again. Or run \"AI: run tonight's new items now\"."],
+    ["New items aren't done at night", "The night timer runs inside Stash and stops when Stash restarts; the next scan starts it again. Or run \"Schedules: run tonight's waiting steps for new items now\"."],
   ];
   const STATUS = { ok: ["✓", "OK"], warn: ["!", "Check"], fail: ["✕", "Problem"], info: ["i", "Info"] };
   // buttons under a common problem: what narrows it down (by the problem's
@@ -3148,12 +3787,12 @@
     [/^Tasks stop working/, [["Check picture access", "ids:pictures-can-be-fetched"], ["Open Stash's log", "log"]]],
     [/^Full-size pictures/, [["Check the library files", "files"], ["Check picture access", "ids:pictures-can-be-fetched,library-files-reachable"]]],
     [/^Look-alike tags, Similar/, [["Check the look-alike scan", "ids:look-alike-scan,picture-fingerprints-clip"],
-      ["Preview look-alike tags on 10 items", "task:Look-alike tags: preview on 10 items (no changes)"], ["Run the look-alike scan", "task:Look-alike tags: scan scenes and images"]]],
-    [/^No face matches/, [["Check the face scans", "group:Scans"], ["Preview faces on 10 items", "task:Faces: preview on 10 items (no changes)"],
+      ["Preview look-alike tags on 10 items", "task:Tags: preview on 10 (look-alikes, no changes)"], ["Run the look-alike scan", "task:Tags: scan scenes and images for look-alikes (do this first)"]]],
+    [/^No face matches/, [["Check the face scans", "group:Scans"], ["Preview faces on 10 items", "task:Faces: preview on 10 (no changes)"],
       ["Learn performers' faces", "task:Faces: learn performers' faces"]]],
     [/^The AI is slow/, [["Time the AI on a picture", "ai"], ["Show what's running", "jobs"]]],
-    [/^AI tags are wrong/, [["Preview AI tags on 10 items", "task:AI tagging: preview on 10 items (no changes)"], ["Open Stash's log", "log"]]],
-    [/^New items aren't done/, [["Check tonight's run", "ids:tonight-s-run,after-a-scan,time-zone"], ["Run tonight's items now", "task:AI: run tonight's new items now"]]],
+    [/^AI tags are wrong/, [["Preview AI tags on 10 items", "task:Tags: preview on 10 (AI model, no changes)"], ["Open Stash's log", "log"]]],
+    [/^New items aren't done/, [["Check tonight's run", "ids:tonight-s-run,after-a-scan,time-zone"], ["Run tonight's items now", "task:Schedules: run tonight's waiting steps for new items now"]]],
   ];
 
   // "Find Ollama": where Stash runs, and every usual address tried from there
@@ -3179,7 +3818,7 @@
             h("button", { type: "button", className: "btn btn-sm btn-primary", disabled: saved === t.url, onClick: () => use(t.url) },
               saved === t.url ? "✓ Saved" : "Use this address"))))),
       !ok.length && row("fail", "Ollama didn't answer at any of these", "", r.advice),
-      ok.length > 0 && !ok.some((t) => t.current) && row("warn", "Your setting is the one that doesn't work", `AI: Ollama address is ${r.setting}.`, "Press \"Use this address\" on one that answers."));
+      ok.length > 0 && !ok.some((t) => t.current) && row("warn", "Your setting is the one that doesn't work", `Setup: Ollama address is ${r.setting}.`, "Press \"Use this address\" on one that answers."));
   }
 
   function FaqItem({ q, a }) {
@@ -3220,8 +3859,8 @@
           row(m.vision === false ? "warn" : m.chosen ? "ok" : "info", m.name + (m.chosen ? "  (the one in use)" : ""),
             `${m.size_gb} GB · ${m.vision === false ? "text only - can't see pictures" : m.vision ? "can see pictures" : "couldn't tell if it sees pictures"}`)))
           : row("fail", "No models installed", `Ollama at ${out.url} has none.`, `Run: ollama pull ${out.setting}`),
-        !out.models.some((m) => m.chosen) && row("fail", `AI: model is "${out.setting}"`, "That one isn't installed.",
-          `Run ollama pull ${out.setting}, or set AI: model to one of the models above that can see pictures.`));
+        !out.models.some((m) => m.chosen) && row("fail", `Setup: AI model (in Ollama) is "${out.setting}"`, "That one isn't installed.",
+          `Run ollama pull ${out.setting}, or set Setup: AI model (in Ollama) to one of the models above that can see pictures.`));
       else if (out.state === "files") res = h(React.Fragment, null,
         out.roots.map((r) => h(React.Fragment, { key: r.root },
           row(r.ok === r.checked ? "ok" : r.ok ? "warn" : "fail", r.root, `${r.ok} of ${r.checked} files checked could be opened.`,
@@ -3249,10 +3888,10 @@
   }
   // a check that a task fixes: its button (only shown when it isn't OK)
   const FIX_TASKS = {
-    "look-alike-scan": "Look-alike tags: scan scenes and images",
+    "look-alike-scan": "Tags: scan scenes and images for look-alikes (do this first)",
     "face-scan": "Faces: scan scenes and images",
     "performers-faces-learned": "Faces: learn performers' faces",
-    "tonight-s-run": "AI: run tonight's new items now",
+    "tonight-s-run": "Schedules: run tonight's waiting steps for new items now",
   };
   const ISSUES_URL = "https://github.com/OpenSourceLuffy/stash-plugins/issues/new";
 
@@ -3355,7 +3994,7 @@
       h("p", { className: "bta-setup-sub" }, "Checks everything the Better Organizing AI Add-on needs. Nothing is changed. ",
         h("button", { type: "button", className: "btn btn-secondary btn-sm", onClick: () => { refreshCaps(true); tourBus.open && tourBus.open(); } }, "Show the welcome tour"), " ",
         h("button", { type: "button", className: "btn btn-secondary btn-sm", onClick: () => { refreshCaps(true); tourBus.setup && tourBus.setup(); } }, "Setup guide"), " ",
-        h("button", { type: "button", className: "btn btn-secondary btn-sm", onClick: () => goTo(NIGHTLY_PAGE) }, "🌙 Nightly jobs")),
+        h("button", { type: "button", className: "btn btn-secondary btn-sm", onClick: () => goTo(NIGHTLY_PAGE) }, "🌙 Nightly & after-scan jobs")),
       res.state === "loading" && h("div", { className: "bta-setup-banner" }, "Checking…"),
       res.state === "error" && h("div", { className: "bta-setup-banner fail" }, "The checks couldn't run: " + res.message),
       res.state === "done" && h("div", { className: "bta-setup-banner " + (bad ? "fail" : warn ? "warn" : "ok") },
@@ -3426,14 +4065,14 @@
       h("section", { className: "bta-setup-group" },
         h("h3", null, "Common problems"),
         COMMON.map(([q, a], i) => h(FaqItem, { key: i, q, a }))),
-      h("p", { className: "bta-setup-sub" }, "More in the add-on's README (setup is at the end). A copy of these checks can also be written to the log with the task \"Setup check: write a report to the log\"."));
+      h("p", { className: "bta-setup-sub" }, "More in the add-on's README (setup is at the end). A copy of these checks can also be written to the log with the task \"Setup: check everything and write a report\"."));
   }
 
   // ---- welcome and tour --------------------------------------------------
   // The first time the add-on runs: a welcome with what it does, then an
   // optional tour - one feature per slide (swipe, or Back / Next), each with a
   // screenshot. "Don't show again" is saved in the add-on's settings
-  // ("Welcome: don't show the welcome and tour"); "Remind me later" asks again
+  // ("Setup: hide the welcome and tour"); "Remind me later" asks again
   // the next day on this device. The Setup page can open the tour any time.
   const TOUR_IMG = (f) => `/plugin/${PLUGIN_ID}/assets/tour/${f}`;
   const LATER_KEY = "bta-welcome-later";
@@ -3481,7 +4120,7 @@
       text: "Every tag gets a picture of its own - the most typical photo for it, never one another tag has, skipping blurry or dark ones. Pick a new one from the Tags list's ••• menu.",
       where: "Tags → select → ••• → Most typical picture", go: "/tags" },
     { k: "setup", need: "none", img: "setup.jpg", title: "Setup and help",
-      text: "The setup page checks the face helper, the AI model and Auto Seek, says what to install for anything missing, and starts the tasks. Features show up as soon as what they need is installed.",
+      text: "The setup page checks the face helper, the AI model and the video model, says what to install for anything missing, and starts the tasks. Features show up as soon as what they need is installed.",
       where: "Settings → Plugins → Better Organizing AI → Setup", go: SETUP_PAGE },
   ];
   const tourBus = { open: null };
@@ -3550,7 +4189,7 @@
         ["Open Terminal in the add-on's folder (plugins/BetterTaggingAI, in Stash's config folder) and run the setup - it takes a few minutes and downloads the models:", "sh face-helper/setup.sh"],
         ["Check that it answers:", "curl http://127.0.0.1:11535/health"],
         [`The add-on looks for it at ${c.face_url || "http://localhost:11535"}` + (docker ? " (Stash in Docker Desktop reaches your computer at host.docker.internal)." : ".") +
-          " If yours is somewhere else: Settings → Plugins → Better Organizing AI → Faces: helper address.", null],
+          " If yours is somewhere else: Settings → Plugins → Better Organizing AI → Setup: face helper address.", null],
       ],
       tips: [tip("\"Can't reach the face helper"), tip("setup.sh fails")] });
     else if (!c.embed || !c.text) steps.push({ k: "update", img: "setup-helper.jpg", caption: working, title: "Update the face helper", done: (x) => x.embed && x.text,
@@ -3560,21 +4199,21 @@
     if (c.helper && c.embed && !c.looks) steps.push({ k: "scan", img: "setup-scan.jpg", caption: "Settings → Tasks → Look-alike tags.", title: "Scan your library's looks", done: (x) => x.looks,
       intro: "Look-alike tags, Review's suggestions, Check and search compare pictures by their look. Each scene and photo needs its fingerprint once (well under a second each); new ones get it as they're scanned.",
       todo: [["Run the task (Settings → Tasks → Look-alike tags), or start it here:", null]],
-      task: "Look-alike tags: scan scenes and images",
+      task: "Tags: scan scenes and images for look-alikes (do this first)",
       tips: [tip("Look-alike tags, Similar"), tip("No face matches")] });
     if (!c.ollama) steps.push({ k: "ollama", img: "setup-ollama.jpg", caption: working, title: "Install the AI model (Ollama)", done: (x) => x.ollama,
       intro: "Ask AI for tags, AI titles and performer details use a local AI model in Ollama. Everything else works without it.",
       todo: [
         ["Install Ollama from ollama.com (on a Mac: brew install ollama, then start it with brew services start ollama), then get the model (about 3.3 GB):", `ollama pull ${c.model || "gemma3:4b"}`],
         [`The add-on looks for it at ${c.ollama_url || "http://localhost:11434"}.` + (docker ? " Stash in Docker Desktop: http://host.docker.internal:11434; in Docker on Linux use network_mode: host and http://127.0.0.1:11434." : "") +
-          " Change it under AI: Ollama address.", null],
+          " Change it under Setup: Ollama address.", null],
       ],
       tips: [tip("\"Can't reach Ollama"), tip("\"Ollama doesn't have")] });
-    if (!c.auto_seek) steps.push({ k: "autoseek", img: "setup-autoseek.jpg", caption: "Settings → Plugins → Available Plugins.", title: "Add Auto Seek (for AI markers)", done: (x) => x.auto_seek, optional: true,
-      intro: "AI markers and positions in videos use Auto Seek's video model. Optional - only needed for those.",
+    if (!c.auto_seek) steps.push({ k: "autoseek", img: "setup-scan.jpg", caption: "Settings → Tasks → Markers & positions.", title: "Get the video model (for AI markers)", done: (x) => x.auto_seek, optional: true,
+      intro: "AI markers and positions in videos use Auto Seek's video model - the add-on downloads it itself; the Auto Seek plugin isn't needed. Optional - only for those.",
       todo: [
-        ["Settings → Plugins → Available Plugins: add Auto Seek's plugin source (see the add-on's README) and install Auto Seek.", null],
-        ["Run one of Auto Seek's tasks once so it downloads its model. The add-on keeps its own copy after that.", null],
+        ["Settings → Tasks → Better Organizing AI → Markers & positions: run \"Markers: download the video model (needed first)\" once (about 100 MB).", null],
+        ["Or, if you have the Auto Seek plugin, the add-on uses its model and keeps its own copy.", null],
       ],
       tips: [] });
     steps.push({ k: "check", img: "setup.jpg", title: "Check it all", last: true,
@@ -3751,7 +4390,7 @@
         h("p", { className: "bta-search-help" }, cz.text === undefined ? "Checking what's installed…"
           : !cz.helper ? `Can't reach the face helper${cz.face_url ? " at " + cz.face_url : ""} - is it running? On a Mac it starts at login; check it with curl http://127.0.0.1:11535/health, or run face-helper/setup.sh again. `
           : !cz.text || !cz.embed ? "The face helper is missing CLIP's text model, which search uses - run face-helper/setup.sh again (it updates in place). "
-          : "Search needs your library's look-alike fingerprints first: run \"Look-alike tags: scan scenes and images\" under Settings → Tasks. ",
+          : "Search needs your library's look-alike fingerprints first: run \"Tags: scan scenes and images for look-alikes (do this first)\" under Settings → Tasks. ",
           cz.text !== undefined && h("a", { href: SETUP_PAGE }, "Open the setup page"),
           cz.text !== undefined && " · ",
           cz.text !== undefined && h("a", { href: "#", onClick: (e) => { e.preventDefault(); refreshCaps(true); } }, "Check again")));
@@ -3779,85 +4418,131 @@
       st.items.length > 0 && h("div", { className: "bta-search-grid" }, st.items.map(card)));
   }
 
-  // ---- Nightly jobs page (/ai-nightly) ----------------------------------
-  // What runs each night: Stash's own tasks (backup, scan, clean, identify,
-  // auto tag, generate...) and any plugin's tasks, in order. Saved in the
-  // add-on's settings; at the night time the night timer queues them all and
-  // a tracker notes how each went (shown under "Last run").
+  // ---- Nightly & after-scan jobs page (/ai-nightly) ----------------------
+  // Two lists of jobs - Stash's own tasks (backup, scan, clean, identify,
+  // auto tag, generate...) and any plugin's tasks, in order: one runs every
+  // night at the night time, the other when a scan you start finishes. Saved
+  // in the add-on's settings; the night timer queues them and a tracker notes
+  // how each went (shown under "Last run").
   const NIGHTLY_PAGE = "/ai-nightly";
   const NIGHT_ICON = { finished: ["✓", "ok"], failed: ["✕", "fail"], stopped: ["■", "warn"], skipped: ["–", "info"],
-    queued: ["…", "info"], running: ["▶", "info"] };
+    queued: ["…", "info"], running: ["▶", "info"], waiting: ["·", "info"] };
+  const JOB_TABS = {
+    night: { label: "🌙 Every night", task: "Schedules: run the nightly jobs now", chosen: "chosen", last: "last" },
+    scan: { label: "🔍 After a scan", task: "Schedules: run the after-scan jobs now", chosen: "scan_chosen", last: "scan_last" },
+  };
+  const jobDate = (s) => new Date(String(s).replace(/([+-]\d\d)(\d\d)$/, "$1:$2"));
   function NightlyPage() {
+    const [tab, setTab] = React.useState(() => (new URLSearchParams(location.search).get("list") === "scan" ? "scan" : "night"));
     const [info, setInfo] = React.useState(null);
     const [err, setErr] = React.useState("");
-    const [draft, setDraft] = React.useState(null);
-    const [dirty, setDirty] = React.useState(false);
+    const [drafts, setDrafts] = React.useState(null); // { night: {...}, scan: {...} }
+    const [dirty, setDirty] = React.useState({});
     const [msg, setMsg] = React.useState("");
     const [busy, setBusy] = React.useState(false);
     const [all, setAll] = React.useState([]);
     const [pick, setPick] = React.useState("");
-    const load = React.useCallback((keepDraft) => ask({ mode: "nightly_info" }).then((d) => {
+    const fromInfo = (d, which) => {
+      const c = d[JOB_TABS[which].chosen];
+      return { order: c.order.map((i) => ({ ...i })), time: d.time, tz: d.tz, base: (d.saved_at || {})[which] || "" };
+    };
+    // keep: keep the lists with unsaved changes (the rest show what's saved now)
+    const dirtyRef = React.useRef({});
+    dirtyRef.current = dirty;
+    const load = React.useCallback((keep) => ask({ mode: "nightly_info" }).then((d) => {
       setInfo(d);
-      if (!keepDraft) {
-        setDraft({ stash: d.chosen.stash.slice(), tasks: d.chosen.tasks.map((t) => ({ ...t })), time: d.time, tz: d.tz });
-        setDirty(false);
-      }
+      setDrafts((cur) => {
+        const next = { ...(cur || {}) };
+        ["night", "scan"].forEach((w) => { if (!keep || !next[w] || !dirtyRef.current[w]) next[w] = fromInfo(d, w); });
+        return next;
+      });
+      if (!keep) setDirty({});
     }).catch((e) => setErr(e.message)), []);
+    // back on the page (another app, tab or device may have changed the
+    // lists): show what's saved now
+    React.useEffect(() => {
+      const again = () => { if (document.visibilityState === "visible") load(true); };
+      document.addEventListener("visibilitychange", again);
+      window.addEventListener("pageshow", again);
+      window.addEventListener("focus", again);
+      return () => { document.removeEventListener("visibilitychange", again); window.removeEventListener("pageshow", again); window.removeEventListener("focus", again); };
+    }, []);
     React.useEffect(() => {
       load(false);
       gql("{ plugins { id name enabled tasks { name description } } }").then((d) => setAll((d.plugins || []).filter((p) => p.enabled && (p.tasks || []).length))).catch(() => {});
     }, []);
-    // while last night's jobs are still going: refresh their status
+    const cfg = JOB_TABS[tab];
+    const last0 = info && info[cfg.last];
+    const last = last0 && last0.started && Array.isArray(last0.jobs) ? last0 : null;
+    // while a run is still going: refresh its status
     React.useEffect(() => {
-      if (!info || !info.last || info.last.done) return undefined;
+      if (!last || last.done) return undefined;
       const t = setInterval(() => load(true), 15000);
       return () => clearInterval(t);
-    }, [info && info.last && info.last.done]);
-    if (err) return h("div", { className: "bta-setup" }, h("h2", null, "Nightly jobs"), h("div", { className: "bta-setup-banner fail" }, "Couldn't load: " + err));
-    if (!info || !draft) return h("div", { className: "bta-setup" }, h("h2", null, "Nightly jobs"), h("div", { className: "bta-setup-banner" }, "Loading…"));
-    const change = (fn) => { setDraft((d) => fn({ ...d, stash: d.stash.slice(), tasks: d.tasks.slice() })); setDirty(true); setMsg(""); };
-    const taskKey = (t) => t.plugin + "\u0001" + t.task;
-    const have = new Set(draft.tasks.map(taskKey));
+    }, [tab, last && last.done, last && last.started]);
+    const shell = (body) => h("div", { className: "bta-setup bta-night" }, h("h2", null, "Nightly & after-scan jobs"), body);
+    if (err) return shell(h("div", { className: "bta-setup-banner fail" }, "Couldn't load: " + err));
+    if (!info || !drafts) return shell(h("div", { className: "bta-setup-banner" }, "Loading…"));
+    const draft = drafts[tab];
+    const change = (fn) => {
+      setDrafts((ds) => ({ ...ds, [tab]: fn({ ...ds[tab], order: ds[tab].order.slice() }) }));
+      setDirty((x) => ({ ...x, [tab]: true })); setMsg("");
+    };
+    const itemKey = (i) => (i.stash ? "stash\u0001" + i.stash : i.plugin + "\u0001" + i.task);
+    const taskKey = itemKey;
+    const have = new Set(draft.order.map(itemKey));
+    const stashJob = (id) => info.stash_jobs.find((j) => j.id === id) || { label: id, about: "" };
     const pluginName = (id) => ((all.find((p) => p.id === id) || {}).name) || id;
     const taskInfo = (t) => ((all.find((p) => p.id === t.plugin) || { tasks: [] }).tasks.find((x) => x.name === t.task));
-    const installed = (t) => !!taskInfo(t);
+    const installed = (t) => !all.length || !!taskInfo(t);
+    const ownTask = (t) => t.plugin === PLUGIN_ID && (t.task === JOB_TABS.night.task || t.task === JOB_TABS.scan.task);
     async function save() {
       setBusy(true); setMsg("");
       try {
-        const d = await ask({ mode: "nightly_save", data: draft });
-        setInfo(d); setDirty(false); setMsg("Saved.");
+        const d = await ask({ mode: "nightly_save", data: { order: draft.order, time: draft.time, tz: draft.tz, which: tab, base: draft.base || "" } });
+        setInfo(d);
+        setDrafts((ds) => ({ ...ds, [tab]: fromInfo(d, tab) }));
+        setDirty((x) => ({ ...x, [tab]: false })); setMsg("Saved.");
         return true;
-      } catch (e) { setMsg("Couldn't save: " + e.message); return false; } finally { setBusy(false); }
+      } catch (e) {
+        setMsg("Couldn't save: " + e.message);
+        if (/changed on another device/.test(e.message)) { setDirty((x) => ({ ...x, [tab]: false })); dirtyRef.current = { ...dirtyRef.current, [tab]: false }; load(true); }
+        return false;
+      } finally { setBusy(false); }
     }
     async function runNow() {
-      if (dirty && !(await save())) return;
+      if (dirty[tab] && !(await save())) return;
       setBusy(true);
       try {
-        await gql("mutation ($p: ID!, $t: String!) { runPluginTask(plugin_id: $p, task_name: $t) }", { p: PLUGIN_ID, t: "Nightly jobs: run now" });
+        await gql("mutation ($p: ID!, $t: String!) { runPluginTask(plugin_id: $p, task_name: $t) }", { p: PLUGIN_ID, t: cfg.task });
         setMsg("Started - they're queued in Stash's task list; the results show below as they finish.");
         setTimeout(() => load(true), 4000);
       } catch (e) { setMsg("Couldn't start: " + e.message); } finally { setBusy(false); }
     }
-    const before = info.stash_jobs.filter((j) => j.when === "before");
-    const after = info.stash_jobs.filter((j) => j.when === "after");
-    const stashRow = (j) => h("label", { key: j.id, className: "bta-night-row" },
-      h("input", { type: "checkbox", checked: draft.stash.includes(j.id),
-        onChange: (e) => change((d) => ({ ...d, stash: e.target.checked ? [...d.stash, j.id] : d.stash.filter((x) => x !== j.id) })) }),
-      h("span", null, h("span", { className: "bta-setup-title" }, j.label), h("span", { className: "bta-setup-detail" }, j.about)));
-    const move = (i, by) => change((d) => { const t = d.tasks; const [x] = t.splice(i, 1); t.splice(i + by, 0, x); return d; });
-    const last = info.last;
+    const blocked = tab === "scan" ? new Set(info.not_after_scan || []) : new Set();
+    const stashFree = info.stash_jobs.filter((j) => !blocked.has(j.id) && !have.has("stash\u0001" + j.id));
+    const move = (i, by) => change((d) => { const t = d.order; const [x] = t.splice(i, 1); t.splice(i + by, 0, x); return d; });
+    const add = (item) => change((d) => ({ ...d, order: [...d.order, item] }));
     const next = info.next ? new Date(info.next) : null;
-    const count = draft.stash.length + draft.tasks.length;
-    return h("div", { className: "bta-setup bta-night" },
-      h("h2", null, "Nightly jobs"),
-      h("p", { className: "bta-setup-sub" }, "Pick what runs every night. Stash runs one job at a time, so they run in the order below - while you sleep instead of while you use Stash. ",
+    const count = draft.order.length;
+    const countOf = (w) => drafts[w].order.length;
+    const anything = countOf("night") + countOf("scan") + info.waiting > 0;
+    return shell(h(React.Fragment, null,
+      h("p", { className: "bta-setup-sub" }, "Choose jobs - Stash's own tasks and any plugin's - to run every night, and to run when a scan you start finishes. Stash runs one job at a time, so each list runs in the order shown. ",
         h("a", { href: SETUP_PAGE, onClick: (e) => { e.preventDefault(); goTo(SETUP_PAGE); } }, "Back to AI setup")),
-      h("div", { className: "bta-setup-banner " + (count || info.waiting ? (info.runner ? "ok" : "warn") : "") },
+      h("div", { className: "bta-night-tabs", role: "tablist" },
+        Object.entries(JOB_TABS).map(([w, t]) => h("button", { key: w, type: "button", role: "tab", "aria-selected": tab === w,
+          className: "btn " + (tab === w ? "btn-primary" : "btn-secondary"),
+          onClick: () => { setTab(w); setPick(""); setMsg(""); history.replaceState(null, "", NIGHTLY_PAGE + (w === "scan" ? "?list=scan" : "")); } },
+          t.label + (countOf(w) ? ` (${countOf(w)})` : "") + (dirty[w] ? " •" : "")))),
+      h("div", { className: "bta-setup-banner " + (count ? (info.runner || !anything ? "ok" : "warn") : "") },
         count ? `${count} job${count > 1 ? "s" : ""} chosen` : "Nothing chosen yet",
-        h("small", null, (next ? `Next run: ${next.toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })} (${info.time} ${info.tz})` : `At ${info.time} (${info.tz})`) +
-          (count || info.waiting ? (info.runner ? " · the night timer is running" : " · the night timer starts when you save") : "") +
-          (info.waiting ? ` · ${info.waiting} new item(s) waiting for the AI` : ""))),
-      h("section", { className: "bta-setup-group" },
+        h("small", null, tab === "night"
+          ? (next ? `Next run: ${next.toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })} (${info.time} ${info.tz})` : `At ${info.time} (${info.tz})`) +
+            (info.waiting ? ` · ${info.waiting} new item(s) waiting for the AI` : "")
+          : "When a scan you start finishes (Stash → Tasks → Scan, or a scan button). Scans the nightly run starts don't count - its own list runs after them. Several scans close together: once, after the last.",
+          anything ? (info.runner ? " · the timer is running" : " · the timer starts when you save") : "")),
+      tab === "night" && h("section", { className: "bta-setup-group" },
         h("h3", null, "When"),
         h("div", { className: "bta-night-when" },
           h("label", null, h("span", { className: "bta-setup-title" }, "Time"),
@@ -3866,58 +4551,62 @@
             h("input", { type: "text", className: "form-control", value: draft.tz, placeholder: "e.g. America/New_York", spellCheck: false,
               onChange: (e) => change((d) => ({ ...d, tz: e.target.value })) })))),
       h("section", { className: "bta-setup-group" },
-        h("h3", null, "1. Stash's tasks, first"),
-        h("div", { className: "bta-setup-detail" }, "Scan, Identify, Auto Tag and Generate use the options saved as defaults on ",
-          h("a", { href: "/settings?tab=tasks" }, "Stash's Tasks page"), "."),
-        before.map(stashRow)),
-      h("section", { className: "bta-setup-group" },
-        h("h3", null, "2. Plugin tasks, in this order"),
-        info.nightly_items && h("div", { className: "bta-setup-detail" }, "\"AI: wait until night for new items\" is on: new items saved for tonight are always done, even if that task isn't in the list."),
-        draft.tasks.length === 0 && h("div", { className: "bta-setup-detail" }, "None yet - add some below."),
-        draft.tasks.map((t, i) => h("div", { key: taskKey(t), className: "bta-night-task" + (installed(t) || !all.length ? "" : " missing") },
-          h("span", { className: "bta-night-n" }, i + 1),
-          h("span", { className: "bta-night-name" }, h("span", { className: "bta-setup-title" }, t.task),
-            h("span", { className: "bta-setup-detail" }, pluginName(t.plugin) + (installed(t) || !all.length ? "" : " - not installed or turned off: skipped"))),
-          h("span", { className: "bta-night-btns" },
-            h("button", { type: "button", className: "btn btn-secondary btn-sm", disabled: i === 0, onClick: () => move(i, -1) }, "↑ Up"),
-            h("button", { type: "button", className: "btn btn-secondary btn-sm", disabled: i === draft.tasks.length - 1, onClick: () => move(i, 1) }, "↓ Down"),
-            h("button", { type: "button", className: "btn btn-secondary btn-sm", onClick: () => change((d) => ({ ...d, tasks: d.tasks.filter((_, k) => k !== i) })) }, "✕ Remove")))),
+        h("h3", null, "The jobs, in the order they run"),
+        h("div", { className: "bta-setup-detail" }, "Move any job up or down. Usually Scan first (so the rest see new files), then Identify and the tagging, with Generate and Optimise last. " +
+          (tab === "scan" ? "Scan isn't offered here - it would start this list again. " : "") +
+          "Scan, Identify, Auto Tag and Generate use the options saved on ", h("a", { href: "/settings?tab=tasks" }, "Stash's Tasks page"), "."),
+        tab === "night" && info.nightly_items && h("div", { className: "bta-setup-detail" }, "\"New items: wait until night for the AI model steps\" is on: new items saved for tonight are always done, even if that task isn't in the list."),
+        draft.order.length === 0 && h("div", { className: "bta-setup-detail bta-night-empty" }, "Nothing yet - add jobs below."),
+        draft.order.map((it, i) => {
+          const sj = it.stash && stashJob(it.stash);
+          const ok = it.stash ? true : installed(it);
+          return h("div", { key: itemKey(it), className: "bta-night-task" + (ok ? "" : " missing") + (it.stash ? " stash" : "") },
+            h("span", { className: "bta-night-n" }, i + 1),
+            h("span", { className: "bta-night-name" },
+              h("span", { className: "bta-setup-title" }, it.stash ? sj.label : it.task),
+              h("span", { className: "bta-setup-detail" }, it.stash ? "Stash · " + sj.about : pluginName(it.plugin) + (ok ? "" : " - not installed or turned off: skipped"))),
+            h("span", { className: "bta-night-btns" },
+              h("button", { type: "button", className: "btn btn-secondary btn-sm", disabled: i === 0, onClick: () => move(i, -1) }, "↑ Up"),
+              h("button", { type: "button", className: "btn btn-secondary btn-sm", disabled: i === draft.order.length - 1, onClick: () => move(i, 1) }, "↓ Down"),
+              h("button", { type: "button", className: "btn btn-secondary btn-sm", onClick: () => change((d) => ({ ...d, order: d.order.filter((_, k) => k !== i) })) }, "✕ Remove")));
+        }),
         h("div", { className: "bta-setup-run" },
-          h("select", { className: "form-control", value: pick, onChange: (e) => setPick(e.target.value), "aria-label": "Task to add" },
-            h("option", { value: "" }, "Add a task from any plugin…"),
+          h("select", { className: "form-control", value: pick, onChange: (e) => setPick(e.target.value), "aria-label": "Job to add" },
+            h("option", { value: "" }, "Add a job - Stash's or any plugin's…"),
+            stashFree.length > 0 && h("optgroup", { label: "Stash" }, stashFree.map((j) => h("option", { key: j.id, value: "stash\u0001" + j.id }, j.label))),
             all.map((p) => h("optgroup", { key: p.id, label: p.name },
-              p.tasks.filter((t) => !have.has(p.id + "\u0001" + t.name)).map((t) => h("option", { key: t.name, value: p.id + "\u0001" + t.name }, t.name))))),
+              p.tasks.filter((t) => !have.has(p.id + "\u0001" + t.name) && !ownTask({ plugin: p.id, task: t.name }))
+                .map((t) => h("option", { key: t.name, value: p.id + "\u0001" + t.name }, t.name))))),
           h("button", { type: "button", className: "btn btn-primary", disabled: !pick, onClick: () => {
-            const [plugin, task] = pick.split("\u0001");
-            change((d) => ({ ...d, tasks: [...d.tasks, { plugin, task }] })); setPick("");
+            const [a1, a2] = pick.split("\u0001");
+            add(a1 === "stash" ? { stash: a2 } : { plugin: a1, task: a2 }); setPick("");
           } }, "+ Add")),
-        pick && h("div", { className: "bta-setup-detail" }, (taskInfo({ plugin: pick.split("\u0001")[0], task: pick.split("\u0001")[1] }) || {}).description || ""),
-        (() => {
-          const sug = info.suggested.filter((t) => !have.has(taskKey(t)) && installed(t));
-          return sug.length > 0 && h("div", { className: "bta-night-sug" }, h("span", { className: "bta-setup-detail" }, "Good at night: "),
-            sug.map((t) => h("button", { key: t.task, type: "button", className: "btn btn-secondary btn-sm",
-              onClick: () => change((d) => ({ ...d, tasks: [...d.tasks, t] })) }, "+ " + t.task)));
-        })()),
-      h("section", { className: "bta-setup-group" },
-        h("h3", null, "3. Stash's tasks, last"),
-        after.map(stashRow)),
+        pick && h("div", { className: "bta-setup-detail" }, pick.startsWith("stash\u0001") ? stashJob(pick.split("\u0001")[1]).about
+          : (taskInfo({ plugin: pick.split("\u0001")[0], task: pick.split("\u0001")[1] }) || {}).description || ""),
+        h("div", { className: "bta-night-sug" }, h("span", { className: "bta-setup-detail" }, "Quick add: "),
+          stashFree.filter((j) => ["scan", "identify", "autotag", "generate"].includes(j.id)).map((j) => h("button", { key: j.id, type: "button", className: "btn btn-secondary btn-sm",
+            onClick: () => add({ stash: j.id }) }, "+ " + j.label)),
+          info.suggested.filter((t) => !have.has(taskKey(t)) && installed(t) && !(tab === "scan" && t.task === "Schedules: run tonight's waiting steps for new items now"))
+            .map((t) => h("button", { key: t.task, type: "button", className: "btn btn-secondary btn-sm", onClick: () => add(t) }, "+ " + t.task)))),
       h("div", { className: "bta-setup-tools bta-night-save" },
-        h("button", { type: "button", className: "btn btn-primary", disabled: busy || !dirty, onClick: save }, dirty ? "Save" : "✓ Saved"),
+        h("button", { type: "button", className: "btn btn-primary", disabled: busy || !dirty[tab], onClick: save }, dirty[tab] ? "Save" : "✓ Saved"),
         h("button", { type: "button", className: "btn btn-secondary", disabled: busy || !count, onClick: runNow }, "▶ Run them now"),
-        dirty && h("button", { type: "button", className: "btn btn-link", disabled: busy, onClick: () => load(false) }, "Undo changes"),
+        dirty[tab] && h("button", { type: "button", className: "btn btn-link", disabled: busy,
+          onClick: () => { setDrafts((ds) => ({ ...ds, [tab]: fromInfo(info, tab) })); setDirty((x) => ({ ...x, [tab]: false })); } }, "Undo changes"),
         msg && h("span", { className: "bta-setup-detail" }, msg)),
       h("section", { className: "bta-setup-group" },
         h("h3", null, "Last run"),
-        !last ? h("div", { className: "bta-setup-detail" }, "Hasn't run yet.") : h("div", null,
-          h("div", { className: "bta-setup-detail" }, `Started ${new Date(last.started.replace(/([+-]\d\d)(\d\d)$/, "$1:$2")).toLocaleString()}` +
-            (last.done ? (last.ended ? ` · all done ${new Date(last.ended.replace(/([+-]\d\d)(\d\d)$/, "$1:$2")).toLocaleString()}` : " · done") : " · still going (updates every 15 s)")),
+        !(last && last.started && Array.isArray(last.jobs)) ? h("div", { className: "bta-setup-detail" }, "Hasn't run yet.") : h("div", null,
+          h("div", { className: "bta-setup-detail" }, `Started ${jobDate(last.started).toLocaleString()}` +
+            (last.done ? (last.ended ? ` · all done ${jobDate(last.ended).toLocaleString()}` : " · done") : " · still going (updates every 15 s)")),
           last.jobs.map((r, i) => {
             const [icon, st] = NIGHT_ICON[r.status] || ["?", "info"];
             return h("div", { key: i, className: "bta-setup-check " + st },
               h("span", { className: "bta-setup-icon" }, icon),
               h("div", null, h("div", { className: "bta-setup-title" }, r.label),
-                h("div", { className: "bta-setup-detail" }, r.status[0].toUpperCase() + r.status.slice(1) + (r.note ? " - " + r.note : ""))));
-          }))));
+                h("div", { className: "bta-setup-detail" }, (r.status === "waiting" ? "Waiting - starts when the jobs before it (and what they set off) are done"
+                  : r.status[0].toUpperCase() + r.status.slice(1)) + (r.note ? " - " + r.note : ""))));
+          })))));
   }
 
   if (api.register && api.register.route) {
@@ -3988,6 +4677,7 @@
     const [st, setSt] = React.useState({ state: "idle" });
     const [have, setHave] = React.useState([]); // the scene's markers: [{seconds, tag}]
     const [busy, setBusy] = React.useState({});
+    const addingRef = React.useRef(false);
     const [tagName, setTagName] = React.useState("Scene Shift");
     const [showAll, setShowAll] = React.useState(false); // the cards again after all were added
     React.useEffect(() => { aiMarkerTagName().then(setTagName); }, []);
@@ -4022,6 +4712,10 @@
       } catch (e) { /* the list shows them after a reload */ }
     }
     async function add(list) {
+      // (one add at a time: a second tap while markers are being made is
+      // ignored - the busy mark below only shows after the next redraw)
+      if (addingRef.current) return;
+      addingRef.current = true;
       const todo = list.filter((m) => !added(m));
       setBusy((b) => ({ ...b, ...Object.fromEntries(todo.map((m) => [m.start, true])) }));
       try {
@@ -4033,6 +4727,7 @@
       }
       await loadHave();
       setBusy({});
+      addingRef.current = false;
       refreshStash();
     }
     if (st.state === "idle") {
@@ -4051,6 +4746,7 @@
     }
     const ms = st.markers || [];
     const left = ms.filter((m) => !added(m));
+    const adding = Object.keys(busy).length > 0;
     // all added (Add all, or one by one): the cards are put away
     if (ms.length && !left.length && !showAll) {
       return h("div", { className: "bta-markers" },
@@ -4063,7 +4759,8 @@
       h("div", { className: "bta-markers-head" },
         h("b", null, ms.length ? `AI markers (${ms.length})` : "No shifts found"),
         showAll && !left.length && h("button", { type: "button", className: "btn btn-secondary btn-sm", onClick: () => setShowAll(false) }, "Hide them"),
-        left.length > 1 && h("button", { type: "button", className: "btn btn-primary btn-sm", onClick: () => add(left) }, `+ Add all ${left.length}`),
+        left.length > 1 && h("button", { type: "button", className: "btn btn-primary btn-sm", disabled: adding, onClick: () => add(left) },
+          adding ? "Adding…" : `+ Add all ${left.length}`),
         h("button", { type: "button", className: "btn btn-secondary btn-sm", onClick: () => look(true) }, "↻ Look again")),
       h("div", { className: "bta-markers-note" },
         `Looked at ${st.looked} frames (one every ${Math.round(st.step)} s). A marker where the action starts and at each big shift, ` +
@@ -4077,7 +4774,7 @@
           h("div", { className: "bta-markers-line" },
             h("span", { className: "bta-markers-span" }, `${clock(m.start)} – ${clock(m.end)}`),
             added(m) ? h("span", { className: "bta-markers-done" }, "✓ Added")
-              : h("button", { type: "button", className: "btn btn-primary btn-sm", disabled: !!busy[m.start], onClick: () => add([m]) },
+              : h("button", { type: "button", className: "btn btn-primary btn-sm", disabled: adding, onClick: () => add([m]) },
                 busy[m.start] ? "Adding…" : "+ Add"))))));
   }
 
@@ -4285,6 +4982,7 @@
     const [list, setList] = React.useState([]); // [{key, index, title, why}]
     const [have, setHave] = React.useState([]);
     const [busy, setBusy] = React.useState(false);
+    const addingRef = React.useRef(false);
     const [err, setErr] = React.useState("");
     const [pick, setPick] = React.useState(null); // the chapter whose images are shown
     const [showAdded, setShowAdded] = React.useState(false);
@@ -4308,6 +5006,8 @@
     const imgs = st.images || [];
     const added = (c) => have.some((x) => x.image_index === c.index);
     async function add(cs) {
+      if (addingRef.current) return; // (one add at a time - see AI markers)
+      addingRef.current = true;
       setBusy(true); setErr("");
       try {
         for (const c of cs.filter((x) => !added(x))) {
@@ -4320,6 +5020,7 @@
         setErr(e.message);
       }
       setBusy(false);
+      addingRef.current = false;
     }
     function edit(k, change) {
       setList((l) => {

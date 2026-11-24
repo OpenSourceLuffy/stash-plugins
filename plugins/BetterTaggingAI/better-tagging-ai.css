@@ -1974,6 +1974,63 @@ body:not(.mui-light) .bta-guide-shot { background: #202b33; }
 .bta-night-name { flex: 1 1 12rem; }
 .bta-night-btns { display: flex; flex-wrap: wrap; gap: .3rem; }
 .bta-night-sug { display: flex; flex-wrap: wrap; gap: .35rem; align-items: center; margin-top: .6rem; }
-.bta-night-save { position: sticky; bottom: 0; padding: .6rem 0; background: inherit; z-index: 2; flex-wrap: wrap; align-items: center; }
-.bta-night .bta-setup-tools.bta-night-save { background: var(--bs-body-bg, #202b33); }
-body.mui-light .bta-night .bta-setup-tools.bta-night-save { background: #fff; }
+.bta-night-save { padding: .6rem 0; flex-wrap: wrap; align-items: center; margin-top: .4rem; }
+.bta-night-tabs { display: flex; flex-wrap: wrap; gap: .4rem; margin: .4rem 0 .8rem; }
+.bta-night-task.stash .bta-night-n { background: rgba(61, 139, 253, 0.35); }
+
+/* Settings → Plugins: the add-on's settings in sections */
+.plugin-settings.bta-settings-arranged { display: flex; flex-direction: column; }
+.bta-settings-head { margin: 1.4rem 0 .2rem; padding: 0 0 .3rem 35px; border-bottom: 1px solid rgba(128,128,128,.35);
+  font-size: .8rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; opacity: .85; }
+.bta-settings-head:first-child, .plugin-settings.bta-settings-arranged > .bta-settings-head[style*="order: 0"] { margin-top: .4rem; }
+.bta-settings-jobs { display: block; margin-top: .5rem; font-size: .95rem; font-weight: 400; letter-spacing: 0; text-transform: none; }
+
+/* Scene edit: Suggest covers */
+.bta-covers { margin-top: .6rem; }
+.bta-covers-status { margin: .5rem 0; font-size: .9rem; opacity: .9; }
+.bta-covers-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: .6rem; margin-bottom: .6rem; }
+.bta-cover { border-radius: 8px; overflow: hidden; background: rgba(128,128,128,.12); display: flex; flex-direction: column; border: 2px solid transparent; }
+.bta-cover.chosen { border-color: #3d8bfd; }
+.bta-cover img { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; display: block; background: #000; }
+.bta-profiles { margin-bottom: 1rem; }
+.bta-profiles .bta-covers-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+.bta-profiles .bta-cover img { aspect-ratio: 2 / 3; }
+.bta-profiles .bta-cover-meta a { color: inherit; opacity: .8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bta-cover-meta { display: flex; justify-content: space-between; align-items: center; gap: .4rem; padding: .35rem .5rem; font-size: .85rem; }
+.bta-cover-score { font-weight: 600; padding: 0 .35rem; border-radius: 4px; background: rgba(128,128,128,.25); }
+.bta-cover-score.good { background: rgba(40,167,69,.35); }
+.bta-cover-score.ok { background: rgba(255,193,7,.35); }
+.bta-cover-score.low { background: rgba(220,53,69,.3); }
+.bta-cover .btn { margin: 0 .5rem .5rem; }
+.bta-cover-new { font-size: .75rem; font-weight: 700; padding: 0 .35rem; border-radius: 4px; background: #3d8bfd; color: #fff; }
+
+/* Settings → Tasks: the check before a long task */
+.bta-gate { position: fixed; inset: 0; z-index: 2000; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; padding: 16px; }
+.bta-gate-box { position: relative; background: #394b59; color: #f5f8fa; border: 1px solid rgba(255,255,255,.12); border-radius: 12px; max-width: 540px; width: 100%; padding: 1.3rem 1.4rem 1.2rem; box-shadow: 0 12px 48px rgba(0,0,0,.5); max-height: calc(100vh - 32px); overflow: auto; font-size: 1rem; line-height: 1.5; }
+.bta-gate-box h4 { font-size: 1.2rem; font-weight: 600; margin: 0 2rem .8rem 0; color: #fff; }
+.bta-gate-box p { margin-bottom: .7rem; }
+.bta-gate-box b { color: #fff; }
+.bta-gate-box ul { padding-left: 1.2rem; margin-bottom: .6rem; }
+.bta-gate-note { color: #c5d0d9; font-size: .95em; }
+.bta-gate-check { display: flex; gap: .55rem; align-items: center; margin: .3rem 0; cursor: pointer; color: #f5f8fa; }
+.bta-gate-check input { width: 1.1rem; height: 1.1rem; }
+.bta-gate-actions { display: flex; flex-wrap: wrap; gap: .6rem; margin-top: 1rem; }
+.bta-gate-actions .btn { font-size: .95rem; padding: .45rem .9rem; }
+.bta-gate-actions .btn-secondary { background: #5c7080; border-color: #5c7080; color: #fff; }
+.bta-gate-x { position: absolute; top: .55rem; right: .6rem; background: none; border: 0; color: inherit; opacity: .7; font-size: 1.1rem; line-height: 1; padding: .3rem; }
+.bta-gate-x:hover { opacity: 1; }
+/* (themes colour headings, labels and buttons too: these win) */
+#bta-gate .bta-gate-box h4 { color: #fff !important; }
+#bta-gate .bta-gate-check, #bta-gate .bta-gate-check * { color: #f5f8fa !important; }
+#bta-gate .bta-gate-note { color: #d3dce3 !important; }
+#bta-gate .bta-gate-actions .btn-secondary { background: #5c7080 !important; border-color: #5c7080 !important; color: #fff !important; }
+#bta-gate .bta-gate-actions .btn-secondary:hover { background: #6b8192 !important; }
+#bta-gate .bta-gate-actions .btn:disabled { opacity: 1; }
+#bta-gate .bta-gate-actions .btn.bta-gate-done { background: #0f9960 !important; border-color: #0f9960 !important; color: #fff !important; }
+
+/* Suggest covers: stitched covers (Vertical Stitcher) */
+.bta-covers-head { font-weight: 600; margin: .2rem 0 .4rem; }
+.bta-covers-stitched { margin-bottom: 1rem; }
+
+/* Review → Faces: "Favourites only" on */
+.bta-fr-chip.on { background: #d9822b; color: #fff; border-color: transparent; }

@@ -104,6 +104,23 @@ _detector = cv2.FaceDetectorYN.create(DETECTOR, "", (320, 320), 0.8, 0.3, 5000)
 _recognizer = cv2.FaceRecognizerSF.create(RECOGNIZER, "")
 
 
+def _gpu():
+    """Whether the models can run on an NVIDIA graphics card (shown in /health)."""
+    try:
+        import onnxruntime as ort
+        return "CUDAExecutionProvider" in ort.get_available_providers()
+    except Exception:
+        return False
+
+
+def _providers(ort):
+    """Where the ONNX models run: an NVIDIA graphics card (CUDA) when this
+    onnxruntime can use one (onnxruntime-gpu), else the CPU. With thanks to
+    scruffware, who added CUDA in their fork."""
+    have = set(ort.get_available_providers())
+    return [p for p in ("CUDAExecutionProvider", "CPUExecutionProvider") if p in have] or ["CPUExecutionProvider"]
+
+
 def faces_in(data):
     img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
     if img is None:
@@ -151,7 +168,7 @@ def clip_text(texts):
             tok = Tokenizer.from_file(CLIP_TOKENIZER)
             tok.enable_padding(length=77, pad_id=49407)
             tok.enable_truncation(77)
-            _clip_text = (tok, ort.InferenceSession(CLIP_TEXT_MODEL, providers=["CPUExecutionProvider"]))
+            _clip_text = (tok, ort.InferenceSession(CLIP_TEXT_MODEL, providers=_providers(ort)))
         except Exception:
             _clip_text = False
     if not _clip_text:
@@ -221,7 +238,7 @@ def clip_session():
             import onnxruntime as ort
             opts = ort.SessionOptions()
             opts.intra_op_num_threads = 4
-            _clip = ort.InferenceSession(CLIP_MODEL, opts, providers=["CPUExecutionProvider"])
+            _clip = ort.InferenceSession(CLIP_MODEL, opts, providers=_providers(ort))
         except Exception:
             _clip = False
     return _clip or None
@@ -284,7 +301,7 @@ def body_parts(data):
     if _body is None:
         try:
             import onnxruntime as ort
-            _body = ort.InferenceSession(BODY_MODEL, providers=["CPUExecutionProvider"])
+            _body = ort.InferenceSession(BODY_MODEL, providers=_providers(ort))
         except Exception:
             _body = False
     if not _body:
@@ -434,7 +451,8 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/health":
             self._send(200, {"ok": True, "embed": os.path.exists(CLIP_MODEL), "body": os.path.exists(BODY_MODEL),
                              "match": True, "knn": True, "cluster": True, "ocr": HAVE_OCR, "apple": HAVE_OCR, "shotcrop": True,
-                             "text": os.path.exists(CLIP_TEXT_MODEL) and os.path.exists(CLIP_TOKENIZER)})
+                             "text": os.path.exists(CLIP_TEXT_MODEL) and os.path.exists(CLIP_TOKENIZER),
+                             "gpu": _gpu()})
         else:
             self._send(404, {"error": "not found"})
 

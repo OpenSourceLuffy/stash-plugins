@@ -32,3 +32,4 @@ plugins/*/gallery_check_cache.json
 plugins/*/handle_pending.json
 plugins/*/tag_tidy.json
 plugins/*/tag_groups_cache.json
+plugins/*/job_lists.json

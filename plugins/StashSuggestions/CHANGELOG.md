@@ -2,6 +2,13 @@
 
 Newest first.
 
+## 1.4 (2026-11-23)
+
+- **Similar photos favour good-looking photos**: with the [Better Organizing AI Add-on](../BetterTaggingAI)'s
+  photo scores (Apple's aesthetics score, saved on each photo on a Mac), better-looking photos rank
+  higher among the matches (up to 3 points either way, next to 2 per shared tag or gallery), and the
+  fill-up photos come best-looking first. Without the scores, nothing changes.
+
 ## 1.3 (2026-11-16)
 
 - **Similar galleries** under a gallery's pictures.

@@ -11,6 +11,14 @@ import json
 import sys
 import urllib.request
 
+# Windows: read and write Stash's pipes as UTF-8 (the console's code page
+# otherwise garbles names with accents or other alphabets)
+for _stream in (sys.stdin, sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 PLUGIN_ID = "LibraryCleanup"
 BATCH = 200
 

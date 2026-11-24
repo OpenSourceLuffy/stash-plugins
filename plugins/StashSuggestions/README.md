@@ -18,7 +18,7 @@ performer pages (plus a performer's galleries and studios), so there's always so
 
 ![Similar photos and More with rows under a photo](../../docs/screenshots/Stash_Suggestions_Image.png)
 
-- **Similar photos**: scored by shared tags and galleries (2 points each) and look-alike performers (up to 5). Photos of the same performer are left out, since they have their own row. If there aren't enough matches, it fills up with unorganised photos, then random ones.
+- **Similar photos**: scored by shared tags and galleries (2 points each) and look-alike performers (up to 5). With the [Better Organizing AI Add-on](../BetterTaggingAI)'s photo scores (Apple's aesthetics score, on a Mac), better-looking photos count up to 3 points more (and poor ones up to 3 less), and the fill-ups come best-looking first. Photos of the same performer are left out, since they have their own row. If there aren't enough matches, it fills up with unorganised photos, then random ones.
 - **More from [gallery]** when you came from a gallery, or **More from [row]** when you came from a home page row, using that row's own filter. It's in the same order, starting at the photo you're on (with the 2 before it in view on wider screens); scroll left for earlier ones.
 - **More with [performer]**: other photos with the same performers.
 - Each row ends with a **Load more** card. With Modern UI, swiping on the next photo moves through the row you picked from.

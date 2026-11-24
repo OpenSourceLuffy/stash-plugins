@@ -4,6 +4,169 @@ Newest first. Versions are what Stash shows under Settings → Plugins. The add-
 (`btt_core.py`) with [Better Organizing Tools](../BetterTaggingTools), so some versions only bring
 that plugin's changes.
 
+## 1.8 (2026-11-24)
+
+- **Markers help scenes**: a scene's markers now count towards its own tags, faces and AI pictures.
+  - *Tags*: what a scene's markers look like (each marker picture compared with your tagged scenes,
+    photos and markers) is added to the scene's look-alike tags. A tag seen in 2 or more of a scene's
+    markers counts fully; one marker alone can suggest it in Review but never adds it on its own.
+    Review's cards show the marker's picture, when it's seen, and why ("seen in 3 of its markers").
+  - *Faces*: "Faces: scan" also looks at marker pictures, so a performer is found in more pictures of
+    a scene (the face card shows the marker picture when that's the clearest).
+  - *AI tagging*: a scene with markers sends the AI 4 of its marker pictures (the most different
+    ones, skipping an intro marker) instead of 4 fixed frames - faster, and real moments.
+- **A scene's tags help its markers**: in Review → Tags → Markers, a tag the scene already has needs
+  less look-alike support to be suggested for one of its markers, and ranks higher ("its scene has
+  this tag"). The scene's tags alone are never enough - the marker has to look like it too.
+- **A marker's tags go on its scene**: a tag you give a marker (in Stash's marker form, or Yes in
+  Review → Tags → Markers) that its scene doesn't have is added to the scene too - not Scene Shift,
+  excluded tags, or tags you took off that scene. New task "Markers: add their tags to their scenes"
+  (with a preview) does it for markers tagged before; turn it off with "Markers: don't add a marker's
+  tags to its scene".
+- **Review → Faces shows the face**: a scene's card showed its cover, which may not show that
+  performer at all - you had to open the video to see the moment. It now shows the frame where the face
+  was seen best, cut around that face (made as the card comes up, a moment ahead, and kept); photos
+  where the face is small are cut around it too. Also in List and in the zoomed view.
+- **Review → Faces: Favourites only** (☆ at the top): only suggestions for your favourite performers.
+  Faces are still compared with everyone, so the "next closest" check stays the same.
+- **Big libraries no longer stop Stash**: asking Stash for every scene or image at once (Review's
+  Tags, Studios, Galleries and New, and many tasks) could take more memory than it has on a library
+  of tens of thousands of items. Such requests are now split into pages of 500, and long lists of
+  ids into batches - the results are the same. Thanks to scruffware, who found it and sent a fix.
+- **Face helper on NVIDIA graphics cards**: with `onnxruntime-gpu` installed, the picture
+  fingerprints, search and body models run on CUDA, else on the CPU as before; `/health` says
+  `"gpu": true` when it can. Thanks to scruffware for adding this in their fork.
+- **Tasks renamed consistently**: each name starts with its group (Setup, Schedules, Tags, Faces,
+  Markers, Titles, Studios, Links, Tag pictures, Marker pictures, Image scores, Scene covers,
+  Screenshots, Performer details), then what it does; "scenes and images" throughout; the method in
+  brackets only where there are two ways to the same result ("(AI model)" / "(look-alikes)"); Mac-only
+  tasks say "(Mac)"; every preview ends "(no changes)" and comes last in its group. "AI" is no longer
+  used as a label (every task uses AI of some kind); "AI markers" stays as the markers' name.
+  Settings follow the same rule: each starts with its section (Setup, New items, Tags, Titles,
+  Faces, Markers, Poses, Scene covers, Schedules) and the sections are Setup, New items, Tags & titles,
+  Faces, Markers & poses and Scene covers - e.g. "AI: wait until night for new items" is now
+  "New items: wait until night for the AI model steps". Only the names changed: your settings keep
+  their values.
+  AI tagging, look-alike tags, body tags and poses are one **Tags** group, and Scene covers a group of
+  its own. Nightly and after-scan lists saved with the old names, and "Don't show this again"
+  choices, carry over by themselves.
+- **Nightly and after-scan jobs run one at a time**: each job starts once the one before it has
+  finished and what it set off has run too (a scan's new items get their titles, dates and tags
+  before Identify, Generate and the rest), instead of all being queued at once - a long Generate no
+  longer holds up the new items. Other jobs in Stash's queue are waited for up to 45 minutes. The
+  jobs page shows the ones still to come as "Waiting".
+- Titles from file names leave out hashtags (`#amateur #solo`, from X / TikTok downloads); `#12`
+  numbering stays.
+- AI titles follow Better Organizing Tools' naming style for titles (2.4), when it's installed and set.
+- **Windows fixes** (both plugins, from a check of everything for Windows):
+  - Names with accents or in other alphabets, and the log's "→" / "✓", were garbled or shown as
+    `\u2192` escapes - Python used the console's code page for Stash's pipes and the night runner's
+    log. They're UTF-8 now, and text sent from the page (titles, names) arrives intact.
+  - ffmpeg and the other tools get no console window of their own (no windows flashing up when Stash
+    runs without a console).
+  - Every record file is saved with a retry: on Windows replacing a file fails while another task
+    is reading it for a moment (23 places didn't retry).
+  - The night runner check gives Windows its exact types (64-bit handles).
+- Fixed: the nightly and after-scan job lists could go back to an older version. Settings → Plugins
+  saves all of a plugin's settings as the page loaded them, so changing any setting on a page opened
+  before the list was changed put the old list back. The lists are now also kept in the add-on's own
+  file (`job_lists.json`), which wins.
+- The jobs page shows what's saved now whenever you come back to it (another app, tab or device may
+  have changed the lists), and a page that loaded a list before it was saved elsewhere can't save its
+  older copy over it - it says so and shows the newer list.
+- **A check before a task starts** (Settings → Tasks): pressing one of the add-on's tasks first checks
+  that what it needs is set up (the AI model in Ollama, the face helper, Apple's scores on a Mac, the
+  video model, the look-alike scan) - if not, it says what's missing and opens the setup page. A task
+  that would take 10 minutes or more shows roughly how long (from what's still to do) with **Run
+  now**, **Add to the nightly run**, **Don't show this again** (for that task, in this browser) and
+  **Close**. Quick, ready tasks start straight away as before.
+- **Suggest profile pictures** (performer edit): their photos (best-scoring first) and frames of their
+  scenes, cut to a 2:3 portrait around their face - only pictures where the face is theirs (their
+  known faces; without those, pictures with one face). With Apple's score (a Mac) the best 9 first,
+  else the closest faces; **Look at more pictures** keeps the best. **Use this picture** puts it in the
+  form like Set image, so Save keeps it and Cancel doesn't.
+- **Links in URLs**: the studios-from-accounts tasks (and new scenes and photos after a scan) also put
+  the accounts' profile links in the item's URLs - from its file name, title, description or links,
+  or from a watermark when it's a studio or performer you have or was read in another item too - and
+  web links written in its title or description (not a bare home page like "metadata provided by
+  https://…"). New task "Links: add account and written links to scenes and photos" does the quick,
+  no-AI part for every scene and photo.
+- **No frames from end cards**: phone clips often end on TikTok's or Instagram's end card (a dark
+  screen with their logo), a creator's logo card, or Control Center. Frames for covers, Suggest
+  covers, the AI's pictures, faces, look-alikes, body tags and positions now come from before that,
+  and never from the last 2 seconds (227 of 571 vertical clips here had an end card). AI markers
+  don't start on one. Each video's end is worked out once and kept (`video_ends.json`).
+- **More varied cover suggestions**: Suggest covers no longer shows several near copies of the same
+  shot. Each suggestion has to look different from the better ones before it (among covers scoring
+  close to the best); near copies only fill places left when a video is mostly one shot. The same
+  goes when Compare more frames merges rounds, and for stitched covers (which no longer reuse the same
+  moments). Each Compare more frames round now shows 9 more (18, 27… up to 36), the best so far.
+- **Stitched cover suggestions**: with [Vertical Stitcher](../VerticalStitcher) (1.4 or later)
+  installed and turned on, Suggest covers on a vertical scene also shows covers stitched its way -
+  from the best-scoring frames (on a Mac) and evenly spaced - each scored, above the single frames.
+  A chosen one is saved as Vertical Stitcher's, so the covers tasks leave it alone; Undo works as usual.
+- **Vertical Stitcher's covers are recognised**: the covers tasks call them "made by Vertical
+  Stitcher" and always leave them alone; Vertical Stitcher picks its frames with this add-on's
+  scores when both are installed.
+- **Markers first in Review**: in Review → Tags → Suggested, when one of a scene's markers is
+  suggested the same tag, the card is that marker's ("Tag this marker …?", playing from the marker) -
+  a clearer view of what's going on, and Yes tags the scene too. Undo takes it off both. Scenes
+  without such a marker keep their scene card.
+- Fixed: tapping **+ Add all** on AI markers (or Suggested chapters on a gallery) several times
+  quickly added the markers several times. The buttons now lock at once and show "Adding…" until
+  it's done, and markers a scene already has at that time are never added again.
+- Fixed: the plugins' file locks didn't work with Stash in Docker Desktop on a Mac (the plugins
+  folder is shared into the container, where locks aren't kept), so records updated at the same
+  moment - auto tags, queues, picture records - could overwrite each other. Locks are now kept in
+  the computer's own temporary folder.
+- **After-scan jobs**: the jobs page (now "Nightly & after-scan jobs", `/ai-nightly`) has a second
+  list, **After a scan** - Stash's own tasks (all but Scan) and any plugin's tasks, in your order, run
+  when a scan you start finishes. Scans the nightly run starts don't count, several scans close
+  together start it once, and a cancelled scan doesn't. New task: "After-scan jobs: run now".
+- The page has a tab for each list, each with its own Save, Run them now and Last run.
+- **Any order**: each list is now one list you can put in any order - Stash's tasks too (e.g. Scan,
+  Identify, AI markers, AI tagging, AI titles, or Auto Tag after the AI tagging), with ↑ Up / ↓ Down.
+  Stash's tasks are added from the same picker as plugin tasks, or with Quick add. Lists saved before
+  keep their order.
+- **Tidier settings and tasks**: the settings are in sections (Connections, New items after a scan,
+  AI tagging, Faces, Markers & poses, Schedules) instead of Stash's alphabetical order, and the night
+  time and job lists are a link to the jobs page. Every task is in a group (11 groups, setup and
+  schedules first), with the main task first and previews after. Descriptions are a sentence or two
+  (about half as long). The old "AI: body tags every night" setting is gone (it's a nightly job now).
+- **Better scene covers** (on a Mac): "Scene covers: replace low-scoring ones" gives a scene whose
+  cover Apple scores low (blurry, dark, mid-move, nobody in it) the best of 9 frames from across the
+  video, when it's clearly better and decent on its own. Only covers Stash generated are changed - a
+  studio's or scraper's cover, or one you set, is recognised and left alone (vertical videos: see
+  below). The originals are kept in `cover-originals` in Stash's config
+  folder; "Scene covers: put back the originals" restores them. Each cover is checked once, so it
+  suits the after-scan and nightly job lists (it's one of the suggestions).
+- **Suggest covers** on a scene's Edit tab (under Cover Image): 24 frames from across the video are
+  compared with Apple's score out of 100 and the best 9 shown, with the current cover's score and
+  where it most likely came from; **Compare more frames** looks at 24 more in between and keeps the
+  best 9 so far (newcomers marked New). Choosing one saves it, folds the suggestions away (Show the
+  suggestions again opens them) and shows the new cover in the form at once - it stays when the
+  form redraws. **Use this cover** saves it straight away (full
+  size) and **Undo** puts back the cover from just before; the very first one stays kept for "Scene
+  covers: put back the originals". Without the face helper on a Mac (e.g. Stash on Windows) the
+  frames show without scores, in video order.
+- **Vertical videos' covers**: the covers task and Suggest covers handle vertical scenes too, cutting
+  each frame to a wide cover around the people like AI marker pictures (on a Mac; elsewhere a third
+  of the way down), so they don't need Vertical Cover Stitcher. A stitched cover isn't one frame of
+  the video, so it's left alone like a scraped one.
+- **Cover options**: covers Stash made are told apart from scraped or uploaded ones and ones you picked
+  in Stash's player, and three settings (off by default) decide whether those - and organized scenes'
+  covers - may be replaced too. Stash doesn't record where a cover came from: its own are recognised
+  for certain (its frame 20% into the video); scraped (the scene is linked to StashDB / ThePornDB, or
+  the cover isn't a frame of the video) and picked (a frame of the video on an unlinked scene) are a
+  best guess.
+- **No Auto Seek needed**: Auto Seek's code (0.3.1, AGPL-3.0, unchanged) now ships with the add-on in
+  `video-model`, and its model and Alpine runtimes are kept in this repository (`extras/video-model`).
+  The new task "Video model: download it (for AI markers and positions)" downloads them from there
+  (falling back to the original addresses), each checked against its SHA-256. The copy now lives in Stash's config
+  folder (`plugin-data/BetterTaggingAI/auto-seek`; an existing `auto-seek-copy` is moved there), so
+  updating or reinstalling the add-on keeps it. Marker pictures, Create Marker's picture and scene
+  covers only use ffmpeg now - before, Create Marker's picture silently failed without Auto Seek.
+
 ## 1.7.1 (2026-11-23)
 
 - Fixed: 1.7 didn't load ("yaml: line 248: mapping values are not allowed in this context"): two
