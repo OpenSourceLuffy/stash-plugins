@@ -340,6 +340,14 @@ settings:
     displayName: "Faces: likeness needed to add automatically (%)"
     description: "How alike a face must be to be added without asking. Default 50; higher is stricter."
     type: NUMBER
+  faceOnlyFavourites:
+    displayName: "Faces: only favourite performers"
+    description: "Review → Faces and the face tasks only suggest or add your favourite performers. Faces are still compared with everyone, so a look-alike isn't mistaken for a favourite."
+    type: BOOLEAN
+  faceMinItems:
+    displayName: "Faces: only performers in at least this many scenes and images"
+    description: "Review → Faces and the face tasks only suggest or add performers with at least this many scenes and images together (e.g. 5). Empty or 0: everyone."
+    type: NUMBER
   faceSuggestMin:
     displayName: "Faces: likeness needed to suggest (%)"
     description: "How alike a face must be to be suggested. Default 36."

@@ -4944,6 +4944,11 @@ def ai_settings(s):
         # is usually the same person
         "face_min": num_pct(s.get("faceSuggestMin"), 36),
         "face_auto_min": num_pct(s.get("faceAutoMin"), 50),
+        # which performers faces are suggested / added for (faces are still
+        # compared with everyone's): favourites only, and / or performers in
+        # at least this many scenes and images
+        "face_only_favs": bool(s.get("faceOnlyFavourites")),
+        "face_min_items": max(0, int(float(s.get("faceMinItems") or 0))),
         # new items: quick steps right away, AI model steps once at night
         "nightly": bool(s.get("aiNightly")),
         # the body tags task (items not checked yet) as part of the night run
@@ -9092,6 +9097,30 @@ def face_candidates(stash, cfg, index, kind, item, cache=None):
     return sorted(best.values(), key=lambda b: (-b["pictures"] if kind == "scene" else 0, -b["score"]))
 
 
+def face_targets(stash, cfg):
+    """The performers faces are suggested and added for (settings "Faces:
+    only favourite performers" / "...at least this many scenes and images"):
+    a set of ids, or None for everyone. Faces are still compared with every
+    known performer, so a look-alike who isn't chosen still counts as
+    "someone else" - it's only who gets suggested or added that's limited."""
+    favs, least = cfg["ai"]["face_only_favs"], cfg["ai"]["face_min_items"]
+    if not favs and not least:
+        return None
+    flt = {"filter_favorites": True} if favs else {}
+    ps = stash.call("query($f: PerformerFilterType) { findPerformers(performer_filter: $f, filter: {per_page: -1}) "
+                    "{ performers { id scene_count image_count } } }", {"f": flt})["findPerformers"]["performers"]
+    return {p["id"] for p in ps if (p.get("scene_count") or 0) + (p.get("image_count") or 0) >= least}
+
+
+def face_targets_text(cfg):
+    """What the face settings limit suggestions to, in words ("" for everyone)."""
+    favs, least = cfg["ai"]["face_only_favs"], cfg["ai"]["face_min_items"]
+    if not favs and not least:
+        return ""
+    who = "favourite performers" if favs else "performers"
+    return who + (f" in at least {least} scenes and images" if least else "")
+
+
 def confident(cfg, kind, c, cands):
     """Good enough to add without asking: a high likeness, clearly ahead of
     everyone else who looks similar (look-alikes are close together), and in
@@ -10094,6 +10123,7 @@ def run_face_review(stash, plugin_dir, performer=None, limit=40, skip=(), favour
             h["score"], h["rival"], h["emb"], h["best_g"] = best, second, f, g
     floor = cfg["ai"]["face_auto_min"]
     want = str(performer) if performer else None
+    targets = face_targets(stash, cfg)  # (the Faces settings: favourites / at least N items)
     favs = None
     if favourites:
         favs = {p["id"] for p in stash.call("{ findPerformers(performer_filter: {filter_favorites: true}, filter: {per_page: -1}) "
@@ -10109,6 +10139,8 @@ def run_face_review(stash, plugin_dir, performer=None, limit=40, skip=(), favour
         if want and pid != want:
             continue
         if favs is not None and pid not in favs:  # ("Favourites only": faces are still compared with everyone)
+            continue
+        if targets is not None and pid not in targets:
             continue
         if h["score"] < floor + (0.05 if kind == "image" else 0) or h["score"] - h["rival"] < FACE_MARGIN:
             continue
@@ -10164,7 +10196,9 @@ def run_face_review(stash, plugin_dir, performer=None, limit=40, skip=(), favour
     # the Batch view: how many there are for each performer, biggest first
     per = Counter(pid for _, _, _, pid, _ in strong)
     groups = [{"id": pid, "name": (index.get(pid) or {}).get("name", pid), "count": c} for pid, c in per.most_common()]
-    return {"items": out, "total": len(strong), "groups": groups}
+    limited = face_targets_text(cfg)
+    return {"items": out, "total": len(strong), "groups": groups,
+            **({"note": f"Only {limited} (Faces settings)."} if limited else {})}
 
 
 def add_performers(stash, kind, item, ids):
@@ -10204,6 +10238,9 @@ def run_faces(stash, plugin_dir, kinds, preview=False, limit=None, ids=None):
         log("warning", "No performer faces known yet - performers need a profile picture with a face in it.")
         return
     apply = cfg["ai"]["face_auto"] and not preview
+    targets = face_targets(stash, cfg)  # (only these are added; faces are compared with everyone)
+    if targets is not None and ids is None:
+        log("info", f"Faces: only {face_targets_text(cfg)} are added ({len(targets)} of them) - see the Faces settings.")
     todo = []
     for kind in kinds:
         if ids is not None:
@@ -10234,7 +10271,7 @@ def run_faces(stash, plugin_dir, kinds, preview=False, limit=None, ids=None):
         if not cands:
             continue
         found += 1
-        sure = [c for c in cands if confident(cfg, kind, c, cands)]
+        sure = [c for c in cands if confident(cfg, kind, c, cands) and (targets is None or c["id"] in targets)]
         text = ", ".join(f'{c["name"]} {round(c["score"] * 100)}%' + (f' in {c["pictures"]} frames' if kind == "scene" else "")
                          for c in cands[:3])
         if sure and apply:

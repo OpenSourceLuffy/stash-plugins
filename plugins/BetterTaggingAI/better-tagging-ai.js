@@ -1436,7 +1436,7 @@
     ["Setup", ["aiOllamaUrl", "aiModel", "faceHelperUrl", "welcomeOff"]],
     ["New items", ["aiAuto", "aiNewAll", "aiNewPhotoStudios", "faceAutoAssign", "aiNightly"]],
     ["Tags & titles", ["aiTagKinds", "aiTagCount", "aiMaxTags", "aiSkipTagged", "aiIncludeOrganized", "aiNoAutoTag", "aiLookSuggest", "tagSynonyms", "aiTitleKinds"]],
-    ["Faces", ["faceAutoMin", "faceSuggestMin"]],
+    ["Faces", ["faceOnlyFavourites", "faceMinItems", "faceAutoMin", "faceSuggestMin"]],
     ["Markers & poses", ["aiMarkerTag", "markerTagsStayOnMarker", "poseTags"]],
     ["Scene covers", ["coverReplaceScraped", "coverReplacePicked", "coverReplaceOrganized"]],
   ];

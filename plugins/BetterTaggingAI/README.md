@@ -612,6 +612,8 @@ Under **Settings → Plugins → Better Organizing AI Add-on (local AI)**:
 | Schedules: night time | When the saved AI work runs (HH:MM). Default 03:00. |
 | Schedules: time zone | Time zone of the night time, e.g. `America/New_York`. Default UTC. |
 | New items: add confident face matches | Let the Faces tasks (and new scans) add confident matches. |
+| Faces: only favourite performers | Review → Faces and the face tasks only suggest or add favourite performers (faces are still compared with everyone). |
+| Faces: only performers in at least this many scenes and images | The same for performers with at least this many scenes and images together. Empty or 0: everyone. |
 | Faces: likeness needed to add automatically (%) | Default 50 (images 5 more). |
 | Faces: likeness needed to suggest (%) | Default 36. |
 | Setup: face helper address | Default `http://host.docker.internal:11535`. |
