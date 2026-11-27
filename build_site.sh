@@ -37,8 +37,11 @@ buildPlugin()
     zip -r "$zipfile" . > /dev/null
     popd > /dev/null
 
-    name=$(grep "^name:" "$f" | head -n 1 | cut -d' ' -f2- | sed -e 's/\r//' -e 's/^"\(.*\)"$/\1/')
-    description=$(grep "^description:" "$f" | head -n 1 | cut -d' ' -f2- | sed -e 's/\r//' -e 's/^"\(.*\)"$/\1/')
+    # (name and description go in exactly as written in the plugin's .yml, quotes and all: taking
+    # the quotes off left a description with ": " or \" in it unreadable, and Stash then refused the
+    # whole list - every update failed)
+    name=$(grep "^name:" "$f" | head -n 1 | cut -d' ' -f2- | sed -e 's/\r//')
+    description=$(grep "^description:" "$f" | head -n 1 | cut -d' ' -f2- | sed -e 's/\r//')
     ymlVersion=$(grep "^version:" "$f" | head -n 1 | cut -d' ' -f2- | sed -e 's/\r//' -e 's/^"\(.*\)"$/\1/')
     version="$ymlVersion-$version"
     IFS=$'\n' dep=$(grep "^# requires:" "$f" | cut -c 12- | sed -e 's/\r//')

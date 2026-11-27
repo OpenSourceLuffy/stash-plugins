@@ -1,5 +1,5 @@
 name: Stash-Box Submit
-description: "\"Submit to FansDB / StashDB…\" in a scene's ⋮ menu: checks the scene against that site's own guidelines, links its performers, studio and tags to the site's entries, and sends it as a draft for you to finish on the site."
+description: Adds "Submit to FansDB / StashDB…" to a scene's ⋮ menu. It checks the scene against that site's own guidelines, links its performers, studio and tags to the site's entries, and sends it as a draft for you to finish on the site.
 version: "0.1"
 url: https://github.com/OpenSourceLuffy/stash-plugins/tree/main/plugins/StashBoxSubmit
 exec:

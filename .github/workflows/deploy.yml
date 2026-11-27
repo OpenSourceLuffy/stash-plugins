@@ -45,6 +45,21 @@ jobs:
     - run: |
         chmod +x build_site.sh
         ./build_site.sh _site/${{ github.ref_name }}
+    # the list Stash reads to install and update: if it can't be read, every update fails
+    - name: Check the built plugin list
+      run: |
+        python3 - <<'EOF'
+        import sys, yaml
+        f = "_site/${{ github.ref_name }}/index.yml"
+        try:
+            d = yaml.safe_load(open(f, encoding="utf-8"))
+            if not isinstance(d, list) or not all(isinstance(x, dict) and x.get("id") and x.get("version") for x in d):
+                raise ValueError("not a list of plugins with id and version")
+            print(f"ok   {f}: {len(d)} plugins")
+        except Exception as e:
+            print(f"::error file={f}::{e}")
+            sys.exit(1)
+        EOF
     - uses: actions/upload-pages-artifact@v5
 
   deploy:
