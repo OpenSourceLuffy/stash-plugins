@@ -4,6 +4,61 @@ Newest first. Versions are what Stash shows under Settings → Plugins. The add-
 (`btt_core.py`) with [Better Organizing Tools](../BetterTaggingTools), so some versions only bring
 that plugin's changes.
 
+## 1.8.3 (2026-11-25)
+
+- The file-name step before the AI also reads descriptions when Better Organizing Tools' new
+  **Auto tag: performers named in descriptions** setting is on (shared code, `btt_core.py`).
+- **Studios from watermarks reads small, faint ones better** (tasks "Studios: find scenes' studios
+  from accounts and watermarks", and new items):
+  - when a frame shows no text, the AI also looks at its bottom corners zoomed in (twice the size),
+    where a small watermark like "fansly.com/name" is easy to miss in the whole frame;
+  - one frame is enough when the account is exactly a studio you have, read with its platform
+    (misreads don't hit a name exactly; a new account still needs two frames);
+  - a name read cut short ("@lexip") is taken as the one studio whose name it's the start of -
+    before near misses that could pick someone else ("Lexie");
+  - the studio it gives a scene gets the account's link (fansly.com/name) when it didn't have it.
+- **Review → Faces → New also suggests people from account studios** (OnlyFans, Fansly, TikTok,
+  Instagram, Patreon): videos and photos in an account's studio with nobody on them - put there by a
+  watermark or a TikTok link:
+  - **New performer?** for an account nobody in your Stash is (one card per studio, when a face was
+    seen in it): its pictures, named after the account (change it if you know their name), with the
+    account's link; or add them to a performer you already have;
+  - **It's [them]?** for a performer you have: the one with the studio's account link, else the one
+    named like it, else the one in most of its other items;
+  - a face group that's mostly the same items gets the account's name and link instead of a second
+    card. Account studios are ones under a platform's studio, or with only account links (not a
+    production company that also has an Instagram).
+- Account studios made from watermarks follow Better Organizing Tools' new **Naming: account
+  studios with their platform** setting ("name" or "name (OnlyFans)"); a watermark finds the studio
+  named either way.
+- **Review and Search in the top bar work with themes and other UI plugins:** they're now made
+  from Stash's own pieces (its Nav item, Icon component and FontAwesome icons), the same markup as
+  Stash's own menu items - so a theme's colours, light / dark mode and sizes apply to them too
+  (before, a hand-made outline icon could turn invisible or the wrong size). The highlight follows
+  the page you're on.
+- Review → Faces, Markers and poses, and "Might also be in…", say what to do first ("no markers yet - add
+  some with AI markers…") when there's nothing to show yet, instead of failing with "exit status 1".
+- **"exit status 120" (seen on Review → Tags):** the plugin now writes to Stash as UTF-8 whatever the
+  system's encoding (Windows' old code pages can't write an emoji or accent in a name), and sends its
+  answer before Python closes - if it still can't, the log says why instead of just "exit status 120".
+- **New settings: Top bar: hide Review / hide Search** (Settings → Plugins, under "Top bar") take
+  those buttons out of Stash's top bar and Modern UI's More panel; the pages still work (/review,
+  /ai-search). A change shows as soon as you leave Settings, no reload needed.
+- The **Search** button now appears as soon as the add-on has checked it can work, instead of after
+  you'd moved to another page (on a first visit it could stay missing).
+- **The Review page follows themes and other UI plugins too:** its colours (cards, lines, faded
+  text) come from the theme's own text colour, so they suit any light or dark theme; the Yes / No /
+  Skip buttons, cards and the "Create a new performer?" style dialogs use Stash's own button, card and
+  dialog styles, so a theme that restyles Stash's restyles these the same way. Checked with Modern UI
+  light and dark and the community themes (Pulsar Light, Neon Dark, Plex, Night and others).
+- **The add-on's pop-ups follow themes too:** the welcome, tour and setup guide, the check before a
+  long task, the chapter picker (it was white with light text without Modern UI), the face preview
+  under Faces and the update window are now Stash's own dialog (or card), so the theme colours them
+  and a theme that shows dialogs full-screen on phones shows these the same way; the AI markers
+  panel's "✓ Added" and error use the theme's green and red.
+- Review → Faces → New: tapping the space around a new performer's pictures opened an empty viewer
+  titled "undefined undefined"; it now opens the grid of all their pictures, like tapping one does.
+
 ## 1.8.2 (2026-11-24)
 
 - Fixed **Markers: download the video model (needed first)** failing with "HTTP Error 404" everywhere

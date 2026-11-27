@@ -4,6 +4,26 @@ Newest first. Versions are what Stash shows under Settings → Plugins. Better O
 [Better Organizing AI Add-on](../BetterTaggingAI) share their code (`btt_core.py`), so some versions
 only bring the other plugin's changes.
 
+## 2.4.3 (2026-11-25)
+
+- The update window (shown when one of your OpenSourceLuffy plugins has a new version) follows the
+  theme: it's now Stash's own dialog, so its colours come from the theme or UI plugin you use.
+- **Auto tag from descriptions** (new settings): **Auto tag this / Auto tag selected** can also add
+  performers named in an item's description (**Auto tag: performers named in descriptions**), and
+  optionally tags too (**Auto tag: tags named in descriptions too**). Matched the same way as file
+  names; the studio still comes only from the file path. Tags are a separate setting because
+  descriptions are sentences: everyday words that are also tag names match very often.
+- Shared code (`btt_core.py`) brought up to date with Better Organizing AI 1.8.3 (watermark
+  reading).
+- **Naming: account studios with their platform** (new setting): an account's studio is its name
+  under the platform's studio (OnlyFans > name), or with the platform after it (OnlyFans >
+  name (OnlyFans)) - as FansDB names them. Studios made from watermarks, links and the AI add-on
+  follow it; both styles are matched either way. New tasks **Naming: rename account studios to the
+  chosen style** (and a preview) rename the ones you have.
+- Writes to Stash as UTF-8 whatever the system's encoding, and sends its answer before Python closes
+  (if it can't, the log says why instead of "exit status 120") - shared code with Better Organizing
+  AI 1.8.3.
+
 ## 2.4.2 (2026-11-24)
 
 - Shared code (`btt_core.py`) brought up to date with Better Organizing AI 1.8.2; nothing changes in

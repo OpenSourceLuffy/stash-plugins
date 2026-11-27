@@ -456,7 +456,7 @@
         h("button", { type: "button", className: "pts-chip bta-hide", onClick: () => { setPeek(null); setSt({ state: "idle" }); },
           title: "Hide these suggestions" }, "✕ Hide"),
       peek && cands.some((c) => c.id === peek.id) &&
-        h("div", { ref: peekRef, className: "bta-face-peek" + (hovering ? " bta-hover" : "") },
+        h("div", { ref: peekRef, className: "card bta-face-peek" + (hovering ? " bta-hover" : "") },
           h("img", { src: `/performer/${peek.id}/image`, alt: peek.name }),
           h("div", { className: "bta-peek-text" },
             h("strong", null, peek.name),
@@ -1335,9 +1335,9 @@
     wrap = document.createElement("div");
     wrap.id = "bta-gate";
     wrap.className = "bta-gate";
-    wrap.innerHTML = '<div class="bta-gate-box" role="dialog" aria-modal="true" aria-labelledby="bta-gate-title">' +
+    wrap.innerHTML = '<div class="bta-gate-box modal-content" role="dialog" aria-modal="true" aria-labelledby="bta-gate-title"><div class="modal-body bta-gate-in">' +
       '<button type="button" class="bta-gate-x" aria-label="Close">✕</button><h4 id="bta-gate-title"></h4><div class="bta-gate-body"></div>' +
-      '<div class="bta-gate-actions"></div></div>';
+      '<div class="bta-gate-actions"></div></div></div>';
     const close = () => { wrap.remove(); document.removeEventListener("keydown", esc, true); };
     const esc = (e) => { if (e.key === "Escape") close(); };
     document.addEventListener("keydown", esc, true);
@@ -1417,7 +1417,7 @@
       night.disabled = true;
       night.textContent = "Adding…";
       ask({ mode: "task_add_nightly", task })
-        .then((x) => { night.classList.add("bta-gate-done"); night.textContent = `✓ Added - it runs tonight at ${x.night_time}`; setTimeout(dlg.close, 2500); })
+        .then((x) => { night.classList.add("bta-gate-done", "btn-success"); night.classList.remove("btn-primary", "btn-secondary"); night.textContent = `✓ Added - it runs tonight at ${x.night_time}`; setTimeout(dlg.close, 2500); })
         .catch((e) => { night.disabled = false; night.textContent = "Couldn't add it: " + e.message; });
     });
     if (r.nightly) night.disabled = true;
@@ -1444,6 +1444,7 @@
   // set on the jobs page, so they're replaced by a link to it.
   const SETTING_SECTIONS = [
     ["Setup", ["aiOllamaUrl", "aiModel", "faceHelperUrl", "welcomeOff"]],
+    ["Top bar", ["hideNavReview", "hideNavSearch"]],
     ["New items", ["aiAuto", "aiNewAll", "aiNewPhotoStudios", "faceAutoAssign", "aiNightly"]],
     ["Tags & titles", ["aiTagKinds", "aiTagCount", "aiMaxTags", "aiSkipTagged", "aiIncludeOrganized", "aiNoAutoTag", "aiLookSuggest", "tagSynonyms", "aiTitleKinds"]],
     ["Faces", ["faceOnlyFavourites", "faceMinItems", "faceAutoMin", "faceSuggestMin"]],
@@ -1728,7 +1729,8 @@
         }
         const name = (it._name || "").trim();
         if (!name) throw new Error("give them a name first");
-        const input = { ...(it._details || {}), name };
+        const input = { ...(it.details || {}), ...(it._details || {}), name };
+        if (it.details && it.details.urls && it._details && it._details.urls) input.urls = [...new Set([...it.details.urls, ...it._details.urls])];
         if (!(input.tag_ids || []).length) delete input.tag_ids;
         // profile picture: the first one shown that wasn't left out
         const kept = new Set(it.keys);
@@ -1752,7 +1754,7 @@
         it._created = null;
       },
       undoNo: (it) => ask({ mode: "new_perf_answer", keys: it.keys, no: false }),
-      empty: "No new faces seen in 3 or more items. New ones show up after \"Faces: scan scenes and images\".",
+      empty: "No new faces seen in 3 or more items, and no account studios with videos nobody is on. New ones show up after \"Faces: scan scenes and images\" and \"Studios: find scenes' studios from accounts and watermarks\".",
       filterLabel: "",
     },
     // studios to merge (misread names), delete (junk ones from watermarks)
@@ -1873,7 +1875,7 @@
     { key: "studios", label: "Studios", actions: ["studios_add", "studios_check", "studios_new"] },
     { key: "galleries", label: "Galleries", actions: ["galleries_add", "galleries_check", "galleries_new"] },
   ];
-  const OLD_MODES = { check: "tags_check", studios: "studios_check", tags_video: "tags", tags_poses: "tags" }; // links from before
+  const OLD_MODES = { check: "tags_check", studios: "studios_check", tags_video: "tags", tags_poses: "tags", faces_studio: "new" }; // links from before
   const groupOf = (k) => REVIEW_GROUPS.find((g) => g.actions.includes(k)) || REVIEW_GROUPS[0];
   // the action last used in each tab, so tapping Faces / Tags / Studios goes back to it
   // what each Review action needs (the rest need no model)
@@ -2074,8 +2076,8 @@
         " Organized"),
       err && h("div", { className: "bta-edit-err" }, err),
       h("div", { className: "bta-edit-actions" },
-        h("button", { type: "button", className: "bta-fr-btn bta-fr-btn-skip", disabled: saving, onClick: onCancel }, "Cancel"),
-        h("button", { type: "button", className: "bta-fr-btn bta-fr-btn-yes", disabled: saving, onClick: save }, saving ? "Saving…" : "✓ Save")));
+        h("button", { type: "button", className: "btn btn-secondary bta-fr-btn bta-fr-btn-skip", disabled: saving, onClick: onCancel }, "Cancel"),
+        h("button", { type: "button", className: "btn btn-success bta-fr-btn bta-fr-btn-yes", disabled: saving, onClick: save }, saving ? "Saving…" : "✓ Save")));
   }
 
   function ZoomView({ it, onClose, list, onNav, pick }) {
@@ -2325,12 +2327,12 @@
           }))),
       h("div", { className: "bta-all-foot" },
         out.size > 0
-          ? h("button", { type: "button", className: "bta-fr-btn bta-fr-btn-skip", onClick: () => onAll(true) }, "Use all")
-          : h("button", { type: "button", className: "bta-fr-btn bta-fr-btn-skip", onClick: () => onAll(false) }, "Use none"),
+          ? h("button", { type: "button", className: "btn btn-secondary bta-fr-btn bta-fr-btn-skip", onClick: () => onAll(true) }, "Use all")
+          : h("button", { type: "button", className: "btn btn-secondary bta-fr-btn bta-fr-btn-skip", onClick: () => onAll(false) }, "Use none"),
         onDo
           // (Studios cards: do it straight from here - "Create", "Add 12")
-          ? h("button", { type: "button", className: "bta-fr-btn bta-fr-btn-yes", disabled: !using, onClick: onDo }, doLabel(using))
-          : h("button", { type: "button", className: "bta-fr-btn bta-fr-btn-yes", onClick: onClose }, `Done · using ${using}`)));
+          ? h("button", { type: "button", className: "btn btn-success bta-fr-btn bta-fr-btn-yes", disabled: !using, onClick: onDo }, doLabel(using))
+          : h("button", { type: "button", className: "btn btn-success bta-fr-btn bta-fr-btn-yes", onClick: onClose }, `Done · using ${using}`)));
   }
 
   // "Create a new performer?": the name to check (or type), gender, tags and
@@ -2395,7 +2397,7 @@
     const field = (label, k, props) => h("label", { className: "bta-cf-field" }, label,
       h(props && props.rows ? "textarea" : "input", { className: "bta-np-name", value: f[k], onChange: (e) => set(k, e.target.value), ...(props || {}) }));
     return h("div", { className: "bta-confirm", onClick: (e) => e.target === e.currentTarget && onCancel() },
-      h("div", { className: "bta-confirm-box bta-cf", role: "dialog", "aria-modal": true, "aria-label": "Create a new performer" },
+      h(DialogBox, { className: "bta-confirm-box bta-cf", role: "dialog", "aria-modal": true, "aria-label": "Create a new performer" },
         h("div", { className: "bta-cf-scroll" },
           h("div", { className: "bta-confirm-title" }, "Create a new performer?"),
           // how their card will look
@@ -2447,8 +2449,8 @@
             field("Birthdate", "birthdate", { type: "date" }),
             field("Description", "details", { rows: 3 }))),
         h("div", { className: "bta-confirm-actions" },
-          h("button", { type: "button", className: "bta-fr-btn bta-fr-btn-skip", onClick: onCancel }, "Cancel"),
-          h("button", { type: "button", className: "bta-fr-btn bta-fr-btn-yes", disabled: !ok, onClick: create },
+          h("button", { type: "button", className: "btn btn-secondary bta-fr-btn bta-fr-btn-skip", onClick: onCancel }, "Cancel"),
+          h("button", { type: "button", className: "btn btn-success bta-fr-btn bta-fr-btn-yes", disabled: !ok, onClick: create },
             ok ? `✓ Create "${f.name.trim()}"` : "✓ Create"))));
   }
 
@@ -2510,7 +2512,7 @@
     }, [q]);
     const n = (it.keys || []).length;
     return h("div", { className: "bta-confirm", onClick: (e) => e.target === e.currentTarget && onCancel() },
-      h("div", { className: "bta-confirm-box bta-cf bta-pick", role: "dialog", "aria-modal": true, "aria-label": "Add to a performer you already have" },
+      h(DialogBox, { className: "bta-confirm-box bta-cf bta-pick", role: "dialog", "aria-modal": true, "aria-label": "Add to a performer you already have" },
         h("div", { className: "bta-cf-scroll" },
           h("div", { className: "bta-confirm-title" }, chosen ? `Add ${chosen.name}?` : "Add to a performer you already have"),
           chosen
@@ -2537,8 +2539,8 @@
                   alike && alike.length === 0 && h("div", { className: "bta-confirm-text" }, "No performer faces to compare with"),
                   (alike || []).map(row)))),
         h("div", { className: "bta-confirm-actions" },
-          h("button", { type: "button", className: "bta-fr-btn bta-fr-btn-skip", onClick: () => (chosen ? setChosen(null) : onCancel()) }, chosen ? "Back" : "Cancel"),
-          h("button", { type: "button", className: "bta-fr-btn bta-fr-btn-yes", disabled: !chosen, onClick: () => onPick(chosen) },
+          h("button", { type: "button", className: "btn btn-secondary bta-fr-btn bta-fr-btn-skip", onClick: () => (chosen ? setChosen(null) : onCancel()) }, chosen ? "Back" : "Cancel"),
+          h("button", { type: "button", className: "btn btn-success bta-fr-btn bta-fr-btn-yes", disabled: !chosen, onClick: () => onPick(chosen) },
             chosen ? `✓ Add ${chosen.name}` : "Pick someone"))));
   }
 
@@ -2577,7 +2579,7 @@
           (st.aliases || []).length ? `also ${st.aliases.slice(0, 2).join(", ")}` : ""].filter(Boolean).join(" · "))));
     const n = using;
     return h("div", { className: "bta-confirm", onClick: (e) => e.target === e.currentTarget && onCancel() },
-      h("div", { className: "bta-confirm-box bta-cf bta-pick", role: "dialog", "aria-modal": true, "aria-label": "Add to a studio you already have" },
+      h(DialogBox, { className: "bta-confirm-box bta-cf bta-pick", role: "dialog", "aria-modal": true, "aria-label": "Add to a studio you already have" },
         h("div", { className: "bta-cf-scroll" },
           h("div", { className: "bta-confirm-title" }, chosen ? `Add to ${chosen.name}?` : "Add to a studio you already have"),
           chosen
@@ -2598,13 +2600,20 @@
                   (it.near || []).length === 0 && h("div", { className: "bta-confirm-text" }, "No studio's name is close"),
                   (it.near || []).map(row)))),
         h("div", { className: "bta-confirm-actions" },
-          h("button", { type: "button", className: "bta-fr-btn bta-fr-btn-skip", onClick: () => (chosen ? setChosen(null) : onCancel()) }, chosen ? "Back" : "Cancel"),
-          h("button", { type: "button", className: "bta-fr-btn bta-fr-btn-yes", disabled: !chosen, onClick: () => onPick(chosen) },
+          h("button", { type: "button", className: "btn btn-secondary bta-fr-btn bta-fr-btn-skip", onClick: () => (chosen ? setChosen(null) : onCancel()) }, chosen ? "Back" : "Cancel"),
+          h("button", { type: "button", className: "btn btn-success bta-fr-btn bta-fr-btn-yes", disabled: !chosen, onClick: () => onPick(chosen) },
             chosen ? `✓ Add to ${chosen.name}` : "Pick a studio"))));
   }
 
   // Tags → Similar / New: merge two tags, nest one under another, or make a
   // tag for a group of look-alike pictures
+  // a dialog built like Stash's own (.modal-content with a .modal-body inside), so a theme's dialog
+  // colours and frame apply to it
+  function DialogBox({ className, children, ...rest }) {
+    return h("div", { className: "modal-content " + (className || ""), ...rest },
+      h("div", { className: "modal-body bta-confirm-inner" }, children));
+  }
+
   function TagTidyCard({ it: shownIt, next, drag, tint, busy, out, keep, setKeep, name, setName, onAll, onExisting, onPage, answer, handlers, swapped, onSwap }) {
     // a sub-tag card the other way round (⇅): the parent becomes the sub-tag
     const it = shownIt.type === "tagsub" && swapped
@@ -2697,7 +2706,7 @@
     const nextPic = next && (next.samples || [])[0];
     return h(React.Fragment, null,
       h("div", {
-        className: "bta-fr-card bta-st-card" + (drag ? " bta-fr-dragging" : ""),
+        className: "card bta-fr-card bta-st-card" + (drag ? " bta-fr-dragging" : ""),
         style: drag ? { transform: `translateX(${drag.dx}px) rotate(${drag.dx / 25}deg)` } : null,
         ...handlers,
       },
@@ -2709,9 +2718,9 @@
           h("div", { className: "bta-fr-text" }, ...body))),
       nextPic && h("link", { rel: "preload", as: "image", href: nextPic.picture }),
       h("div", { className: "bta-fr-actions" },
-        h("button", { type: "button", className: "bta-fr-btn bta-fr-btn-no", disabled: busy, onClick: () => answer("no") }, labels[0]),
-        h("button", { type: "button", className: "bta-fr-btn bta-fr-btn-skip", disabled: busy, onClick: () => answer("skip") }, "Skip"),
-        h("button", { type: "button", className: "bta-fr-btn bta-fr-btn-yes", disabled: busy, onClick: () => answer("yes") }, labels[1])),
+        h("button", { type: "button", className: "btn btn-danger bta-fr-btn bta-fr-btn-no", disabled: busy, onClick: () => answer("no") }, labels[0]),
+        h("button", { type: "button", className: "btn btn-secondary bta-fr-btn bta-fr-btn-skip", disabled: busy, onClick: () => answer("skip") }, "Skip"),
+        h("button", { type: "button", className: "btn btn-success bta-fr-btn bta-fr-btn-yes", disabled: busy, onClick: () => answer("yes") }, labels[1])),
       h("div", { className: "bta-fr-hint" }, "Swipe right for yes, left for no."));
   }
 
@@ -2744,7 +2753,7 @@
         h("span", { className: "bta-pick-name" }, x.name),
         h("span", { className: "bta-pick-sub" }, x.count != null ? `on ${x.count} of these` : x.n ? `${x.n} items` : "")));
     return h("div", { className: "bta-confirm", onClick: (e) => e.target === e.currentTarget && onCancel() },
-      h("div", { className: "bta-confirm-box bta-cf bta-pick", role: "dialog", "aria-modal": true, "aria-label": "Add them to a tag you already have" },
+      h(DialogBox, { className: "bta-confirm-box bta-cf bta-pick", role: "dialog", "aria-modal": true, "aria-label": "Add them to a tag you already have" },
         h("div", { className: "bta-cf-scroll" },
           h("div", { className: "bta-confirm-title" }, chosen ? `Tag them ${chosen.name}?` : "Add them to a tag you already have"),
           chosen
@@ -2758,8 +2767,8 @@
                   (it.near || []).length === 0 && h("div", { className: "bta-confirm-text" }, "None"),
                   (it.near || []).map(row)))),
         h("div", { className: "bta-confirm-actions" },
-          h("button", { type: "button", className: "bta-fr-btn bta-fr-btn-skip", onClick: () => (chosen ? setChosen(null) : onCancel()) }, chosen ? "Back" : "Cancel"),
-          h("button", { type: "button", className: "bta-fr-btn bta-fr-btn-yes", disabled: !chosen, onClick: () => onPick(chosen) },
+          h("button", { type: "button", className: "btn btn-secondary bta-fr-btn bta-fr-btn-skip", onClick: () => (chosen ? setChosen(null) : onCancel()) }, chosen ? "Back" : "Cancel"),
+          h("button", { type: "button", className: "btn btn-success bta-fr-btn bta-fr-btn-yes", disabled: !chosen, onClick: () => onPick(chosen) },
             chosen ? `✓ Tag them ${chosen.name}` : "Pick a tag"))));
   }
 
@@ -2801,7 +2810,7 @@
     const nextPic = next && (next.samples || [])[0];
     return h(React.Fragment, null,
       h("div", {
-        className: "bta-fr-card bta-st-card" + (drag ? " bta-fr-dragging" : ""),
+        className: "card bta-fr-card bta-st-card" + (drag ? " bta-fr-dragging" : ""),
         style: drag ? { transform: `translateX(${drag.dx}px) rotate(${drag.dx / 25}deg)` } : null,
         ...handlers,
       },
@@ -2818,9 +2827,9 @@
           h("div", { className: "bta-fr-text" }, ...body))),
       nextPic && h("link", { rel: "preload", as: "image", href: nextPic.picture }),
       h("div", { className: "bta-fr-actions" },
-        h("button", { type: "button", className: "bta-fr-btn bta-fr-btn-no", disabled: busy, onClick: () => answer("no") }, labels[0]),
-        h("button", { type: "button", className: "bta-fr-btn bta-fr-btn-skip", disabled: busy, onClick: () => answer("skip") }, "Skip"),
-        h("button", { type: "button", className: "bta-fr-btn bta-fr-btn-yes", disabled: busy, onClick: () => answer("yes") }, labels[1])),
+        h("button", { type: "button", className: "btn btn-danger bta-fr-btn bta-fr-btn-no", disabled: busy, onClick: () => answer("no") }, labels[0]),
+        h("button", { type: "button", className: "btn btn-secondary bta-fr-btn bta-fr-btn-skip", disabled: busy, onClick: () => answer("skip") }, "Skip"),
+        h("button", { type: "button", className: "btn btn-success bta-fr-btn bta-fr-btn-yes", disabled: busy, onClick: () => answer("yes") }, labels[1])),
       h("div", { className: "bta-fr-hint" }, "Swipe right for yes, left for no."));
   }
 
@@ -2915,7 +2924,7 @@
     const nextPic = next && (next.samples || (next.studios && next.studios[0].samples) || [])[0];
     return h(React.Fragment, null,
       h("div", {
-        className: "bta-fr-card bta-st-card" + (drag ? " bta-fr-dragging" : ""),
+        className: "card bta-fr-card bta-st-card" + (drag ? " bta-fr-dragging" : ""),
         style: drag ? { transform: `translateX(${drag.dx}px) rotate(${drag.dx / 25}deg)` } : null,
         ...handlers,
       },
@@ -2927,9 +2936,9 @@
           h("div", { className: "bta-fr-text" }, ...body))),
       nextPic && h("link", { rel: "preload", as: "image", href: nextPic.picture }),
       h("div", { className: "bta-fr-actions" },
-        h("button", { type: "button", className: "bta-fr-btn bta-fr-btn-no", disabled: busy, onClick: () => answer("no") }, labels[0]),
-        h("button", { type: "button", className: "bta-fr-btn bta-fr-btn-skip", disabled: busy, onClick: () => answer("skip") }, "Skip"),
-        h("button", { type: "button", className: "bta-fr-btn bta-fr-btn-yes", disabled: busy, onClick: () => answer("yes") }, labels[1])),
+        h("button", { type: "button", className: "btn btn-danger bta-fr-btn bta-fr-btn-no", disabled: busy, onClick: () => answer("no") }, labels[0]),
+        h("button", { type: "button", className: "btn btn-secondary bta-fr-btn bta-fr-btn-skip", disabled: busy, onClick: () => answer("skip") }, "Skip"),
+        h("button", { type: "button", className: "btn btn-success bta-fr-btn bta-fr-btn-yes", disabled: busy, onClick: () => answer("yes") }, labels[1])),
       h("div", { className: "bta-fr-hint" }, "Swipe right for yes, left for no."));
   }
 
@@ -3472,7 +3481,9 @@
       const s0 = start.current;
       start.current = null;
       if (s0 && !s0.moved && cur && e.target.closest && e.target.closest(".bta-fr-pic")) {
-        setZoom({ ...cur, picture: picOf(cur) });
+        // a card of several pictures (new performer, studio) has no one picture to show big - show all of them
+        if (!picOf(cur) && (cur.samples || cur.all)) setAllOf(cur);
+        else setZoom({ ...cur, picture: picOf(cur) });
         return;
       }
       if (!s0 || !s0.moved) return;
@@ -3510,7 +3521,7 @@
       const using = total - out.size;
       bodyEl = h(React.Fragment, null,
         h("div", {
-          className: "bta-fr-card" + (drag ? " bta-fr-dragging" : ""),
+          className: "card bta-fr-card" + (drag ? " bta-fr-dragging" : ""),
           style: drag ? { transform: `translateX(${drag.dx}px) rotate(${drag.dx / 25}deg)` } : null,
           onPointerDown: onDown, onPointerMove: onMove, onPointerUp: onUp, onPointerCancel: () => { start.current = null; setDrag(null); },
         },
@@ -3555,10 +3566,10 @@
                 : `Adds them to ${using === total ? `all ${total}` : `${using} of the ${total}`}; the first picture becomes their profile picture.`)))),
         next && next.samples && next.samples[0] && h("link", { rel: "preload", as: "image", href: next.samples[0].picture }),
         h("div", { className: "bta-fr-actions" },
-          h("button", { type: "button", className: "bta-fr-btn bta-fr-btn-no", disabled: busy, onClick: () => answer("no") },
+          h("button", { type: "button", className: "btn btn-danger bta-fr-btn bta-fr-btn-no", disabled: busy, onClick: () => answer("no") },
             assign ? "✕ Not them" : "✕ No"),
-          h("button", { type: "button", className: "bta-fr-btn bta-fr-btn-skip", disabled: busy, onClick: () => answer("skip") }, "Skip"),
-          h("button", { type: "button", className: "bta-fr-btn bta-fr-btn-yes", disabled: busy, onClick: () => answer("yes") },
+          h("button", { type: "button", className: "btn btn-secondary bta-fr-btn bta-fr-btn-skip", disabled: busy, onClick: () => answer("skip") }, "Skip"),
+          h("button", { type: "button", className: "btn btn-success bta-fr-btn bta-fr-btn-yes", disabled: busy, onClick: () => answer("yes") },
             assign ? "✓ Yes, add" : "✓ Create")));
     } else if (tab === "tagtidy") {
       bodyEl = h(TagTidyCard, {
@@ -3651,15 +3662,15 @@
               })),
             chk
               ? h("div", { className: "bta-batch-foot" },
-                  h("button", { type: "button", className: "bta-fr-btn bta-fr-btn-yes", disabled: busy || !items.length || using > 0,
+                  h("button", { type: "button", className: "btn btn-success bta-fr-btn bta-fr-btn-yes", disabled: busy || !items.length || using > 0,
                     title: "Keep them all and don't ask about them again", onClick: () => batchAnswer("none") }, "✓ All fit"),
-                  h("button", { type: "button", className: "bta-fr-btn bta-fr-btn-skip", disabled: busy, onClick: () => batchAnswer("skip") }, "Skip"),
-                  h("button", { type: "button", className: "bta-fr-btn bta-fr-btn-no", disabled: busy || !using, onClick: () => batchAnswer("yes") },
+                  h("button", { type: "button", className: "btn btn-secondary bta-fr-btn bta-fr-btn-skip", disabled: busy, onClick: () => batchAnswer("skip") }, "Skip"),
+                  h("button", { type: "button", className: "btn btn-danger bta-fr-btn bta-fr-btn-no", disabled: busy || !using, onClick: () => batchAnswer("yes") },
                     using ? `✕ Remove from ${using}` + (items.length - using ? ` · ${items.length - using} fit` : "") : "Tap the ones to remove"))
               : h("div", { className: "bta-batch-foot" },
-                  h("button", { type: "button", className: "bta-fr-btn bta-fr-btn-no", disabled: busy || !items.length, onClick: () => batchAnswer("none") }, "✕ None"),
-                  h("button", { type: "button", className: "bta-fr-btn bta-fr-btn-skip", disabled: busy, onClick: () => batchAnswer("skip") }, "Skip"),
-                  h("button", { type: "button", className: "bta-fr-btn bta-fr-btn-yes", disabled: busy || !using, onClick: () => batchAnswer("yes") },
+                  h("button", { type: "button", className: "btn btn-danger bta-fr-btn bta-fr-btn-no", disabled: busy || !items.length, onClick: () => batchAnswer("none") }, "✕ None"),
+                  h("button", { type: "button", className: "btn btn-secondary bta-fr-btn bta-fr-btn-skip", disabled: busy, onClick: () => batchAnswer("skip") }, "Skip"),
+                  h("button", { type: "button", className: "btn btn-success bta-fr-btn bta-fr-btn-yes", disabled: busy || !using, onClick: () => batchAnswer("yes") },
                     `✓ Add to ${using}` + (items.length - using ? ` · ${items.length - using} no` : ""))));
     } else if (view === "list") {
       const more = total;
@@ -3694,7 +3705,7 @@
     } else {
       bodyEl = h(React.Fragment, null,
         h("div", {
-          className: "bta-fr-card" + (drag ? " bta-fr-dragging" : ""),
+          className: "card bta-fr-card" + (drag ? " bta-fr-dragging" : ""),
           style: drag ? { transform: `translateX(${drag.dx}px) rotate(${drag.dx / 25}deg)` } : null,
           onPointerDown: onDown, onPointerMove: onMove, onPointerUp: onUp, onPointerCancel: () => { start.current = null; setDrag(null); },
         },
@@ -3720,9 +3731,9 @@
                 M.extra(cur))))),
         next && h("link", { rel: "preload", as: "image", href: next.picture }),
         h("div", { className: "bta-fr-actions" },
-          h("button", { type: "button", className: "bta-fr-btn bta-fr-btn-no", disabled: busy, onClick: () => answer("no") }, M.noLabel),
-          h("button", { type: "button", className: "bta-fr-btn bta-fr-btn-skip", disabled: busy, onClick: () => answer("skip") }, "Skip"),
-          h("button", { type: "button", className: "bta-fr-btn bta-fr-btn-yes", disabled: busy, onClick: () => answer("yes") }, M.yesLabel)),
+          h("button", { type: "button", className: "btn btn-danger bta-fr-btn bta-fr-btn-no", disabled: busy, onClick: () => answer("no") }, M.noLabel),
+          h("button", { type: "button", className: "btn btn-secondary bta-fr-btn bta-fr-btn-skip", disabled: busy, onClick: () => answer("skip") }, "Skip"),
+          h("button", { type: "button", className: "btn btn-success bta-fr-btn bta-fr-btn-yes", disabled: busy, onClick: () => answer("yes") }, M.yesLabel)),
         h("div", { className: "bta-fr-hint" }, "Swipe right for yes, left for no.",
           h("span", { className: "bta-fr-keys" }, " Keys: → yes, ← no, ↓ skip, Z undo.")));
     }
@@ -4392,6 +4403,7 @@
     const later = () => { try { localStorage.setItem(LATER_KEY, String(Date.now() + 24 * 3600 * 1000)); } catch (e) { /* fine */ } close(); };
     return h("div", { className: "bta-welcome-back", onClick: (e) => { if (e.target === e.currentTarget && step === "tour") off(); } },
       h("div", { className: "bta-welcome modal-content", role: "dialog", "aria-modal": "true", "aria-label": "Welcome to Better Organizing AI" },
+       h("div", { className: "modal-body bta-welcome-in" },
         step === "hello" ? h(React.Fragment, null,
           h("h2", null, "Welcome to Better Organizing AI"),
           h("p", null, "It helps you tag and organize your library with AI that runs on your own computer - nothing is sent anywhere. It suggests tags, performers and studios, finds look-alikes and faces, makes markers and chapters, crops screenshots and lets you search by describing a picture. You decide: suggestions wait in Review until you say yes."),
@@ -4410,7 +4422,7 @@
             h("button", { type: "button", className: "btn btn-secondary", onClick: later }, "Remind me later"),
             h("button", { type: "button", className: "btn btn-link", onClick: off }, "Don't show again")))
           : step === "setup" ? h(SetupGuide, { onClose: later, onTour: () => setStep("tour") })
-          : h(Tour, { slides: ready.length ? ready : TOUR, onClose: off })));
+          : h(Tour, { slides: ready.length ? ready : TOUR, onClose: off }))));
   }
   {
     const host = document.createElement("div");
@@ -4692,17 +4704,79 @@
           })))));
   }
 
+  // The settings "Top bar: hide Review / Search": read at start and again when you leave Settings
+  // (where they're changed), so the buttons go or come back without reloading the page.
+  const navHide = { hideNavReview: false, hideNavSearch: false };
+  const navListeners = new Set();
+  let navAsked = 0;
+  function loadNavHide() {
+    navAsked = Date.now();
+    gql("{ configuration { plugins } }").then((d) => {
+      const cur = ((d.configuration || {}).plugins || {})[PLUGIN_ID] || {};
+      const next = { hideNavReview: !!cur.hideNavReview, hideNavSearch: !!cur.hideNavSearch };
+      if (next.hideNavReview !== navHide.hideNavReview || next.hideNavSearch !== navHide.hideNavSearch) {
+        Object.assign(navHide, next);
+        navListeners.forEach((fn) => fn());
+      }
+    }).catch(() => { /* keep showing them */ });
+  }
+  loadNavHide();
+  let navWasSettings = location.pathname.startsWith("/settings");
+  function useNavHidden(setting, pathname) {
+    const [, tick] = React.useState(0);
+    React.useEffect(() => {
+      const fn = () => tick((n) => n + 1);
+      navListeners.add(fn);
+      return () => navListeners.delete(fn);
+    }, []);
+    React.useEffect(() => {
+      const onSettings = pathname.startsWith("/settings");
+      if (navWasSettings && !onSettings && Date.now() - navAsked > 500) loadNavHide();
+      navWasSettings = onSettings;
+    }, [pathname]);
+    return !!navHide[setting];
+  }
+
   if (api.register && api.register.route) {
     api.register.route(SEARCH_PAGE, AISearch);
     api.register.route(SETUP_PAGE, SetupPage);
     api.register.route(NIGHTLY_PAGE, NightlyPage);
     api.register.route(REVIEW_PATH, FaceReview);
     api.register.route(REVIEW_PAGE, FaceReview);
+    // "Review" and "Search" in Stash's menu, made from Stash's own pieces (react-bootstrap's Nav.Link, its
+    // Icon component, FontAwesome icons) so they're the same markup as its own items: themes and UI
+    // plugins style them like the rest (colours, light / dark, sizes), and Modern UI's More panel
+    // picks them up. The highlight follows the page you're on.
+    const RR = api.libraries && api.libraries.ReactRouterDOM;
+    const BS = api.libraries && api.libraries.Bootstrap;
+    const FA = (api.libraries && api.libraries.FontAwesomeSolid) || {};
+    const NativeIcon = api.components && api.components.Icon;
+    const native = !!(RR && RR.Link && RR.useLocation && BS && BS.Nav && NativeIcon && FA.faListCheck);
+    function NavItem({ to, also, icon, label, title, setting, need }) {
+      const loc = RR.useLocation();
+      const hidden = useNavHidden(setting, loc.pathname);
+      const caps = useCaps(); // (Search shows once the check says it can work - it finishes after the bar is drawn)
+      if (hidden || (need && !can(need, caps))) return null;
+      const active = [to, ...(also || [])].includes(loc.pathname);
+      return h(BS.Nav.Link, { as: "div", eventKey: to, className: "col-4 col-sm-3 col-md-2 col-lg-auto" },
+        h(RR.Link, { to, title,
+          className: "minimal p-4 p-xl-2 d-flex d-xl-inline-block flex-column justify-content-between align-items-center btn btn-primary" + (active ? " active" : "") },
+          h(NativeIcon, { icon, className: "nav-menu-icon d-block d-xl-inline mb-2 mb-xl-0" }),
+          h("span", null, label)));
+    }
     // a "Review" item in Stash's menu (Modern UI's More panel picks it up)
     const Link = api.libraries && api.libraries.ReactRouterDOM && api.libraries.ReactRouterDOM.Link;
     api.patch.after("MainNavBar.MenuItems", function (...args) {
       const result = args[args.length - 1];
       if (!result || !result.props || !Link) return result;
+      if (native) {
+        const items = [h(NavItem, { key: "bta-face-review", to: REVIEW_PAGE, also: [REVIEW_PATH], icon: FA.faListCheck, label: "Review",
+          title: "Strong face matches and confident tags, one at a time", setting: "hideNavReview" })];
+        items.push(h(NavItem, { key: "bta-ai-search", to: SEARCH_PAGE, icon: FA.faMagnifyingGlass, label: "Search",
+          title: "Find photos, scenes and markers by describing them", setting: "hideNavSearch", need: "search" }));
+        return React.cloneElement(result, {}, ...React.Children.toArray(result.props.children), ...items);
+      }
+      // (an older Stash without those pieces: the hand-made version)
       const item = h("div", { className: "nav-link", key: "bta-face-review" },
         h(Link, {
           to: REVIEW_PAGE,
@@ -4721,7 +4795,8 @@
         },
           h("span", { dangerouslySetInnerHTML: { __html: SEARCH_ICON }, style: { display: "contents" } }),
           h("span", null, "Search")));
-      return React.cloneElement(result, {}, ...React.Children.toArray(result.props.children), item, ...(can("search") ? [search] : []));
+      return React.cloneElement(result, {}, ...React.Children.toArray(result.props.children),
+        ...(navHide.hideNavReview ? [] : [item]), ...(can("search") && !navHide.hideNavSearch ? [search] : []));
     });
   }
 
@@ -5037,7 +5112,7 @@
     const pages = [];
     for (let p = lo; p <= hi; p++) pages.push(p);
     return h("div", { className: "bta-chpick-back", onClick: onClose },
-      h("div", { className: "bta-chpick", onClick: (ev) => ev.stopPropagation() },
+      h("div", { className: "bta-chpick-frame modal-content", onClick: (ev) => ev.stopPropagation() }, h("div", { className: "bta-chpick modal-body" },
         h("div", { className: "bta-chpick-head" },
           h("b", null, c.title || "Chapter"),
           h("span", { className: "bta-chpick-count" }, ` · images ${s}–${e} (${e - s + 1})`),
@@ -5053,7 +5128,7 @@
           pages.map((p) => h("button", { key: p, type: "button", className: "bta-chpick-tile" + (p >= s && p <= e ? " on" : ""), onClick: () => tap(p) },
             h("img", { src: `/image/${imgs[p - 1]}/thumbnail`, alt: "", loading: "lazy" }),
             h("span", { className: "bta-chpick-num" }, p),
-            p >= s && p <= e && h("span", { className: "bta-chpick-tick" }, "✓"))))));
+            p >= s && p <= e && h("span", { className: "bta-chpick-tick" }, "✓")))))));
   }
 
   // ---- Gallery page → Chapters → Suggest chapters ---------------------------

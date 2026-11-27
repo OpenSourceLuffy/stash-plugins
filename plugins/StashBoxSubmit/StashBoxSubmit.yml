@@ -1,0 +1,33 @@
+name: Stash-Box Submit
+description: "\"Submit to FansDB / StashDB…\" in a scene's ⋮ menu: checks the scene against that site's own guidelines, links its performers, studio and tags to the site's entries, and sends it as a draft for you to finish on the site."
+version: "0.1"
+url: https://github.com/OpenSourceLuffy/stash-plugins/tree/main/plugins/StashBoxSubmit
+exec:
+  - python
+  - "{pluginDir}/stashbox_submit.py"
+interface: raw
+tasks:
+  - name: "Find scenes ready to submit"
+    description: "Scores every scene for FansDB, StashDB and ThePornDB (whichever you've set up) by what it has of what a submission needs. Then open the Ready to submit page: a button on the Scenes page, or the link under this task."
+    defaultArgs:
+      mode: task_candidates
+settings:
+  onlyNew:
+    displayName: "Ready to submit: only scenes not on any database"
+    description: "Start the Ready to submit page with \"Only scenes not on any database\" ticked (it hides scenes that have an ID from any stash-box). Off: all scenes, per site."
+    type: BOOLEAN
+  bulkSend:
+    displayName: "Ready to submit: allow sending drafts in bulk"
+    description: "Adds \"Send drafts for all ready scenes\" to the page: up to 10 per click, for one site, only scenes the check passes with nothing to decide (no tags - add them on each draft). Each draft still needs finishing on the site within 24 hours."
+    type: BOOLEAN
+ui:
+  # (the update check reads the published plugin list and changelogs from GitHub)
+  csp:
+    connect-src:
+      - https://opensourceluffy.github.io
+      - https://raw.githubusercontent.com
+  javascript:
+    - stashbox-submit.js
+    - osl-updates.js
+  css:
+    - stashbox-submit.css

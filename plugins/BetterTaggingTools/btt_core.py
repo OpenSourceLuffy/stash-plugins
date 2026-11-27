@@ -86,6 +86,27 @@ def progress(p):
     sys.stderr.flush()
 
 
+def plugin_io():
+    """Text to Stash as UTF-8 whatever the system's own encoding (Windows' is often an old code
+    page, which can't write an emoji or accent in a tag or performer name)."""
+    for stream in (sys.stdout, sys.stderr):
+        with contextlib.suppress(Exception):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
+
+def plugin_done():
+    """Sends what's still waiting to Stash now, instead of when Python closes - where a failure
+    only shows as "exit status 120" with no reason. If it can't be sent, the reason goes to
+    Stash's log instead."""
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+    except Exception as e:  # (the pipe to Stash is closed or refuses the text)
+        with contextlib.suppress(Exception):
+            os.write(2, f"\x01e\x02The answer couldn't be sent to Stash: {type(e).__name__}: {e}\n".encode("utf-8", "replace"))
+        os._exit(1)
+
+
 class NotReady(RuntimeError):
     """Something has to be done first (e.g. a scan): the entry scripts log it
     as a short info line and hand the message back, without a traceback."""
@@ -340,9 +361,13 @@ def settings(stash, plugin_dir=None):
         # for each kind, and whether new ones get it straight away
         "naming": {k: naming_style(s.get(key)) for k, key in NAMING_SETTINGS.items()},
         "naming_new": bool(s.get("namingNew")),
+        # account studios (under OnlyFans, Fansly...): "name" or "name (OnlyFans)"
+        "account_platform": bool(s.get("namingAccountPlatform")),
         "spellings": {i.strip().lower(): i.strip() for i in (s.get("titleCaseSpellings") or "").split(",") if i.strip()},
         "ai": ai_settings(ai_raw),
         "autotag_new": bool(s.get("autoTagNew")),
+        "autotag_details": bool(s.get("autoTagDetails")),
+        "autotag_details_tags": bool(s.get("autoTagDetailsTags")),
         "dates_new": bool(s.get("datesNewItems")),
         "titles_new": bool(s.get("titlesNewItems")),
         "titles_keep_names": bool(s.get("titlesKeepNames")),
@@ -1755,6 +1780,21 @@ def grab_frame(stash, video, at, width=640):
     if proc.returncode != 0 or not proc.stdout:
         raise RuntimeError(proc.stderr.decode(errors="replace").strip() or "no frame")
     return proc.stdout, "image/jpeg"
+
+
+def grab_corners(stash, video, at, width=1280):
+    """A video frame's two bottom corners (each half the width, the bottom quarter), one above the
+    other: a small watermark there is about twice the size it is in the whole frame."""
+    proc = subprocess.run(
+        [ffmpeg_path(stash), "-loglevel", "error", "-ss", f"{at:.2f}", "-i", video, "-frames:v", "1",
+         "-filter_complex", "[0:v]split[a][b];[a]crop=iw/2:ih/4:0:ih*3/4[l];[b]crop=iw/2:ih/4:iw/2:ih*3/4[r];"
+                            f"[l][r]vstack,scale='min({width},iw)':-2,format=yuvj420p",
+         "-q:v", "3", "-f", "image2pipe", "-vcodec", "mjpeg", "-"],
+        capture_output=True, timeout=60,
+    )
+    if proc.returncode != 0 or not proc.stdout:
+        raise RuntimeError(proc.stderr.decode(errors="replace").strip() or "no frame")
+    return proc.stdout
 
 
 def locked_picture_hashes(plugin_dir):
@@ -4860,10 +4900,10 @@ def autotag_match(index, path):
 
 
 AUTOTAG_FIELDS = {
-    "scene": "id title date performers { id } studio { id } tags { id } files { path }",
-    "image": "id title date performers { id } studio { id } tags { id } "
+    "scene": "id title date details performers { id } studio { id } tags { id } files { path }",
+    "image": "id title date details performers { id } studio { id } tags { id } "
              "visual_files { __typename ... on ImageFile { path } ... on VideoFile { path } }",
-    "gallery": "id title date performers { id } studio { id } tags { id } files { path } folder { path }",
+    "gallery": "id title date details performers { id } studio { id } tags { id } files { path } folder { path }",
 }
 AUTOTAG_UPDATE = {
     "scene": ("bulkSceneUpdate", "BulkSceneUpdateInput"),
@@ -4877,9 +4917,19 @@ def autotag_item(stash, index, kind, item, apply):
     and fill in an empty date from the file name.
     Returns (names added, ids of the tags added)."""
     path = autotag_path(kind, item)
-    if not path:
+    details, details_tags = autotag_details(stash, kind, item)
+    if not path and not details:
         return [], set()
-    performers, studio, tags, names = autotag_match(index, path)
+    performers, studio, tags, names = autotag_match(index, path) if path else (set(), None, set(), {})
+    if details:
+        # the description too (settings): performers, and tags only if asked - a
+        # description is sentences, so everyday words that are also tag names
+        # ("Good", "Home", "Pink") match far too often; never the studio, as a
+        # description names sites and other accounts too often
+        more_p, _, more_t, more_n = autotag_match([x for x in index if x[0] == "performer" or (details_tags and x[0] == "tag")], details)
+        performers |= more_p
+        tags |= more_t
+        names.update(more_n)
     performers -= {p["id"] for p in item.get("performers") or []}
     tags -= {t["id"] for t in item.get("tags") or []}
     tags -= removed_tags(kind, item["id"], [t["id"] for t in item.get("tags") or []])
@@ -4910,6 +4960,25 @@ def autotag_item(stash, index, kind, item, apply):
     added += [f"date {day}"] if day else []
     added += [f'title "{title}"'] if title else []
     return added, tags
+
+
+_AUTOTAG_DETAILS = {}
+
+
+def autotag_details(stash, kind, item):
+    """(the item's description, whether to match tags in it too) - the description
+    only when "Auto tag: performers named in descriptions" is on."""
+    on = _AUTOTAG_DETAILS.get(id(stash))
+    if not on or time.time() - on[2] > SETTINGS_CACHE_SECONDS:  # (asked once a run, not once an item)
+        cfg = settings(stash)
+        on = _AUTOTAG_DETAILS[id(stash)] = (cfg["autotag_details"], cfg["autotag_details_tags"], time.time())
+    if not on[0]:
+        return "", False
+    if "details" not in item:  # (loaded elsewhere without it)
+        query = {"scene": "findScene", "image": "findImage", "gallery": "findGallery"}[kind]
+        with contextlib.suppress(Exception):
+            item["details"] = (stash.call(f"query($id: ID!) {{ {query}(id: $id) {{ details }} }}", {"id": item["id"]})[query] or {}).get("details")
+    return (item.get("details") or "").strip(), on[1]
 
 
 def autotag_load(stash, kind, ids):
@@ -4945,7 +5014,7 @@ def run_autotag_items(stash, plugin_dir, kind, ids, with_images=False):
     if changed:
         log("info", f"Auto tag: added {summary} on {changed} of {len(work)} item(s)")
     else:
-        log("info", f"Auto tag: nothing new found in the file names of {len(work)} item(s)")
+        log("info", f"Auto tag: nothing new found in the file names{' or descriptions' if settings(stash)['autotag_details'] else ''} of {len(work)} item(s)")
     return {"items": len(work), "changed": changed, "added": [n for n, _ in added.most_common()]}
 
 
@@ -8235,6 +8304,10 @@ def accounts_context(stash, plugin_dir=None):
     performers by name / alias / profile link, and account names read in
     one scene's watermark so far (waiting for a second scene)."""
     studios = stash.call("{ findStudios(filter: {per_page: -1}) { studios { id name aliases urls } } }")["findStudios"]["studios"]
+    for st in studios:  # ("name (OnlyFans)" is read as "name" in a watermark: matched either way)
+        bare = bare_account_name(st["name"])
+        if bare and bare != st["name"] and bare.lower() not in [a.lower() for a in st.get("aliases") or []]:
+            st["aliases"] = list(st.get("aliases") or []) + [bare]
     platform_names = {v[0].lower() for v in PLATFORMS.values()}
     marks = []  # (pattern, studio)
     for st in studios:
@@ -8334,6 +8407,15 @@ def known_name_for(ctx, handle):
     if len(key) < 2:
         return None
     platform_names = {v[0].lower() for v in PLATFORMS.values()}
+    # read cut short ("lexip" for lexipoll - the end of a watermark at the frame's edge, or faint):
+    # the one studio you have whose name starts with it (most of it). Before the near misses
+    # below, which would take it for a different name one letter off ("Lexie").
+    if len(key) >= 5:
+        starts = {st["id"]: st for st in ctx["studios"] if st["name"].lower() not in platform_names
+                  for n in [st["name"]] + (st.get("aliases") or [])
+                  if ocr_key(n).startswith(key) and len(ocr_key(n)) > len(key) and len(key) >= 0.6 * len(ocr_key(n))}
+        if len(starts) == 1:
+            return ("studio", next(iter(starts.values())))
     cands = []  # (distance, kind order, kind, thing)
     for st in ctx["studios"]:
         if st["name"].lower() in platform_names:
@@ -8473,9 +8555,16 @@ def scene_accounts(stash, cfg, ctx, scene, use_ai=True, kind="scene"):
                 pic = (photo_picture(stash, scene) if kind == "image"
                        else grab_frame(stash, f["path"], f["duration"] * at, width=1280)[0])
                 frame_text = ollama_frame_text(cfg, pic)
+                if kind != "image" and not handles_in_ocr(frame_text):
+                    # nothing in the whole frame: look closer at its bottom corners (a small,
+                    # faint watermark there is easy to miss at that size)
+                    with contextlib.suppress(Exception):
+                        frame_text = (frame_text + "\n" + ollama_frame_text(cfg, grab_corners(stash, f["path"], f["duration"] * at))).strip()
                 for plat, h in set(handles_in_ocr(frame_text)):
                     seen[(plat, h.lower())] += 1
                     spelled.setdefault(h.lower(), h)
+                    if plat:
+                        scene.setdefault("_read", set()).add((plat, h))
                 low = " ".join(frame_text.lower().split())
                 hit = {st["id"]: st for pat, st in ctx["marks"] if pat.search(low)}
                 for st_id, st in hit.items():
@@ -8516,8 +8605,11 @@ def scene_accounts(stash, cfg, ctx, scene, use_ai=True, kind="scene"):
         plat = plat_of.get(hl)
         # a bare "@name" (no platform next to it) counts too - many photo
         # watermarks are just that; a new one still needs a second item
-        if n >= need and (plat or len(hl) >= 4):
-            results.append((plat, spelled[hl], f"{n} frames"))
+        # one frame is enough when it's exactly the account of a studio you have, read with its
+        # platform (a faint watermark is often read in just one) - misreads don't hit a name exactly
+        exact = plat and any(ocr_key(bare_account_name(x["name"])) == ocr_key(hl) for x in ctx["studios"])
+        if (n >= need or exact) and (plat or len(hl) >= 4):
+            results.append((plat, spelled[hl], f"{n} frame" + ("s" if n != 1 else "")))
     results.sort(key=lambda r: (not r[2].startswith("text"), r[0] is None,
                                 PLATFORM_ORDER.index(r[0]) if r[0] else len(PLATFORM_ORDER)))
     studios = sorted(((mark_studio[i], n) for i, n in marks.items() if n >= need), key=lambda x: -x[1])
@@ -8572,6 +8664,19 @@ def process_scene_accounts(stash, cfg, ctx, scene, apply, use_ai=True, kind="sce
                 else:
                     log("info", f"{name}: read {plat_name(plat)} @{handle} in the watermark; a studio is made "
                         "once it's read in a second scene or photo too (misreads rarely repeat)")
+    st_id = inp.get("studio_id")
+    account_url = None  # the account the studio is, as read (for the performer's link below)
+    if st_id:
+        st = next((x for x in ctx["studios"] if x["id"] == st_id), None)
+        for plat, h in sorted(scene.get("_read") or set()) + [(p_, h_) for p_, h_, _ in handles if p_]:
+            url = PLATFORMS[plat][1].format(h)
+            if st and ocr_key(h) == ocr_key(bare_account_name(st["name"])):
+                account_url = url
+                if apply and not any(_same_link(u) == _same_link(url) for u in st.get("urls") or []):
+                    st["urls"] = list(st.get("urls") or []) + [url]
+                    stash.call("mutation($i: StudioUpdateInput!) { studioUpdate(input: $i) { id } }", {"i": {"id": st_id, "urls": st["urls"]}})
+                    parts.append(f'link {url} for the studio "{st["name"]}"')
+                break
     have = {p["id"] for p in scene.get("performers") or []}
     add = []
     by_handle = [known[h][1] if known.get(h, ("",))[0] == "performer" else performer_for_handle(ctx, plat, h)
@@ -8583,6 +8688,16 @@ def process_scene_accounts(stash, cfg, ctx, scene, apply, use_ai=True, kind="sce
         parts.append(("performers " if len(add) > 1 else "performer ") + ", ".join(f'"{p["name"]}"' for p in add)
                      + " [account name / name in the watermark]")
         inp["performer_ids"] = sorted(have | {p["id"] for p in add}, key=int)
+    # the one performer in it gets the account's link too (with two or more, whose account it is
+    # can't be told from the watermark)
+    everyone = have | {p["id"] for p in add}
+    if account_url and len(everyone) == 1:
+        perf = next((x for x in ctx["perfs"] if x["id"] in everyone), None)
+        if perf and not any(_same_link(u) == _same_link(account_url) for u in perf.get("urls") or []):
+            perf["urls"] = list(perf.get("urls") or []) + [account_url]
+            if apply:
+                stash.call("mutation($i: PerformerUpdateInput!) { performerUpdate(input: $i) { id } }", {"i": {"id": perf["id"], "urls": perf["urls"]}})
+            parts.append(f'link {account_url} for the performer "{perf["name"]}"')
     # the accounts' profile links (and links written in the title or
     # description) go in its URLs
     links = item_links(scene, handles, known, confirmed)
@@ -8685,6 +8800,52 @@ def run_item_links(stash, plugin_dir, preview=False, limit=None):
     return {"items": items, "links": total}
 
 
+ACCOUNT_SUFFIX = re.compile(r"\s*\((?:" + "|".join(re.escape(v[0]) for v in PLATFORMS.values()) + r")\)\s*$", re.I)
+
+
+def account_studio_name(handle, platform_name, with_platform):
+    """An account studio's name in the chosen style: "name", or "name (OnlyFans)"."""
+    handle = ACCOUNT_SUFFIX.sub("", handle).strip()
+    return f"{handle} ({platform_name})" if with_platform and platform_name else handle
+
+
+def bare_account_name(name):
+    """"name (OnlyFans)" -> "name" (an account studio named either way)."""
+    return ACCOUNT_SUFFIX.sub("", name or "").strip()
+
+
+def run_account_studio_names(stash, plugin_dir, preview=False):
+    """Task: account studios (under OnlyFans, Fansly, TikTok, Instagram, Patreon) renamed to the
+    "Naming: account studios" style - "name" or "name (OnlyFans)". One whose new name another studio
+    already has is left as it is."""
+    with_platform = settings(stash, plugin_dir)["account_platform"]
+    studios = stash.call("{ findStudios(filter: {per_page: -1}) { studios { id name parent_studio { name } } } }")["findStudios"]["studios"]
+    platforms = {v[0].lower(): v[0] for v in PLATFORMS.values()}
+    taken = {st["name"].lower() for st in studios}
+    changed = skipped = 0
+    for st in studios:
+        plat = platforms.get(((st.get("parent_studio") or {}).get("name") or "").lower())
+        if not plat:
+            continue
+        new = account_studio_name(st["name"], plat, with_platform)
+        if new == st["name"]:
+            continue
+        if new.lower() in taken:
+            log("info", f'"{st["name"]}": not renamed - "{new}" is another studio')
+            skipped += 1
+            continue
+        log("info", f'{"Would rename" if preview else "Renamed"} "{st["name"]}" to "{new}"')
+        if not preview:
+            stash.call("mutation($i: StudioUpdateInput!) { studioUpdate(input: $i) { id } }", {"i": {"id": st["id"], "name": new}})
+            taken.discard(st["name"].lower())
+            taken.add(new.lower())
+        changed += 1
+    style = "\"name (Platform)\"" if with_platform else "just the name"
+    log("info", f'{"Preview: " if preview else "Done: "}{changed} account studio(s) {"would be" if preview else ""} renamed to {style}'.replace("  ", " ")
+        + (f"; {skipped} left as they are (the name is taken)" if skipped else "") + ".")
+    return {"changed": changed, "skipped": skipped}
+
+
 def studio_for_handle(stash, studios, platform, handle, apply, with_url=True):
     """The studio for an account: an existing one with that name, alias or
     profile URL, else a new one under the platform's studio. `studios` is
@@ -8695,11 +8856,12 @@ def studio_for_handle(stash, studios, platform, handle, apply, with_url=True):
     url = url_fmt.format(handle) if url_fmt else None
     low = handle.lower()
     for st in studios:
-        names = [st["name"].lower()] + [a.lower() for a in st.get("aliases") or []]
+        names = [st["name"].lower(), bare_account_name(st["name"]).lower()] + [a.lower() for a in st.get("aliases") or []]
         if low in names or (url and any(u.rstrip("/").lower() == url.lower() for u in st.get("urls") or [])):
             return st, False
+    name = account_studio_name(handle, parent_name, platform and settings(stash)["account_platform"])
     if not apply:
-        return {"id": None, "name": handle}, True
+        return {"id": None, "name": name}, True
     if not platform:  # a bare @name: a studio of its own, under no platform
         st = stash.call("mutation($i: StudioCreateInput!) { studioCreate(input: $i) { id name aliases urls } }",
                         {"i": {"name": handle}})["studioCreate"]
@@ -8711,7 +8873,7 @@ def studio_for_handle(stash, studios, platform, handle, apply, with_url=True):
                             {"i": {"name": parent_name, "ignore_auto_tag": True}})["studioCreate"]
         studios.append(parent)
     st = stash.call("mutation($i: StudioCreateInput!) { studioCreate(input: $i) { id name aliases urls } }",
-                    {"i": {"name": handle, "parent_id": parent["id"], **({"urls": [url]} if with_url else {})}})["studioCreate"]
+                    {"i": {"name": name, "parent_id": parent["id"], **({"urls": [url]} if with_url else {})}})["studioCreate"]
     studios.append(st)
     return st, True
 
@@ -9832,9 +9994,69 @@ def run_new_performers(stash, plugin_dir, limit=30, skip=(), fresh=False):
                                  if c >= max(2, len(ks) // 4) and tn.strip().lower() not in NEW_PERF_DRAWN_TAGS][:10]
         sugg["reasons"] = reasons
         out.append(sugg)
+    # accounts' studios (OnlyFans, Fansly, TikTok...) with videos or photos nobody is on: the person
+    # the account is (Review -> Faces -> New, with the face groups above)
+    with contextlib.suppress(Exception):
+        out += studio_new_cards(stash, plugin_dir, items, out, turned_down, skip)
     # "It's ..." first (more to go on), then the most items
     out.sort(key=lambda x: (x["type"] != "assign", -x["count"]))
     return {"items": out[:limit], "total": len(out)}
+
+
+def studio_new_cards(stash, plugin_dir, items, cards, turned_down, skip):
+    """New-tab cards from account studios with items nobody is on (run_studio_perf_review): "New
+    performer?" named after the account, with its link; "It's [them]?" for a performer you have.
+    A face group above that already covers most of the same items gets the account's name and
+    link instead of a second card."""
+    found = run_studio_perf_review(stash, plugin_dir, limit=100000)["items"]
+    groups = {}
+    for it in found:
+        key = f"{it['kind']}:{it['id']}"
+        if it.get("create"):
+            groups[("new", it["studio_id"])] = {"it": it, "keys": list(it["keys"]), "faces": [it["emb"]] if it.get("emb") else []}
+        else:
+            g = groups.setdefault(("assign", it["studio"], it["performer"]), {"it": it, "keys": [], "faces": []})
+            g["keys"].append(key)
+            if it.get("emb"):
+                g["faces"].append(it["emb"])
+    out = []
+    for (typ, *_), g in groups.items():
+        it, keys = g["it"], [k for k in g["keys"] if k in items]
+        if not keys:
+            continue
+        sig = "studio|" + "|".join(sorted(keys)[:12])
+        if sig in skip or any(len(set(keys) & t) * 2 >= len(keys) for t in turned_down):
+            continue
+        if typ == "new":
+            twin = next((c for c in cards if c["type"] == "new" and len(set(c["keys"]) & set(keys)) * 2 >= len(keys)), None)
+            if twin:  # (the face group says the same: give it the account's name and link)
+                twin["names"] = [{"name": it["name"], "why": it["why"]}] + [n for n in twin.get("names") or [] if n["name"] != it["name"]]
+                twin["name"] = it["name"]
+                if it.get("link"):
+                    twin["details"] = {"urls": [it["link"]]}
+                twin["reasons"] = list(twin.get("reasons") or []) + [f'they\'re the studio "{it["studio"]}" ({it["why"]})']
+                continue
+        def pic(k):
+            kind, iid = k.split(":")
+            x = items[k]
+            link = (x.get("paths") or {}).get("screenshot" if kind == "scene" else "thumbnail") or ""
+            return {"key": k, "kind": kind, "id": iid, "picture": re.sub(r"^https?://[^/]+", "", link),
+                    "title": x.get("title") or os.path.basename((((x.get("files") or x.get("visual_files") or [{}])[0]) or {}).get("path") or "")}
+        first = f"{it['kind']}:{it['id']}"
+        order = [first] + [k for k in keys if k != first]
+        card = {"sig": sig, "faces": g["faces"], "keys": keys, "count": len(keys), "from_studio": it["studio"],
+                "scenes": sum(1 for k in keys if k.startswith("scene:")), "photos": sum(1 for k in keys if k.startswith("image:")),
+                "samples": [{k_: v for k_, v in pic(k).items() if k_ != "title"} for k in order[:6]], "all": [pic(k) for k in keys]}
+        if typ == "new":
+            card.update(type="new", name=it["name"], names=[{"name": it["name"], "why": it["why"]}], tag_ideas=[],
+                        reasons=[f'Videos and photos in the studio "{it["studio"]}" with nobody on them', it["why"]],
+                        details={"urls": [it["link"]]} if it.get("link") else {})
+        else:
+            card.update(type="assign", performer={"id": it["performer"], "name": it["name"]}, missing=keys,
+                        reasons=[f'In the studio "{it["studio"]}" with nobody on them', it["why"]]
+                        + ([f"{it['score']}% alike their known faces"] if it.get("score") is not None else []))
+        out.append(card)
+    return out
 
 
 def run_new_perf_read(stash, plugin_dir, keys, limit=6):
@@ -10209,7 +10431,7 @@ def run_face_review(stash, plugin_dir, performer=None, limit=40, skip=(), favour
         if embs:
             known[pid] = embs
     if not known:
-        raise RuntimeError("no performer faces known yet - run \"Faces: learn performers' faces\"")
+        raise NotReady("no performer faces known yet - run \"Faces: learn performers' faces\"")
     cache = FaceCache(plugin_dir)
     if not cache.data:
         raise NotReady('nothing is scanned yet - run "Faces: scan scenes and images" first')
@@ -10312,6 +10534,215 @@ def run_face_review(stash, plugin_dir, performer=None, limit=40, skip=(), favour
     limited = face_targets_text(cfg)
     return {"items": out, "total": len(strong), "groups": groups,
             **({"note": f"Only {limited} (Faces settings)."} if limited else {})}
+
+
+# --- Review -> Faces -> From studio: items in an account's studio with nobody on them -----
+# An OnlyFans / Fansly / TikTok... account's studio is one person's account, so a video or
+# photo under it with no performers is most likely them (a watermark or a TikTok gave it the
+# studio, not the performer). The card shows their face from the item, cut out of the frame,
+# and how alike it is to the performer's known faces.
+STUDIO_PERF_NO = "studio_perf_no.json"
+
+
+def _norm_link(u):
+    return re.sub(r"^https?://(www\.|m\.)?", "", (u or "").strip().lower()).rstrip("/")
+
+
+def account_studios(stash):
+    """{studio id: (studio, [its account links])} - studios that are one account: with a profile link
+    on a platform (OnlyFans, Fansly, TikTok, Instagram, Patreon), or under that platform's studio."""
+    parents = {v[0].lower() for v in PLATFORMS.values()}
+    out = {}
+    for st in stash.call("{ findStudios(filter: {per_page: -1}) { studios { id name aliases urls parent_studio { name } } } }")["findStudios"]["studios"]:
+        if st["name"].lower() in parents:
+            continue
+        links = [u for u in st.get("urls") or [] for plat, (_, _, pats) in PLATFORMS.items() if any(re.search(p_, u, re.I) for p_ in pats)]
+        other = [u for u in st.get("urls") or [] if u not in links]
+        # under a platform's studio, or only account links (a company with its own site and an
+        # Instagram isn't one person)
+        if ((st.get("parent_studio") or {}).get("name") or "").lower() in parents or (links and not other):
+            out[st["id"]] = (st, links)
+    return out
+
+
+def studio_person(stash, st, links, perfs, kinds=("scene", "image")):
+    """(performer, why) the account studio most likely is, or (None, None): the one with its
+    account link, else the one named like it, else the one in most of its items."""
+    have = {_norm_link(u) for u in links}
+    by_link = [p for p in perfs if have & {_norm_link(u) for u in p.get("urls") or []}]
+    if len(by_link) == 1:
+        return by_link[0], f"has the studio's account link ({next(iter(have & {_norm_link(u) for u in by_link[0]['urls']}))})"
+    keys = {ocr_key(n) for n in [st["name"], bare_account_name(st["name"])] + (st.get("aliases") or []) if len(ocr_key(n)) >= 3}
+    by_name = [p for p in perfs if keys & {ocr_key(n) for n in [p["name"]] + (p.get("alias_list") or [])}]
+    if len(by_name) == 1:
+        return by_name[0], f'named like the studio "{st["name"]}"'
+    seen, total = Counter(), 0
+    for kind in kinds:
+        query, field, farg = {"scene": ("findScenes", "scenes", "scene_filter"), "image": ("findImages", "images", "image_filter")}[kind]
+        got = stash.call(f"query($s: [ID!]) {{ {query}(filter: {{per_page: -1}}, {farg}: {{studios: {{value: $s, modifier: INCLUDES}}, "
+                         f"performer_count: {{value: 0, modifier: GREATER_THAN}}}}) {{ {field} {{ performers {{ id }} }} }} }}", {"s": [st["id"]]})[query][field]
+        total += len(got)
+        seen.update(p["id"] for x in got for p in x["performers"])
+    if seen:
+        pid, n = seen.most_common(1)[0]
+        if n >= 2 and n >= 0.6 * total:
+            perf = next((p for p in perfs if p["id"] == pid), None)
+            if perf:
+                return perf, f"in {n} of the studio's {total} other items with performers"
+    return None, None
+
+
+def scan_frame_time(ent, g, duration):
+    """When in a scene the face scan's picture g was taken (seconds), or None (a marker's picture).
+    Older scans didn't keep the times: then they're FACE_FRAME_POINTS of the length."""
+    t = ent.get("t") or []
+    if t:
+        return t[g] if g < len(t) else None
+    n = ent.get("n", len(ent.get("f") or []))
+    if g < min(n, len(FACE_FRAME_POINTS)) and duration:
+        return round(duration * FACE_FRAME_POINTS[g])
+    return None
+
+
+def run_studio_perf_review(stash, plugin_dir, performer=None, limit=40, skip=()):
+    """Review -> Faces -> From studio: scenes and photos in an account's studio with no
+    performers, each with the performer the account most likely is (and their face from it)."""
+    with contextlib.suppress(Exception):
+        prune_deleted(stash, plugin_dir)
+    studios = account_studios(stash)
+    if not studios:
+        return {"items": [], "total": 0, "groups": []}
+    perfs = stash.call("{ findPerformers(filter: {per_page: -1}) { performers { id name alias_list urls } } }")["findPerformers"]["performers"]
+    with locked_json(os.path.join(plugin_dir, STUDIO_PERF_NO)) as d:
+        said_no = set(d.get("no", []))
+    skip = set(skip or ())
+    # the items: no performers, in one of those studios
+    items = []
+    ids = sorted(studios, key=int)
+    for kind, query, field, farg, fields in (
+            ("scene", "findScenes", "scenes", "scene_filter", "id title studio { id } paths { screenshot } files { basename duration }"),
+            ("image", "findImages", "images", "image_filter", "id title studio { id } paths { image thumbnail } visual_files { __typename ... on ImageFile { basename } ... on VideoFile { basename } }")):
+        items += [(kind, x) for x in stash.call(
+            f"query($s: [ID!]) {{ {query}(filter: {{per_page: -1}}, {farg}: {{studios: {{value: $s, modifier: INCLUDES}}, "
+            f"performer_count: {{value: 0, modifier: EQUALS}}}}) {{ {field} {{ {fields} }} }} }}", {"s": ids})[query][field]]
+    who = {}  # studio id -> (performer, why)
+    for sid in {x["studio"]["id"] for _, x in items if x.get("studio")}:
+        st, links = studios[sid]
+        who[sid] = studio_person(stash, st, links, perfs)
+    # faces: each item's faces from the face scan, and the performers' known faces
+    index = load_face_index(plugin_dir)
+    known = {}
+    for pid, entry in index.items():
+        embs = [q8(e) for e in entry.get("embs", [])] + entry.get("tagged", []) + entry.get("conf", [])
+        if embs:
+            known[pid] = [unq8(e) for e in embs]
+    cache = FaceCache(plugin_dir)
+    out = []
+    for kind, x in items:
+        if not x.get("studio"):
+            continue
+        perf, why = who.get(x["studio"]["id"]) or (None, None)
+        if not perf:
+            continue
+        key = f"{kind}:{x['id']}:{perf['id']}"
+        if key in said_no or key in skip or (performer and perf["id"] != str(performer)):
+            continue
+        ent = cache.data.get(f"{kind}:{x['id']}") or {}
+        score, emb, best_g, frames = None, None, None, 0
+        mine = known.get(perf["id"]) or []
+        dur = ((x.get("files") or [{}])[0] or {}).get("duration") or 0
+        for g, group in enumerate(ent.get("f") or []):
+            if kind == "scene" and scan_frame_time(ent, g, dur) is None:
+                continue  # (markers' pictures: no time to show)
+            for f in group:
+                frames += 1
+                like = max((_dot(unq8(f), k) for k in mine), default=None)
+                if emb is None or (like is not None and (score is None or like > score)):
+                    score, emb, best_g = like, f, g
+        files = x.get("files") or x.get("visual_files") or [{}]
+        out.append({
+            "kind": kind, "id": x["id"], "performer": perf["id"], "name": perf["name"], "why": why,
+            "studio": studios[x["studio"]["id"]][0]["name"],
+            "score": round(score * 100) if score is not None else None, "rival": 0, "pictures": frames,
+            "emb": emb, "best_at": scan_frame_time(ent, best_g, dur) if kind == "scene" and best_g is not None else None,
+            "times": [], "others": 0,
+            "title": x.get("title") or (files[0] or {}).get("basename") or "",
+            "picture": (x.get("paths") or {}).get("screenshot") if kind == "scene" else (x.get("paths") or {}).get("image"),
+            "no_face": emb is None,
+        })
+    # accounts with nobody in Stash: one card per studio - a new performer named after the
+    # account, with its link and the face seen in it (only when a face was seen: a Patreon of
+    # drawings has nobody to add)
+    fresh = {}
+    for kind, x in items:
+        sid = (x.get("studio") or {}).get("id")
+        if not sid or (who.get(sid) or (None,))[0] or f"studio:{sid}" in said_no or f"studio:{sid}" in skip or performer:
+            continue
+        ent = cache.data.get(f"{kind}:{x['id']}") or {}
+        card = fresh.setdefault(sid, {"keys": [], "face": None})
+        card["keys"].append(f"{kind}:{x['id']}")
+        if card["face"] is None:
+            dur = ((x.get("files") or [{}])[0] or {}).get("duration") or 0
+            for g, group in enumerate(ent.get("f") or []):
+                at = scan_frame_time(ent, g, dur) if kind == "scene" else None
+                if group and (kind != "scene" or at is not None):
+                    card["face"] = (kind, x, group[0], at, sum(len(gg) for gg in ent["f"]))
+                    break
+    for sid, card in fresh.items():
+        if not card["face"]:
+            continue
+        st, links = studios[sid]
+        kind, x, emb, at, n = card["face"]
+        files = x.get("files") or x.get("visual_files") or [{}]
+        plat = ((st.get("parent_studio") or {}).get("name") or "")
+        out.append({
+            "create": True, "kind": kind, "id": x["id"], "performer": f"new:{sid}", "name": st["name"], "studio": st["name"],
+            "studio_id": sid, "link": links[0] if links else None, "keys": card["keys"],
+            "why": f"{plat + ' account' if plat else 'account'} with {len(card['keys'])} item{'s' if len(card['keys']) != 1 else ''} and nobody on them",
+            "score": None, "rival": 0, "pictures": n, "emb": emb, "best_at": at, "times": [], "others": 0,
+            "title": x.get("title") or (files[0] or {}).get("basename") or "",
+            "picture": (x.get("paths") or {}).get("screenshot") if kind == "scene" else (x.get("paths") or {}).get("image"),
+            "no_face": False,
+        })
+    # people you have first (most alike first), then new ones (most items first)
+    out.sort(key=lambda it: (bool(it.get("create")), it["score"] is None, -(it["score"] or 0), -len(it.get("keys") or [])))
+    per = Counter(it["performer"] for it in out if not it.get("create"))  # (Batch view: people you have)
+    names = {it["performer"]: it["name"] for it in out}
+    return {"items": out[:limit], "total": len(out),
+            "groups": [{"id": pid, "name": names[pid], "count": c} for pid, c in per.most_common()]}
+
+
+def studio_perf_create(stash, plugin_dir, data):
+    """A new performer for an account studio's items: named after the account, its link, the
+    face from the card as their picture; added to all the studio's items with nobody on them."""
+    inp = {"name": data["name"], "urls": [data["link"]] if data.get("link") else []}
+    with contextlib.suppress(Exception):
+        pic = run_face_card_picture(stash, plugin_dir, data["kind"], data["id"], data.get("at"), data.get("emb"))
+        if pic.get("image"):
+            inp["image"] = "data:image/jpeg;base64," + pic["image"]
+    pid = stash.call("mutation($i: PerformerCreateInput!) { performerCreate(input: $i) { id } }", {"i": inp})["performerCreate"]["id"]
+    for kind in ("scene", "image"):
+        ids = [k.split(":")[1] for k in data.get("keys") or [] if k.startswith(kind + ":")]
+        if ids:
+            mutation, input_type = AUTOTAG_UPDATE[kind]
+            stash.call(f"mutation($i: {input_type}!) {{ {mutation}(input: $i) {{ id }} }}",
+                       {"i": {"ids": ids, "performer_ids": {"ids": [pid], "mode": "ADD"}}})
+    return {"id": pid}
+
+
+def studio_perf_uncreate(stash, performer_id):
+    """Undo: the performer made from a card goes again (and with them, from its items)."""
+    stash.call("mutation($i: PerformerDestroyInput!) { performerDestroy(input: $i) }", {"i": {"id": str(performer_id)}})
+    return {"ok": True}
+
+
+def studio_perf_answer(plugin_dir, key, no=True):
+    """Remember (or forget) "not them" for a From studio card ("kind:id:performer")."""
+    with locked_json(os.path.join(plugin_dir, STUDIO_PERF_NO)) as d:
+        have = set(d.get("no", []))
+        (have.add if no else have.discard)(key)
+        d["no"] = sorted(have)
+    return {"ok": True}
 
 
 def add_performers(stash, kind, item, ids):
@@ -10568,7 +10999,7 @@ def run_face_lookalikes(stash, plugin_dir, performer_id, limit=80):
     pid = str(performer_id)
     mine = known_embs(index.get(pid) or {})
     if not mine:
-        raise RuntimeError("their face isn't known yet - they need a profile picture with a face in it "
+        raise NotReady("their face isn't known yet - they need a profile picture with a face in it "
                            "(then run \"Faces: learn performers' faces\")")
     cache = FaceCache(plugin_dir)
     if not cache.data:
@@ -14017,7 +14448,7 @@ def run_marker_tag_review(stash, plugin_dir, tag=None, limit=40, skip=(), fresh=
     ai_tag = ai_marker_tag(stash, create=False)[0]
     markers = stash.call(f"{{ findSceneMarkers(filter: {{per_page: -1}}) {{ scene_markers {{ {MARKER_REVIEW_FIELDS} }} }} }}")["findSceneMarkers"]["scene_markers"]
     if not markers:
-        raise RuntimeError('no markers yet - add some with "AI markers" on a scene, or the AI markers task')
+        raise NotReady('no markers yet - add some with "AI markers" on a scene, or the AI markers task')
     found, names = _marker_tag_candidates(stash, cfg, plugin_dir, excluded, markers, ai_tag, fresh)
     by_id = {m["id"]: m for m in markers}
     position_kin = {}  # a position tag -> every tag that counts as having it
@@ -14263,7 +14694,7 @@ def _pose_candidates(stash, cfg, plugin_dir, excluded, fresh=False):
                 return saved["found"], saved["names"], saved["few"]
     names = {t: n for t, n in pose_tags(stash).items() if t not in excluded}
     if not names:
-        raise RuntimeError("no pose tags yet: make tags named " + ", ".join(pose_tag_names(stash)[:5])
+        raise NotReady("no pose tags yet: make tags named " + ", ".join(pose_tag_names(stash)[:5])
                            + "… (or set your own in the add-on's settings, \"Poses: pose tags to suggest\"), then tag a few pictures with each")
     markers = stash.call(f"{{ findSceneMarkers(filter: {{per_page: -1}}) {{ scene_markers {{ {MARKER_REVIEW_FIELDS} }} }} }}")[
         "findSceneMarkers"]["scene_markers"]

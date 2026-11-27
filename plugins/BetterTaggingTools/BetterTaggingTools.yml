@@ -1,6 +1,6 @@
 name: Better Organizing Tools
 description: Tags each performer and studio with the tags used most often in their scenes, images and galleries, and each gallery with its images' most used tags, shows one-click "Suggested tags" and "Title ideas" when editing, adds "Bulk tag" buttons on performer and gallery pages, and can tag a studio's items with the studio's tags. Can also tag every image in a gallery with the gallery's name, give tags without a picture one from your library, keep tag names consistently capitalised, auto tag from file names, fill in dates and titles from file names, and give scenes a studio from the account link in their file name. No AI - for that, add Better Organizing AI (works with or without this plugin).
-version: "2.4.2"
+version: "2.4.3"
 url: https://github.com/OpenSourceLuffy/stash-plugins/tree/main/plugins/BetterTaggingTools
 exec:
   - python
@@ -117,6 +117,14 @@ tasks:
     description: "Gives tags without a description one from StashDB, the E-Hentai wiki or Danbooru. Descriptions you wrote are never changed."
     defaultArgs:
       mode: "tagdescs"
+  - name: "Naming: rename account studios to the chosen style"
+    description: "Renames the studios under OnlyFans, Fansly, TikTok, Instagram and Patreon to the \"Naming: account studios\" setting: \"name\" or \"name (OnlyFans)\". One whose new name another studio has is left as it is."
+    defaultArgs:
+      mode: "account_names"
+  - name: "Naming: preview renaming account studios (no changes)"
+    description: "Writes what \"Naming: rename account studios...\" would rename to the log. Changes nothing."
+    defaultArgs:
+      mode: "account_names_preview"
   - name: "Naming: preview (no changes)"
     description: "Writes what \"Naming: apply...\" would rename to the log. Changes nothing."
     defaultArgs:
@@ -186,6 +194,14 @@ settings:
     displayName: "New items: auto tag new performers, studios and tags"
     description: "Run Stash's Auto Tag for each new performer, studio or tag, so files named after it get it straight away."
     type: BOOLEAN
+  autoTagDetails:
+    displayName: "Auto tag: performers named in descriptions"
+    description: "\"Auto tag this\" and \"Auto tag selected\" (and the AI add-on's file-name step) also add performers named in the item's description, matched the same way as in file names. Studios still come only from the file path. Stash's own Auto Tag task isn't changed."
+    type: BOOLEAN
+  autoTagDetailsTags:
+    displayName: "Auto tag: tags named in descriptions too"
+    description: "With the setting above: tags named in the description as well. Descriptions are sentences, so everyday words that are also tag names (\"Good\", \"Home\", \"Pink\") get added too - use Tags' \"Ignore Auto Tag\" on those."
+    type: BOOLEAN
   galleryNameTags:
     displayName: "New items: tag gallery images with the gallery's name"
     description: "Tag gallery images with a tag named after the gallery, for new and renamed galleries and new images."
@@ -232,6 +248,10 @@ settings:
     displayName: "Naming: scene and image titles"
     description: "One of: Title Case, Capitalise Every Word, Sentence case - or empty for off. Title Case also lowers small words in the middle (Relaxing By The Pool -> Relaxing by the Pool). Titles the plugins set follow it too."
     type: STRING
+  namingAccountPlatform:
+    displayName: "Naming: account studios with their platform"
+    description: "Off: an account's studio is its name, under the platform's studio (OnlyFans > name). On: the name with the platform after it (OnlyFans > name (OnlyFans)) - as FansDB names them. For studios made from now on (watermarks, links, downloads); \"Naming: rename account studios...\" renames the ones you have. Either way they're matched by both."
+    type: BOOLEAN
   namingNew:
     displayName: "Naming: apply to new performers, studios and galleries"
     description: "Rename new ones to their style as soon as they're created."

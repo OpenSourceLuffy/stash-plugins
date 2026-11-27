@@ -1,6 +1,6 @@
 name: Better Organizing AI Add-on (local AI)
 description: Local AI for Stash - nothing leaves your computer. Tags scenes and images from your own tag list (checked against the items you've already tagged that look most alike), writes titles, recognises performers' faces, finds a scene's studio from the account in its watermark, adds body tags and hair / eye colour, and tidies up studios and galleries. A Review page to accept or undo suggestions with a swipe, "Ask AI" buttons while editing, and tasks for the whole library or new items. Runs on Ollama and a small local helper, on a Mac or any ordinary computer, with no NVIDIA graphics card or online service needed. An add-on for Better Organizing Tools that also works on its own.
-version: "1.8.2"
+version: "1.8.3"
 url: https://github.com/OpenSourceLuffy/stash-plugins/tree/main/plugins/BetterTaggingAI
 exec:
   - python
@@ -282,6 +282,15 @@ settings:
   welcomeOff:
     displayName: "Setup: hide the welcome and tour"
     description: "Hide the welcome and tour. The tour is also on the setup page."
+    type: BOOLEAN
+  # --- Top bar ---
+  hideNavReview:
+    displayName: "Top bar: hide Review"
+    description: "Take the Review button out of Stash's top bar (and Modern UI's More panel). The page still works: open it at /review (the tour's 'Open it' links go there too)."
+    type: BOOLEAN
+  hideNavSearch:
+    displayName: "Top bar: hide Search"
+    description: "Take the Search button (search by description) out of Stash's top bar (and Modern UI's More panel). The page still works at /ai-search."
     type: BOOLEAN
   # --- New items ---
   aiAuto:

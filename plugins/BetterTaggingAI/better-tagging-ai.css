@@ -241,10 +241,9 @@
   align-items: flex-start;
   padding: 10px;
   border-radius: 12px;
-  background: #1c2228;
-  color: #f5f8fa;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
 }
+.bta-face-peek.card { flex-direction: row; margin: 0; }  /* (a Stash card: the theme gives it its colours) */
 .bta-face-peek img {
   width: 150px;
   height: 200px;
@@ -312,12 +311,16 @@
   max-width: 1200px;
 }
 
+.bta-fr, .bta-confirm-box {
+  /* (from the theme: tints of its text colour, so they read on light and dark themes alike) */
+  --bta-fr-surface: color-mix(in srgb, currentColor 6%, transparent);
+  --bta-fr-line: color-mix(in srgb, currentColor 14%, transparent);
+  --bta-fr-muted: color-mix(in srgb, currentColor 65%, transparent);
+  --bta-fr-yes: var(--success, #2fb36b);
+  --bta-fr-no: var(--danger, #e0564f);
+}
+
 .bta-fr {
-  --bta-fr-surface: rgba(255, 255, 255, 0.05);
-  --bta-fr-line: rgba(255, 255, 255, 0.1);
-  --bta-fr-muted: rgba(255, 255, 255, 0.62);
-  --bta-fr-yes: #2fb36b;
-  --bta-fr-no: #e0564f;
   max-width: 560px;
   margin: 0 auto;
   padding: 20px 16px 40px;
@@ -408,11 +411,11 @@ body.mui-light .bta-fr {
   font-size: 0.9rem;
 }
 
+.bta-fr-card.card { padding: 0; margin: 0; }  /* (Stash's .card pads its contents: the picture goes to the edges) */
 .bta-fr-card {
+  /* (background, border and corners: the theme's .card) */
   position: relative;
-  border-radius: 18px;
   overflow: hidden;
-  background: var(--bta-fr-surface);
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.28);
   touch-action: pan-y;
   transition: transform 0.2s ease;
@@ -532,23 +535,16 @@ body.mui-light .bta-fr {
 .bta-fr-btn {
   min-height: 52px;
   padding: 0 16px;
-  border: 0;
-  border-radius: 14px;
   font-size: 1.02rem;
   font-weight: 700;
-  color: #fff;
   transition: transform 0.1s ease, opacity 0.15s ease;
 }
 
 .bta-fr-btn:active { transform: scale(0.97); }
 .bta-fr-btn:disabled { opacity: 0.55; }
-.bta-fr-btn-yes { background: var(--bta-fr-yes); }
-.bta-fr-btn-no { background: var(--bta-fr-no); }
-.bta-fr-btn-skip {
-  background: var(--bta-fr-surface);
-  color: inherit;
-  box-shadow: inset 0 0 0 1px var(--bta-fr-line);
-}
+/* (colours: the theme's .btn-success / .btn-danger / .btn-secondary) */
+.bta-fr-btn:not(.btn).bta-fr-btn-yes { background: var(--bta-fr-yes); color: #fff; }
+.bta-fr-btn:not(.btn).bta-fr-btn-no { background: var(--bta-fr-no); color: #fff; }
 
 .bta-fr-hint {
   margin-top: 10px;
@@ -817,22 +813,20 @@ body.mui-light .bta-fr {
 }
 
 .bta-confirm-box {
-  --bta-fr-surface: rgba(255, 255, 255, 0.06);
-  --bta-fr-line: rgba(255, 255, 255, 0.14);
+  /* (built like Stash's dialogs: the frame is the theme's .modal-content, the background and
+     colours its .modal-body inside - Stash colours a dialog there) */
   width: 100%;
   max-width: 420px;
-  padding: 18px;
-  border-radius: 18px;
-  background: #1d2228;
-  color: #fff;
+  padding: 0;
+  overflow: hidden;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
 }
+
+.bta-confirm-inner { padding: 18px; border-radius: inherit; }
 
 body.mui-light .bta-confirm-box {
   --bta-fr-surface: #fff;
   --bta-fr-line: rgba(0, 0, 0, 0.12);
-  background: #f4f5f7;
-  color: #1b1f24;
 }
 
 .bta-confirm-title { font-size: 1.15rem; font-weight: 700; }
@@ -988,16 +982,21 @@ body.mui-light .bta-confirm-box {
 
 /* "Create a new performer?" as a form, with the card it will make */
 .bta-confirm-box.bta-cf {
-  display: flex;
-  flex-direction: column;
+  display: block;
   max-width: 480px;
-  max-height: calc(100dvh - 32px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
   padding: 0;
   overflow: hidden;
 }
 
+.bta-cf > .bta-confirm-inner {  /* (the column - scrolling middle, buttons at the bottom - is the inner body) */
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100dvh - 32px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  padding: 0;
+}
+
 .bta-cf-scroll {
-  flex: 1;
+  flex: 0 1 auto;
   min-height: 0;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
@@ -1833,7 +1832,7 @@ body.mui-light .bta-batch-foot { background: linear-gradient(to bottom, transpar
 .bta-markers { display: flex; flex-direction: column; gap: 0.4rem; align-items: flex-start; }
 .bta-markers-go { font-weight: 600; }
 .bta-markers-note { font-size: 0.85rem; opacity: 0.75; }
-.bta-markers-error { color: #e5534b; font-size: 0.9rem; }
+.bta-markers-error { color: var(--danger, #e5534b); font-size: 0.9rem; }
 .bta-markers-head { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
 .bta-markers-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 0.6rem; width: 100%; }
 .bta-markers-card { display: flex; flex-direction: column; gap: 0.3rem; }
@@ -1844,7 +1843,7 @@ body.mui-light .bta-batch-foot { background: linear-gradient(to bottom, transpar
   padding: 0.05rem 0.5rem; font-size: 0.85rem; font-variant-numeric: tabular-nums; }
 .bta-markers-line { display: flex; align-items: center; justify-content: space-between; gap: 0.4rem; }
 .bta-markers-span { font-size: 0.85rem; opacity: 0.75; font-variant-numeric: tabular-nums; }
-.bta-markers-done { color: #2da44e; font-weight: 600; }
+.bta-markers-done { color: var(--success, #2da44e); font-weight: 600; }
 
 /* Scene page → Markers → Create Marker: the quick panel */
 .bta-quick { display: flex; flex-direction: column; gap: 0.35rem; margin: 0.6rem 0; padding: 0.75rem;
@@ -1874,15 +1873,15 @@ body.mui-light .bta-batch-foot { background: linear-gradient(to bottom, transpar
 .bta-chapter-at:not(:disabled):hover { text-decoration: underline; opacity: 1; }
 .bta-chpick-back { position: fixed; inset: 0; z-index: 1060; background: rgba(0, 0, 0, 0.6); display: flex;
   align-items: flex-start; justify-content: center; padding: 3vh 12px; overflow-y: auto; }
-.bta-chpick { background: var(--mui-card-bg, var(--bs-body-bg, #fff)); color: inherit; border-radius: 12px; padding: 0.9rem; width: 100%;
-  max-width: 1100px; display: flex; flex-direction: column; gap: 0.5rem; box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4); }
+.bta-chpick-frame { display: block; width: 100%; max-width: 1100px; padding: 0; border-radius: 12px; overflow: hidden; box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4); }
+.bta-chpick { padding: 0.9rem; display: flex; flex-direction: column; gap: 0.5rem; border-radius: inherit; }
 .bta-chpick-head { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
 .bta-chpick-head b { font-size: 1.05rem; }
 .bta-chpick-count { opacity: 0.7; margin-right: auto; font-variant-numeric: tabular-nums; }
 .bta-chpick-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 6px; }
 .bta-chpick-tile { position: relative; padding: 0; border: 3px solid transparent; border-radius: 8px; overflow: hidden;
   background: #000; aspect-ratio: 3 / 4; opacity: 0.45; cursor: pointer; }
-.bta-chpick-tile.on { border-color: #2da44e; opacity: 1; }
+.bta-chpick-tile.on { border-color: var(--success, #2da44e); opacity: 1; }
 .bta-chpick-tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .bta-chpick-num { position: absolute; left: 4px; bottom: 4px; padding: 0 6px; border-radius: 999px;
   background: rgba(0, 0, 0, 0.65); color: #fff; font-size: 0.75rem; font-variant-numeric: tabular-nums; }
@@ -1914,7 +1913,10 @@ body.mui-light .bta-batch-foot { background: linear-gradient(to bottom, transpar
 
 /* welcome and tour */
 .bta-welcome-back { position: fixed; inset: 0; z-index: 2000; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; padding: 16px; }
-.bta-welcome { background: #30404d; color: #f5f8fa; border-radius: 14px; width: 100%; max-width: 760px; max-height: calc(100vh - 32px); overflow: auto; padding: 20px 22px; box-shadow: 0 10px 40px rgba(0,0,0,.4); }
+.bta-welcome { border-radius: 14px; width: 100%; max-width: 760px; padding: 0; overflow: hidden; display: block; box-shadow: 0 10px 40px rgba(0,0,0,.4); }
+/* the theme paints Stash's dialog body; this scrolls */
+.bta-welcome-in { max-height: calc(100vh - 32px); max-height: calc(100dvh - 32px); overflow: auto; padding: 20px 22px; border-radius: inherit; }
+:where(.bta-welcome-in) { background: inherit; }
 .bta-welcome h2 { font-size: 1.35rem; margin: 0 0 10px; }
 .bta-welcome p { line-height: 1.45; }
 .bta-welcome-list { font-size: .9rem; margin: 8px 0; line-height: 1.5; }
@@ -1936,15 +1938,13 @@ body.mui-light .bta-batch-foot { background: linear-gradient(to bottom, transpar
 .bta-tour-dots { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; flex: 1; }
 .bta-tour-dot { width: 9px; height: 9px; border-radius: 50%; border: 0; padding: 0; background: rgba(127,127,127,.45); cursor: pointer; }
 .bta-tour-dot.on { background: var(--primary, #137cbd); transform: scale(1.25); }
-@media (max-width: 576px) { .bta-welcome { padding: 16px 14px; } .bta-tour-shot { aspect-ratio: 4 / 5; max-height: 52vh; } }
+@media (max-width: 576px) { .bta-welcome-in { padding: 16px 14px; } .bta-tour-shot { aspect-ratio: 4 / 5; max-height: 52vh; } }
 .bta-tour-head { position: sticky; top: -20px; z-index: 1; background: inherit; padding: 4px 0; }
 .bta-welcome .bta-tour-head { background: inherit; }
-body.mui-light .bta-welcome { background: #fff; color: #1f2933; }
 body.mui-light .bta-tour-dot { background: rgba(0,0,0,.2); }
 
 /* setup guide */
-.bta-guide-shot { aspect-ratio: 16 / 7; background: #f4f5f7; }
-body:not(.mui-light) .bta-guide-shot { background: #202b33; }
+.bta-guide-shot { aspect-ratio: 16 / 7; background: color-mix(in srgb, currentColor 8%, transparent); }
 .bta-guide-state { font-size: .72rem; font-weight: 600; padding: 2px 8px; border-radius: 10px; background: rgba(217,130,43,.2); color: #d9822b; vertical-align: middle; }
 .bta-guide-state.ok { background: rgba(15,153,96,.18); color: #0f9960; }
 .bta-guide-steps { padding-left: 20px; margin: 6px 0 8px; font-size: .9rem; }
@@ -2006,27 +2006,20 @@ body:not(.mui-light) .bta-guide-shot { background: #202b33; }
 
 /* Settings → Tasks: the check before a long task */
 .bta-gate { position: fixed; inset: 0; z-index: 2000; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; padding: 16px; }
-.bta-gate-box { position: relative; background: #394b59; color: #f5f8fa; border: 1px solid rgba(255,255,255,.12); border-radius: 12px; max-width: 540px; width: 100%; padding: 1.3rem 1.4rem 1.2rem; box-shadow: 0 12px 48px rgba(0,0,0,.5); max-height: calc(100vh - 32px); overflow: auto; font-size: 1rem; line-height: 1.5; }
-.bta-gate-box h4 { font-size: 1.2rem; font-weight: 600; margin: 0 2rem .8rem 0; color: #fff; }
+.bta-gate-box { display: block; max-width: 540px; width: 100%; padding: 0; border-radius: 12px; overflow: hidden; box-shadow: 0 12px 48px rgba(0,0,0,.5); font-size: 1rem; line-height: 1.45; }
+/* (Stash's dialog frame and body: the theme gives them their colours) */
+.bta-gate-in { position: relative; max-height: calc(100vh - 32px); max-height: calc(100dvh - 32px); overflow: auto; padding: 1.3rem 1.4rem 1.2rem; border-radius: inherit; }
+.bta-gate-box h4 { font-size: 1.2rem; font-weight: 600; margin: 0 2rem .8rem 0; }
 .bta-gate-box p { margin-bottom: .7rem; }
-.bta-gate-box b { color: #fff; }
 .bta-gate-box ul { padding-left: 1.2rem; margin-bottom: .6rem; }
-.bta-gate-note { color: #c5d0d9; font-size: .95em; }
-.bta-gate-check { display: flex; gap: .55rem; align-items: center; margin: .3rem 0; cursor: pointer; color: #f5f8fa; }
+.bta-gate-note { opacity: .8; font-size: .95em; }
+.bta-gate-check { display: flex; gap: .55rem; align-items: center; margin: .3rem 0; cursor: pointer; }
 .bta-gate-check input { width: 1.1rem; height: 1.1rem; }
 .bta-gate-actions { display: flex; flex-wrap: wrap; gap: .6rem; margin-top: 1rem; }
 .bta-gate-actions .btn { font-size: .95rem; padding: .45rem .9rem; }
-.bta-gate-actions .btn-secondary { background: #5c7080; border-color: #5c7080; color: #fff; }
 .bta-gate-x { position: absolute; top: .55rem; right: .6rem; background: none; border: 0; color: inherit; opacity: .7; font-size: 1.1rem; line-height: 1; padding: .3rem; }
 .bta-gate-x:hover { opacity: 1; }
-/* (themes colour headings, labels and buttons too: these win) */
-#bta-gate .bta-gate-box h4 { color: #fff !important; }
-#bta-gate .bta-gate-check, #bta-gate .bta-gate-check * { color: #f5f8fa !important; }
-#bta-gate .bta-gate-note { color: #d3dce3 !important; }
-#bta-gate .bta-gate-actions .btn-secondary { background: #5c7080 !important; border-color: #5c7080 !important; color: #fff !important; }
-#bta-gate .bta-gate-actions .btn-secondary:hover { background: #6b8192 !important; }
 #bta-gate .bta-gate-actions .btn:disabled { opacity: 1; }
-#bta-gate .bta-gate-actions .btn.bta-gate-done { background: #0f9960 !important; border-color: #0f9960 !important; color: #fff !important; }
 
 /* Suggest covers: stitched covers (Vertical Stitcher) */
 .bta-covers-head { font-weight: 600; margin: .2rem 0 .4rem; }

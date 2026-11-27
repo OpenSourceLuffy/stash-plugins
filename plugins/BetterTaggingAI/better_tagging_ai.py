@@ -125,6 +125,15 @@ def main():
             print(json.dumps({"output": c.run_face_lookalikes(stash, plugin_dir, args["id"])}))
         elif mode == "face_reject":
             print(json.dumps({"output": c.run_face_reject(plugin_dir, args["performer"], args.get("key"))}))
+        elif mode == "studio_perf_review":
+            print(json.dumps({"output": c.run_studio_perf_review(stash, plugin_dir, args.get("performer"),
+                                                                 int(args.get("limit") or 40), args.get("skip") or [])}))
+        elif mode == "studio_perf_create":
+            print(json.dumps({"output": c.studio_perf_create(stash, plugin_dir, args["data"])}))
+        elif mode == "studio_perf_uncreate":
+            print(json.dumps({"output": c.studio_perf_uncreate(stash, args["id"])}))
+        elif mode == "studio_perf_answer":
+            print(json.dumps({"output": c.studio_perf_answer(plugin_dir, args["key"], bool(args.get("no", True)))}))
         elif mode == "face_review":
             print(json.dumps({"output": c.run_face_review(stash, plugin_dir, args.get("performer"),
                                                           int(args.get("limit") or 40), args.get("skip") or [],
@@ -312,4 +321,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    c.plugin_io()
+    try:
+        main()
+    finally:
+        c.plugin_done()
