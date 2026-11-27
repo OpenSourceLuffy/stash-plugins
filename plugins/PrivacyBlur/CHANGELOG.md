@@ -2,6 +2,13 @@
 
 Newest first.
 
+## 1.5.2 (2026-11-27)
+
+- The floating Blur button's "on" colour is the theme's main colour.
+- The update window (shown when one of your OpenSourceLuffy plugins has a new version) follows your
+  theme or UI plugin: it's now Stash's own dialog, so the theme colours it.
+
+
 ## 1.5.1 (2026-11-24)
 
 - **Update check**: when a newer version of any of these plugins is out, Stash shows what's new

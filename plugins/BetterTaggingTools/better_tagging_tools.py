@@ -24,6 +24,8 @@ def main():
         hook = args.get("hookContext")
         if hook:
             c.run_hook(stash, plugin_dir, hook)
+        elif mode in ("account_names", "account_names_preview"):
+            c.run_account_studio_names(stash, plugin_dir, preview=mode == "account_names_preview")
         elif mode == "queued":
             c.run_queued(stash, plugin_dir)
         elif mode == "bulktag":
@@ -98,4 +100,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    c.plugin_io()
+    try:
+        main()
+    finally:
+        c.plugin_done()

@@ -2,6 +2,16 @@
 
 Newest first.
 
+## 1.5.1 (2026-11-27)
+
+- Works with light themes and other UI plugins: the Suggested rows' scroll arrows and the studio
+  cards' backgrounds take their colour from the theme's text, so they show on light and dark themes
+  alike (on a light theme the arrows were nearly invisible), and "See all" and the current photo's
+  outline use the theme's main colour when Modern UI isn't on.
+- The update window (shown when one of your OpenSourceLuffy plugins has a new version) follows your
+  theme or UI plugin: it's now Stash's own dialog, so the theme colours it.
+
+
 ## 1.5 (2026-11-24)
 
 - **Windows**: when Stash is installed directly on Windows and runs the Microsoft Store's stand-in for

@@ -232,6 +232,13 @@ uses it in three more places:
 - **With the [AI add-on](../BetterTaggingAI)**: before the AI looks at an item, it gets its file-name
   matches first, so the AI only adds what the file name doesn't already say.
 
+**Descriptions too** (settings): with **Auto tag: performers named in descriptions** on, the plugin's
+own auto tag (the menu items and the AI add-on's step, not Stash's task) also adds performers named
+in the item's description. **Auto tag: tags named in descriptions too** adds tags as well; it's
+separate because descriptions are sentences, so everyday words that are also tag names ("Good",
+"Home") match often - turn on **Ignore Auto Tag** for those tags. The studio only ever comes from
+the path.
+
 The matching is the same as Stash's: the name, ignoring case, as a whole word anywhere in the path
 (folders included), with spaces in the name also matching `.`, `-`, `_` or nothing. Studios and tags
 also match by their aliases. A studio is only set when the item has none. Anything marked
@@ -394,6 +401,9 @@ Under **Settings → Plugins → Better Organizing Tools**:
 | Tags: give tags a picture automatically | See above. |
 | Tags: capitalise new tags automatically | See "Tag names" above. |
 | New items: auto tag new performers, studios and tags | See "Auto tag" above. |
+| Naming: account studios with their platform | Account studios as "name" under OnlyFans (off), or "name (OnlyFans)" (on). "Naming: rename account studios..." renames the ones you have. |
+| Auto tag: performers named in descriptions | See "Auto tag" above. |
+| Auto tag: tags named in descriptions too | See "Auto tag" above. |
 | New items: fill in dates from file names | See "Dates from file names" above. |
 | New items: fill in titles from file names | See "Titles from file names" above. |
 | Titles: don't title images after their gallery | Leave images whose file name makes no title without one, instead of `Gallery name #12`. |

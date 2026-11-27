@@ -129,25 +129,25 @@
     const style = document.createElement("style");
     style.textContent = `
       #osl-updates { position: fixed; inset: 0; z-index: 2100; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; padding: 16px; }
-      #osl-updates .box { background: #394b59; color: #f5f8fa; border: 1px solid rgba(255,255,255,.12); border-radius: 12px; max-width: 560px; width: 100%;
-        max-height: calc(100vh - 32px); display: flex; flex-direction: column; box-shadow: 0 12px 48px rgba(0,0,0,.5); font-size: 1rem; line-height: 1.45; }
-      #osl-updates h4 { margin: 0; padding: 1.1rem 1.3rem .6rem; font-size: 1.2rem; font-weight: 600; color: #fff !important; }
+      /* (Stash's own dialog frame and body, so the theme - or a UI plugin - gives it its colours) */
+      #osl-updates .box { display: block; max-width: 560px; width: 100%; padding: 0; border-radius: 12px; overflow: hidden;
+        box-shadow: 0 12px 48px rgba(0,0,0,.5); font-size: 1rem; line-height: 1.45; }
+      #osl-updates .inner { display: flex; flex-direction: column; max-height: calc(100vh - 32px); max-height: calc(100dvh - 32px); padding: 0; border-radius: inherit; }
+      #osl-updates .list { flex: 0 1 auto; min-height: 0; }
+      #osl-updates h4 { margin: 0; padding: 1.1rem 1.3rem .6rem; font-size: 1.2rem; font-weight: 600; }
       #osl-updates .list { overflow: auto; padding: 0 1.3rem; }
       #osl-updates .plugin { margin: .4rem 0 .9rem; }
-      #osl-updates .plugin b { color: #fff; }
-      #osl-updates .ver { color: #c5d0d9; font-size: .92em; margin-left: .3rem; }
-      #osl-updates ul { margin: .35rem 0 0; padding-left: 1.15rem; color: #e1e8ed; font-size: .93em; }
+      #osl-updates .ver { opacity: .75; font-size: .92em; margin-left: .3rem; }
+      #osl-updates ul { margin: .35rem 0 0; padding-left: 1.15rem; opacity: .9; font-size: .93em; }
       #osl-updates li { margin-bottom: .25rem; }
-      #osl-updates .note { color: #d3dce3; font-size: .9em; margin: .3rem 0; }
-      #osl-updates a { color: #8cc7ff; }
-      #osl-updates .actions { display: flex; flex-wrap: wrap; gap: .6rem; padding: .9rem 1.3rem 1.1rem; border-top: 1px solid rgba(255,255,255,.1); }
+      #osl-updates .note { opacity: .8; font-size: .9em; margin: .3rem 0; }
+      #osl-updates .actions { display: flex; flex-wrap: wrap; gap: .6rem; padding: .9rem 1.3rem 1.1rem; border-top: 1px solid color-mix(in srgb, currentColor 15%, transparent); }
       #osl-updates .actions .btn { font-size: .95rem; padding: .45rem .9rem; }
-      #osl-updates .actions .btn-secondary { background: #5c7080; border-color: #5c7080; color: #fff; }
-      #osl-updates .status { padding: 0 1.3rem; color: #f5f8fa; }`;
+      #osl-updates .status { padding: 0 1.3rem; }`;
     const wrap = document.createElement("div");
     wrap.id = "osl-updates";
     const box = document.createElement("div");
-    box.className = "box";
+    box.className = "box modal-content";
     box.setAttribute("role", "dialog");
     box.setAttribute("aria-modal", "true");
     const h = document.createElement("h4");
@@ -223,7 +223,10 @@
     }
     btn("Later", "btn-secondary", () => { save({ later: Date.now() + LATER }); close(); });
     btn("Don't show again", "btn-secondary", () => { save({ off: true }); close(); });
-    box.append(h, list, status, actions);
+    const inner = document.createElement("div");
+    inner.className = "modal-body inner";
+    inner.append(h, list, status, actions);
+    box.appendChild(inner);
     wrap.appendChild(box);
     wrap.addEventListener("click", (e) => { if (e.target === wrap) { save({ later: Date.now() + LATER }); close(); } });
     document.head.appendChild(style);

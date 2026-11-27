@@ -148,7 +148,7 @@ html.pb-on.pb-replace .pb-standin-host .vjs-big-play-button { z-index: 2; }
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
   cursor: pointer;
 }
-.pb-float.on { background: #2563eb; }
+.pb-float.on { background: var(--primary, #2563eb); }
 @media (max-width: 576px) {
   /* above Modern UI's bottom bar on phones */
   .pb-float { bottom: calc(76px + env(safe-area-inset-bottom, 0px)); }

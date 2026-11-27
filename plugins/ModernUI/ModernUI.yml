@@ -1,6 +1,6 @@
 name: Modern UI
 description: Cleaner scene, performer, image, gallery, studio, group and tag cards, plus a mobile-friendly layout.
-version: "0.59.1"
+version: "0.59.2"
 ui:
   # (the update check reads the published plugin list and changelogs from GitHub)
   csp:

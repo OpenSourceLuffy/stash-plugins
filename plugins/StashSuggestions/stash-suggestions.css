@@ -48,7 +48,7 @@ body.mlt-editing :is(.mlt-related, .mlt-similar, .mlt-perf-similar) {
   height: 34px;
   border: none;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.08);
+  background: color-mix(in srgb, currentColor 10%, transparent);  /* (from the theme's text colour: light and dark themes) */
   color: inherit;
   font-size: 22px;
   line-height: 1;
@@ -56,7 +56,7 @@ body.mlt-editing :is(.mlt-related, .mlt-similar, .mlt-perf-similar) {
 }
 
 .mlt-related-arrows button:hover {
-  background: rgba(255, 255, 255, 0.16);
+  background: color-mix(in srgb, currentColor 18%, transparent);
 }
 
 .mlt-related-strip {
@@ -144,18 +144,8 @@ a.mlt-rel-card {
   text-overflow: ellipsis;
 }
 
-body.mlt-light .mlt-related-arrows button {
-  background: var(--mui-l-surface-2);
-}
 
-body.mlt-light .mlt-related-arrows button:hover {
-  background: #dbe1e7;
-}
 
-body.mlt-light .mlt-rel-meta {
-  color: var(--mui-l-muted);
-  opacity: 1;
-}
 
 /* Below 1200px Stash caps the details panel at the screen height
    without scrolling it, so long details (lots of tags) spill out over
@@ -291,7 +281,7 @@ a.mlt-similar-all {
   flex: none;
   font-size: 0.9rem;
   font-weight: 600;
-  color: var(--mui-accent, #137cbd) !important;
+  color: var(--mui-accent, var(--primary, #137cbd)) !important;
 }
 
 /* "More from <gallery>": one scrolling row, like the home page */
@@ -386,7 +376,7 @@ a.mlt-similar-all {
 
 /* The photo you're looking at */
 a.mlt-similar-card.mlt-current {
-  outline: 3px solid var(--mui-accent, #137cbd);
+  outline: 3px solid var(--mui-accent, var(--primary, #137cbd));
   outline-offset: -3px;
   opacity: 0.7;
 }
@@ -441,7 +431,7 @@ a.mlt-studio-card {
 
 .mlt-studio-card .mlt-rel-thumb {
   aspect-ratio: 16 / 9;
-  background: rgba(255, 255, 255, 0.06);
+  background: color-mix(in srgb, currentColor 6%, transparent);
 }
 
 .mlt-studio-card .mlt-rel-thumb img {
@@ -471,9 +461,6 @@ a.mlt-studio-card {
   word-break: break-word;
 }
 
-body.mlt-light :is(.mlt-gal-card, .mlt-studio-card) .mlt-rel-thumb {
-  background: var(--mui-l-surface-2);
-}
 
 /* On scene and image pages it comes last, after Suggested / Similar photos */
 .mlt-perf-similar.mlt-perf-similar-scene,
@@ -495,9 +482,6 @@ a.mlt-perf-card {
   object-position: top center;
 }
 
-body.mlt-light .mlt-perf-card .mlt-rel-thumb {
-  background: var(--mui-l-surface-2);
-}
 
 @media (max-width: 576px) {
   .mlt-perf-similar {

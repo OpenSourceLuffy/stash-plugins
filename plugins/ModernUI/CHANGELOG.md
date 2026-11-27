@@ -2,6 +2,12 @@
 
 Newest first. Versions are what Stash shows under Settings → Plugins.
 
+## 0.59.2 (2026-11-27)
+
+- The update window (shown when one of your OpenSourceLuffy plugins has a new version) follows your
+  theme or UI plugin: it's now Stash's own dialog, so the theme colours it.
+
+
 ## 0.59.1 (2026-11-24)
 
 - **Update check**: when a newer version of any of these plugins is out, Stash shows what's new

@@ -35,3 +35,10 @@ plugins/*/tag_groups_cache.json
 plugins/*/job_lists.json
 plugins/*/prune_last.json
 plugins/*/face_cards/
+plugins/StashBoxSubmit/ready.json
+plugins/StashBoxSubmit/sent.json
+plugins/StashBoxSubmit/lookups.json
+plugins/StashBoxSubmit/studio_edits.json
+plugins/StashBoxSubmit/on_site.json
+plugins/StashBoxSubmit/not_them.json
+plugins/BetterTaggingAI/studio_perf_no.json
